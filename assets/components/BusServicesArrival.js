@@ -89,7 +89,7 @@ export default function BusServicesArrival({
   const fetchServices = useCallback(() => {
     setIsLoading(true);
     controller = new AbortController();
-    fetch(`https://arrivelah2.busrouter.sg/?id=${id}`, {
+    fetch(`https://busrouter-blr.pages.dev/arrival/?id=${id}`, {
       signal: controller.signal,
     })
       .then((res) => res.json())

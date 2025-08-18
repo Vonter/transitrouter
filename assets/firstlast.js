@@ -1,5 +1,4 @@
 import './i18n';
-import './error-tracking';
 
 import { h, render, Fragment } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
@@ -9,11 +8,8 @@ import { useTranslation } from 'react-i18next';
 
 import fetchCache from './utils/fetchCache';
 import { sortServices } from './utils/bus';
-import Ad from './ad';
 
-import LocaleSelector from './components/LocaleSelector';
-
-const dataPath = 'https://data.busrouter.sg/v1/';
+const dataPath = '/data/';
 const firstLastJSONPath = dataPath + 'firstlast.min.json';
 const stopsJSONPath = dataPath + 'stops.min.json';
 
@@ -142,11 +138,6 @@ function FirstLastTimes() {
             })
             .sort((a, b) => sortServices(a[0], b[0])),
         );
-
-        const { pathname, search, hash } = location;
-        gtag('config', window._GA_TRACKING_ID, {
-          page_path: pathname + search + hash,
-        });
       };
       window.onhashchange();
     });
@@ -181,11 +172,11 @@ function FirstLastTimes() {
     return timeStr;
   };
 
-  const isInSingapore = new Date().getTimezoneOffset() === -480;
+  const isInBengaluru = new Date().getTimezoneOffset() === -480;
 
   return (
     <div>
-      {!!data.length && <Ad />}
+      {!!data.length}
       <h1>
         {t('firstLast.preHeading')}
         <br />
@@ -220,7 +211,7 @@ function FirstLastTimes() {
               <span>6</span>
               <span>12 🌞</span>
               <span>6</span>
-              {isInSingapore && !!data.length && !!timeLeft && !!timeDate && (
+              {isInBengaluru && !!data.length && !!timeLeft && !!timeDate && (
                 <div
                   class="timerange-indicator"
                   style={{ left: `${timeLeft}%` }}
@@ -346,9 +337,6 @@ function FirstLastTimes() {
                   <>{t('glossary.nServices', { count: data.length })} · </>
                 )}
                 <a href="/">{t('app.name')}</a>
-              </p>
-              <p>
-                <LocaleSelector />
               </p>
             </td>
           </tr>

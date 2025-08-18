@@ -31,21 +31,17 @@
     "lastBus": "Last Bus"
   },
   "app": {
-    "name": "BusRouter SG",
-    "title": "$t(app.name) - Singapore Bus Routes Explorer",
-    "shortDescription": "Singapore Bus Routes Explorer",
-    "description": "Explore bus stops and routes on the map for all bus services in Singapore, with realtime bus arrival times and per-bus-stop passing routes overview."
+    "name": "BusRouter BLR",
+    "title": "$t(app.name) - Bengaluru Bus Routes Explorer",
+    "shortDescription": "Bengaluru Bus Routes Explorer",
+    "description": "Explore bus stops and routes on the map for all bus services in Bengaluru."
   },
   "about": {
-    "disclaimerCopyright": "<0>Built</0> & <2>visualized</2> by <4>@cheeaun</4>. Data <6>© LTA</6>.",
-    "helpTranslations": "Help with translations",
-    "sisterSites": "Sister sites: <1>🚆 RailRouter SG</1> <3>🚖 TaxiRouter SG</3>",
-    "liking": "❤️ Liking $t(app.name)?",
-    "treatCoffee": "☕️ Support my work & treat me a coffee!",
+    "disclaimerCopyright": "Data <6>© BMTC</6>.",
     "explore": "Let's explore"
   },
   "search": {
-    "placeholder": "Search for bus service or stop"
+    "placeholder": "Search for bus route or stop"
   },
   "service": {
     "title": "Bus service {{serviceNumber}}: {{serviceName}} - $t(app.name)",

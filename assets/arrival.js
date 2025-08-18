@@ -1,5 +1,4 @@
 import './i18n';
-import './error-tracking';
 
 import { h, render, Fragment } from 'preact';
 import { useState, useRef, useEffect, useLayoutEffect } from 'preact/hooks';
@@ -10,7 +9,6 @@ import fetchCache from './utils/fetchCache';
 import setIcon from '../utils/setIcon';
 
 import ArrivalTimeText from './components/ArrivalTimeText';
-import LocaleSelector from './components/LocaleSelector';
 
 import wheelchairImagePath from './images/wheelchair.svg';
 import wheelchairInaccessibleImagePath from './images/wheelchair-inaccessible.svg';
@@ -18,7 +16,7 @@ import busSingleImagePath from './images/bus-single.svg';
 import busDoubleImagePath from './images/bus-double.svg';
 import busBendyImagePath from './images/bus-bendy.svg';
 
-const dataPath = 'https://data.busrouter.sg/v1/';
+const dataPath = '/data/';
 const stopsJSONPath = dataPath + 'stops.min.json';
 
 const BUSES = {
@@ -185,7 +183,7 @@ function ArrivalTimes() {
   const [fetchServicesStatus, setFetchServicesStatus] = useState(null); // 'loading', 'error', 'online'
   const [services, setServices] = useState(null);
   const initialPinnedServices =
-    JSON.parse(localStorage.getItem('busroutersg.arrival.pinnedServices')) ||
+    JSON.parse(localStorage.getItem('busrouterblr.arrival.pinnedServices')) ||
     [];
   const [pinnedServices, setPinnedServices] = useState(initialPinnedServices);
 
@@ -234,7 +232,7 @@ function ArrivalTimes() {
     if (!id) return;
     if (window._PAUSED) return;
     setFetchServicesStatus('loading');
-    fetch(`https://arrivelah2.busrouter.sg/?id=${id}`)
+    fetch(`https://busrouter-blr.pages.dev/arrival/?id=${id}`)
       .then((r) => r.json())
       .then((results) => {
         setFetchServicesStatus(results.services?.length ? 'online' : null);
@@ -270,7 +268,7 @@ function ArrivalTimes() {
     setPinnedServices([...pinnedServices]);
     try {
       localStorage.setItem(
-        'busroutersg.arrival.pinnedServices',
+        'busrouterblr.arrival.pinnedServices',
         JSON.stringify(pinnedServices),
       );
     } catch (e) {}
@@ -307,7 +305,7 @@ function ArrivalTimes() {
     <div>
       <div id="bus-stop-map">
         <img
-          src={`https://busroutersg-staticmaps.cheeaun.workers.dev/${lng},${lat},17,0,60/400x200@2x`}
+          src={`https://busrouter-blr.pages.dev/${lng},${lat},17,0,60/400x200@2x`}
           alt="Bus stop map"
           width="400"
           height="200"
@@ -401,22 +399,6 @@ function ArrivalTimes() {
           </p>
         )}
       </div>
-      <footer>
-        <Trans i18nKey="arrivals.wheelchairDisclaimer">
-          <WheelChair size="16" /> All public buses in revenue service are
-          <a
-            href="https://en.wikipedia.org/wiki/Public_buses_of_Singapore#2020s:_In_with_electric_buses,_out_with_non-wheelchair-accessible_buses"
-            target="_blank"
-          >
-            wheelchair-accessible
-          </a>
-          . The ones that are not accesssible will be marked with this icon
-          <WheelChairInaccessible size="16" />.
-        </Trans>
-        <p>
-          <LocaleSelector />
-        </p>
-      </footer>
     </div>
   );
 }

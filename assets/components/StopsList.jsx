@@ -14,10 +14,12 @@ function rowSpaner(stopGrid, column, stop) {
 }
 
 function isOpposite(stop) {
+  if (!stop || typeof stop !== 'string') return false;
   return /[19]$/.test(stop);
 }
 
 function getOpposite(stop) {
+  if (!stop || typeof stop !== 'string') return null;
   if (isOpposite(stop)) {
     return stop.replace(/[19]$/, (d) => (d === '1' ? 9 : 1));
   }

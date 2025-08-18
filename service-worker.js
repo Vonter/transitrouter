@@ -7,9 +7,6 @@ import {
 import { ExpirationPlugin } from 'workbox-expiration';
 import { CacheableResponsePlugin } from 'workbox-cacheable-response';
 import { RangeRequestsPlugin } from 'workbox-range-requests';
-import * as googleAnalytics from 'workbox-google-analytics';
-
-googleAnalytics.initialize();
 
 registerRoute(
   ({ request }) => request.mode === 'navigate',

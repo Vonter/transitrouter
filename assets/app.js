@@ -1,5 +1,4 @@
 import './i18n';
-import './error-tracking';
 
 import { h, render, Fragment } from 'preact';
 import { useState, useRef, useEffect, useMemo } from 'preact/hooks';
@@ -8,7 +7,6 @@ import { toGeoJSON } from '@mapbox/polyline';
 import Fuse from 'fuse.js';
 import intersect from 'just-intersect';
 import CheapRuler from 'cheap-ruler';
-import MapboxLanguage from '@mapbox/mapbox-gl-language';
 import { useTranslation } from 'react-i18next';
 import { Protocol } from 'pmtiles';
 
@@ -21,8 +19,6 @@ import getDistance from './utils/getDistance';
 import getWalkingMinutes from './utils/getWalkingMinutes';
 import usePrevious from './utils/usePrevious';
 
-import Ad from './ad';
-import About from './components/About';
 import BusServicesArrival from './components/BusServicesArrival';
 import GeolocateControl from './components/GeolocateControl';
 import BetweenRoutes from './components/BetweenRoutes';
@@ -39,7 +35,7 @@ import passingRoutesBlueImagePath from './images/passing-routes-blue.svg';
 import iconSVGPath from '../icons/icon.svg';
 import busTinyImagePath from './images/bus-tiny.png';
 
-const dataPath = 'https://data.busrouter.sg/v1/';
+const dataPath = '/data/';
 const routesJSONPath = dataPath + 'routes.min.json';
 const stopsJSONPath = dataPath + 'stops.min.json';
 const servicesJSONPath = dataPath + 'services.min.json';
@@ -85,10 +81,10 @@ function hideStopTooltip() {
 window.requestIdleCallback =
   window.requestIdleCallback || ((cb) => setTimeout(cb, 1));
 
-const lowerLat = 1.2,
-  upperLat = 1.48,
-  lowerLong = 103.59,
-  upperLong = 104.05;
+const lowerLat = 12.8,
+  upperLat = 13.15,
+  lowerLong = 77.35,
+  upperLong = 77.75;
 const CACHE_TIME = 24 * 60; // 1 day
 let map;
 let servicesDataArr = [];
@@ -600,11 +596,15 @@ const App = () => {
       // Render routes
       const geometries = [];
 
-      let [service, index] = result.startRoute.split('-');
+      const routeIndex = route.lastIndexOf('-');
+      const service = route.substring(0, routeIndex);
+      const index = route.substring(routeIndex + 1, route.length);
       geometries.push(toGeoJSON(routesData[service][index]));
 
       if (result.endRoute) {
-        let [service, index] = result.endRoute.split('-');
+        const routeIndex = route.lastIndexOf('-');
+        const service = route.substring(0, routeIndex);
+        const index = route.substring(routeIndex + 1, route.length);
         geometries.push(toGeoJSON(routesData[service][index]));
       }
 
@@ -670,7 +670,7 @@ const App = () => {
     document.title = document.querySelector(
       'meta[property="og:title"]',
     ).content = Array.isArray(title) ? t(...title) : title;
-    if (!/^https?/.test(url)) url = 'https://busrouter.sg/#' + url;
+    if (!/^https?/.test(url)) url = 'https://busrouter-blr.pages.dev/#' + url;
     document.querySelector('meta[property="og:url"]').content = url;
     document.querySelector('meta[name="description"]').content =
       document.querySelector('meta[property="og:description"]').content =
@@ -678,11 +678,6 @@ const App = () => {
     document.querySelector('meta[property="og:image"]').content = image;
   }, [head]);
 
-  useEffect(() => {
-    i18n.on('languageChanged', () => {
-      setHead({ ...head });
-    });
-  }, []);
 
   const renderRoute = () => {
     const route = getRoute();
@@ -959,7 +954,9 @@ const App = () => {
           allStopsCoords.push(coordinates);
           const otherStops = new Set();
           routes.forEach((route) => {
-            const [service, index] = route.split('-');
+            const routeIndex = route.lastIndexOf('-');
+            const service = route.substring(0, routeIndex);
+            const index = route.substring(routeIndex + 1, route.length);
             const stops = servicesData[service].routes[index];
             stops.forEach((s) => stop !== s && otherStops.add(s));
           });
@@ -1020,7 +1017,9 @@ const App = () => {
           // Show all routes
           requestAnimationFrame(() => {
             const serviceGeometries = routes.map((route) => {
-              const [service, index] = route.split('-');
+              const routeIndex = route.lastIndexOf('-');
+              const service = route.substring(0, routeIndex);
+              const index = route.substring(routeIndex + 1, route.length);
               const line = routesData[service][index];
               const geometry = toGeoJSON(line);
               return {
@@ -1083,8 +1082,10 @@ const App = () => {
           const results = [];
 
           const endServicesStops = endStop.routes.map((route) => {
-            const [service, routeIndex] = route.split('-');
-            let serviceStops = servicesData[service].routes[routeIndex];
+            const routeIndex = route.lastIndexOf('-');
+            const service = route.substring(0, routeIndex);
+            const index = route.substring(routeIndex + 1, route.length);
+            let serviceStops = servicesData[service].routes[index];
             serviceStops = serviceStops.slice(
               0,
               serviceStops.indexOf(endStop.number) + 1,
@@ -1093,8 +1094,10 @@ const App = () => {
           });
 
           startStop.routes.forEach((route) => {
-            const [service, routeIndex] = route.split('-');
-            let serviceStops = servicesData[service].routes[routeIndex];
+            const routeIndex = route.lastIndexOf('-');
+            const service = route.substring(0, routeIndex);
+            const index = route.substring(routeIndex + 1, route.length);
+            let serviceStops = servicesData[service].routes[index];
             serviceStops = serviceStops.slice(
               serviceStops.indexOf(startStop.number),
             );
@@ -1190,11 +1193,6 @@ const App = () => {
         map.setLayoutProperty('stops-icon', 'visibility', 'visible');
       }
     }
-
-    const { pathname, search, hash } = location;
-    gtag('config', window._GA_TRACKING_ID, {
-      page_path: pathname + search + hash,
-    });
 
     setRouteLoading(false);
   };
@@ -1297,24 +1295,19 @@ const App = () => {
       servicesDataArr,
     };
 
-    const mapLang = () => {
-      // There's only en and zh, Don't have ms yet
-      return { zh: 'zh-Hans' }[i18n.resolvedLanguage] || i18n.resolvedLanguage;
-    };
-
     // Set up PMTiles protocol
     let protocol = new Protocol();
     maplibregl.addProtocol('pmtiles', protocol.tile);
 
     // Create map style
-    const mapStyle = createMapStyle({ lang: mapLang() });
+    const mapStyle = createMapStyle();
 
     map = window._map = new maplibregl.Map({
       container: 'map',
       style: mapStyle,
       renderWorldCopies: false,
       boxZoom: false,
-      minZoom: 8,
+      minZoom: 9,
       logoPosition: 'bottom-left',
       attributionControl: false,
       pitchWithRotate: false,
@@ -1370,17 +1363,6 @@ const App = () => {
       compassButton.classList.toggle('show', bearing !== 0);
     });
 
-    const language = new MapboxLanguage({
-      supportedLanguages: ['en', 'zh-Hans', 'ms', 'ta', 'ja'],
-      defaultLanguage: mapLang(),
-    });
-    map.addControl(language);
-
-    i18n.on('languageChanged', () => {
-      const localizedStyle = language.setLanguage(map.getStyle(), mapLang());
-      map.setStyle(localizedStyle);
-    });
-
     // Handle map errors gracefully (suppress mapbox:// URL errors)
     // map.on('error', (e) => {
     //   // Suppress errors related to mapbox:// URLs that can't be loaded in maplibre-gl
@@ -1425,18 +1407,6 @@ const App = () => {
       });
     });
 
-    // const localizedStyle = language.setLanguage(map.getStyle(), 'zh-Hans');
-    // map.setStyle(localizedStyle);
-
-    if (window.performance) {
-      const timeSincePageLoad = Math.round(performance.now());
-      gtag('event', 'timing_complete', {
-        name: 'load',
-        value: timeSincePageLoad,
-        event_category: 'Map',
-      });
-    }
-
     map
       .loadImage(stopImagePath)
       .then((img) => {
@@ -1478,13 +1448,13 @@ const App = () => {
       {
         id: 'rail-path',
         type: 'line',
-        source: 'sg-rail',
+        source: 'blr-rail',
         filter: [
           'all',
           ['==', ['geometry-type'], 'LineString'],
           ['has', 'line_color'],
         ],
-        minzoom: 12.5,
+        minzoom: 9,
         layout: {
           'line-join': 'round',
           'line-cap': 'round',
@@ -1496,11 +1466,11 @@ const App = () => {
             ['linear'],
             ['zoom'],
             12,
-            0.5,
+            1,
             16,
-            1.5,
+            3,
             22,
-            2,
+            4,
           ],
           'line-opacity': 0.5,
         },
@@ -1511,55 +1481,31 @@ const App = () => {
       {
         id: 'rail-path-case',
         type: 'line',
-        source: 'sg-rail',
+        source: 'blr-rail',
         filter: [
           'all',
           ['==', ['geometry-type'], 'LineString'],
           ['has', 'line_color'],
         ],
-        minzoom: 13,
+        minzoom: 9,
         layout: {
           'line-join': 'round',
           'line-cap': 'round',
         },
         paint: {
           'line-color': '#fff',
-          'line-width': ['interpolate', ['linear'], ['zoom'], 16, 4.5, 22, 6],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 16, 9, 22, 12],
           'line-opacity': 0.5,
         },
       },
       'rail-path',
     );
-    map.addLayer({
-      id: 'rail-path-label',
-      type: 'symbol',
-      source: 'sg-rail',
-      filter: [
-        'all',
-        ['==', ['geometry-type'], 'LineString'],
-        ['has', 'line_color'],
-      ],
-      minzoom: 13,
-      layout: {
-        'symbol-placement': 'line',
-        'symbol-spacing': 300,
-        'text-field': ['get', 'name'],
-        'text-font': ['Noto Sans Regular'],
-        'text-size': 13,
-      },
-      paint: {
-        'text-color': ['to-color', ['get', 'line_color']],
-        'text-halo-color': '#fff',
-        'text-halo-width': 2,
-        // 'text-opacity': 0.8,
-      },
-    });
 
     // Add rail stations layer using pois icon style
     map.addLayer({
       id: 'rail-stations',
       type: 'symbol',
-      source: 'sg-rail',
+      source: 'blr-rail',
       filter: [
         'all',
         ['==', ['geometry-type'], 'Point'],
@@ -1567,12 +1513,7 @@ const App = () => {
       ],
       minzoom: 13,
       layout: {
-        'icon-image': [
-          'case',
-          ['==', ['get', 'network'], 'singapore-lrt'],
-          'lrt-station',
-          'mrt-station',
-        ],
+        'icon-image': 'mrt-station',
         'icon-size': 0.2,
         'icon-allow-overlap': false,
         'text-field': ['coalesce', ['get', 'name_en'], ['get', 'name']],
@@ -1583,9 +1524,19 @@ const App = () => {
         'text-optional': true,
       },
       paint: {
-        'text-color': '#4d787e',
-        'text-halo-color': '#fff',
-        'text-halo-width': 1,
+        'text-color': ['to-color', ['get', 'station_colors']],
+        'text-halo-color': [
+          'case',
+          ['==', ['get', 'station_colors'], 'yellow'],
+          '#000',
+          '#fff',
+        ],
+        'text-halo-width': [
+          'case',
+          ['==', ['get', 'station_colors'], 'yellow'],
+          1,
+          0.1,
+        ],
       },
     });
 
@@ -1604,8 +1555,6 @@ const App = () => {
       type: 'geojson',
       tolerance: 10,
       buffer: 0,
-      attribution:
-        '© <a href="https://www.lta.gov.sg/" target="_blank" title="Land Transport Authority">LTA</a>',
       data: {
         type: 'FeatureCollection',
         features: stopsDataArr.map((stop) => ({
@@ -2660,7 +2609,6 @@ const App = () => {
 
   return (
     <>
-      <About />
       <div
         id="search-popover"
         ref={searchPopover}
@@ -2835,9 +2783,6 @@ const App = () => {
             ref={servicesList}
             onScroll={handleServicesScroll}
           >
-            <li class="ads-li" hidden={!services.length || !showAd}>
-              {showAd && <Ad key="ad" />}
-            </li>
             {services.length
               ? (expandedSearchOnce ? services : services.slice(0, 25)).map(
                   (s) => {
@@ -2912,9 +2857,6 @@ const App = () => {
               <li class="nada">No results.</li>
             )}
           </ul>
-          <div class="sidebar-ads" hidden={!showAd}>
-            {showAd && <Ad key="ad2" />}
-          </div>
         </div>
       </div>
       <div
@@ -3190,18 +3132,6 @@ if ('serviceWorker' in navigator) {
       new URL('../service-worker.js', import.meta.url),
       { type: 'module' },
     );
-  });
-}
-
-if (
-  matchMedia('(display-mode: standalone)').matches ||
-  'standalone' in navigator
-) {
-  gtag('event', 'pwa_load', {
-    event_category: 'PWA',
-    event_label: 'standalone',
-    value: true,
-    non_interaction: true,
   });
 }
 

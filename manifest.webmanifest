@@ -1,7 +1,7 @@
 {
-  "name": "BusRouter SG",
-  "short_name": "BusRouter SG",
-  "description": "Explore bus stops and routes on the map for all bus services in Singapore, with realtime bus arrival times and per-bus-stop passing routes overview.",
+  "name": "BusRouter BLR",
+  "short_name": "BusRouter BLR",
+  "description": "Explore bus stops and routes on the map for all bus services in Bengaluru.",
   "display": "standalone",
   "background_color": "#F9F5ED",
   "theme_color": "#F9F5ED",

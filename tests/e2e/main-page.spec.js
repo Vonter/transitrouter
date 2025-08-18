@@ -5,7 +5,7 @@ test.describe('Main Page', () => {
     await page.goto('/');
     
     // Check that the page title is correct
-    await expect(page).toHaveTitle(/BusRouter SG/);
+    await expect(page).toHaveTitle(/BusRouter BLR/);
     
     // Check that the logo is visible
     await expect(page.locator('#logo')).toBeVisible();
@@ -30,7 +30,7 @@ test.describe('Main Page', () => {
     await page.goto('/#/stops/08057');
     
     // Check that the page title is correct
-    await expect(page).toHaveTitle(/BusRouter SG/);
+    await expect(page).toHaveTitle(/BusRouter BLR/);
     
     // Check that the map container is present
     await expect(page.locator('#map')).toBeVisible();
@@ -56,7 +56,7 @@ test.describe('Main Page', () => {
     await page.goto('/#/services/133');
     
     // Check that the page title is correct
-    await expect(page).toHaveTitle(/BusRouter SG/);
+    await expect(page).toHaveTitle(/BusRouter BLR/);
     
     // Check that the map container is present
     await expect(page.locator('#map')).toBeVisible();

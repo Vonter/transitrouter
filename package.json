@@ -1,17 +1,16 @@
 {
-  "name": "busrouter-sg",
+  "name": "busrouter-blr",
   "version": "3.0.0",
-  "description": "Singapore Bus Routes Explorer",
-  "author": "Lim Chee Aun",
+  "description": "Bengaluru Bus Routes Explorer",
+  "author": "Vonter",
   "license": "MIT",
   "scripts": {
     "start": "parcel serve index.html bus-arrival/index.html bus-first-last/index.html visualization/index.html -p 8888",
     "build": "parcel build index.html bus-arrival/index.html bus-first-last/index.html visualization/index.html --no-cache --no-scope-hoist",
-    "postbuild": "cpy {favicon.ico,ads.txt} dist && cpy well-known/* dist/.well-known && node tasks/generateHeaders",
+    "postbuild": "cpy favicon.ico dist && cpy well-known/* dist/.well-known && cpy tiles/*.pmtiles dist && cpy tiles/*.geojson dist && cpy data/*.json dist && node tasks/generateHeaders",
     "prod": "npx serve dist/",
     "test:e2e": "playwright test",
-    "pmtiles-1": "pmtiles extract https://build.protomaps.com/20250629.pmtiles singapore.pmtiles --bbox=103.56,1.15,104.13,1.48",
-    "pmtiles-2": "pmtiles extract https://overturemaps-tiles-us-west-2-beta.s3.amazonaws.com/2025-06-25/buildings.pmtiles tiles/singapore-buildings.pmtiles --bbox=103.56,1.15,104.13,1.48"
+    "pmtiles": "pmtiles extract https://demo-bucket.protomaps.com/v4.pmtiles tiles/blr-initial.pmtiles --bbox=77.2,12.6,77.9,13.3 && tile-join -L buildings -o tiles/blr.pmtiles tiles/blr-initial.pmtiles --force && rm tiles/blr-initial.pmtiles"
   },
   "dependencies": {
     "@deck.gl/core": "9.1.12",
@@ -19,8 +18,6 @@
     "@deck.gl/mapbox": "9.1.12",
     "@mapbox/mapbox-gl-language": "~1.0.1",
     "@protomaps/basemaps": "~5.4.1",
-    "@sentry/react": "~9.33.0",
-    "@sentry/tracing": "~7.120.3",
     "cheap-ruler": "~4.0.0",
     "date-fns": "~4.1.0",
     "fuse.js": "~7.1.0",
@@ -35,7 +32,6 @@
     "use-resize-observer": "~9.1.0",
     "workbox-cacheable-response": "~7.3.0",
     "workbox-expiration": "~7.3.0",
-    "workbox-google-analytics": "~7.3.0",
     "workbox-range-requests": "~7.3.0",
     "workbox-routing": "~7.3.0",
     "workbox-strategies": "~7.3.0"
@@ -49,6 +45,7 @@
     "@parcel/config-default": "~2.15.4",
     "@parcel/packager-raw-url": "~2.15.4",
     "@parcel/transformer-image": "~2.15.4",
+    "@parcel/transformer-raw": "^2.15.4",
     "@parcel/transformer-webmanifest": "~2.15.4",
     "@playwright/test": "~1.53.2",
     "@turf/circle": "~7.2.0",

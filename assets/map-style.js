@@ -1,9 +1,8 @@
 import { layers, namedFlavor } from '@protomaps/basemaps';
 
-const TILES_ROOT = 'https://assets.busrouter.sg/tiles/';
-const sgTilesPath = TILES_ROOT + 'singapore.pmtiles';
-const sgBuildingsTilesPath = TILES_ROOT + 'singapore-buildings.pmtiles';
-const sgRailTilesPath = TILES_ROOT + 'sg-rail.geojson';
+const TILES_ROOT = '/tiles/';
+const blrTilesPath = TILES_ROOT + 'blr.pmtiles';
+const blrRailTilesPath = TILES_ROOT + 'blr-rail.geojson';
 
 const GLYPHS_URL =
   'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf';
@@ -86,16 +85,6 @@ export function createMapStyle({ lang = 'en' } = {}) {
 
     // Modify layers based on their ID or pattern
     switch (layer.id) {
-      // Replace buildings with Overture buildings
-      case 'buildings':
-        layer.filter = ['!=', ['get', 'is_underground'], true];
-        layer.source = 'buildings';
-        layer['source-layer'] = 'building';
-        layer.paint['fill-outline-color'] = '#d7d7c7';
-        layer.paint['fill-opacity'] = 1;
-        layer.minzoom = 15;
-        break;
-
       case 'places_subplace':
         layer.layout['text-font'] = ['Noto Sans Medium'];
         layer.paint['text-halo-width'] = 2;
@@ -178,28 +167,6 @@ export function createMapStyle({ lang = 'en' } = {}) {
 
     // Add the layer to our custom array
     customMapLayers.push(layer);
-
-    // Add buildings_label after pois
-    if (layer.id === 'pois' && poisLayer) {
-      customMapLayers.push({
-        id: 'buildings_label',
-        type: 'symbol',
-        source: 'buildings',
-        'source-layer': 'building',
-        minzoom: 15,
-        layout: {
-          'text-field': ['get', '@name'],
-          'text-font': ['Noto Sans Regular'],
-          'text-max-width': 8,
-          'text-size': poisLayer.layout['text-size'],
-          'text-padding': 8,
-        },
-        paint: {
-          ...poisLayer.paint,
-          'text-color': currentFlavor.pois.slategray,
-        },
-      });
-    }
   }
 
   console.log(
@@ -214,28 +181,17 @@ export function createMapStyle({ lang = 'en' } = {}) {
     sources: {
       protomaps: {
         type: 'vector',
-        url: `pmtiles://${sgTilesPath}`,
+        url: `pmtiles://${blrTilesPath}`,
         attribution:
           '<a href="https://protomaps.com" target="_blank">Protomaps</a> © <a href="https://openstreetmap.org" target="_blank">OpenStreetMap</a>',
       },
-      buildings: {
-        type: 'vector',
-        url: `pmtiles://${sgBuildingsTilesPath}`,
-        // Don't need OSM because already covered by the one above
-        attribution:
-          '<a href="https://overturemaps.org" target="_blank">Overture Maps Foundation</a>',
-      },
-      'sg-rail': {
+      'blr-rail': {
         type: 'geojson',
-        data: sgRailTilesPath,
-        attribution:
-          '© <a href="https://www.smrt.com.sg/" target="_blank" title="Singapore Mass Rapid Transit">SMRT</a> © <a href="https://www.sbstransit.com.sg/" target="_blank" title="Singapore Bus Services">SBS</a>',
-      },
+        data: blrRailTilesPath,
+      }
     },
     layers: customMapLayers,
   };
 
   return mapStyle;
 }
-
-export { sgRailTilesPath };

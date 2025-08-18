@@ -23,7 +23,7 @@ let protocol = new Protocol();
 maplibregl.addProtocol('pmtiles', protocol.tile);
 
 // Create map style using protomaps black flavor
-const sgTilesPath = new URL('../tiles/singapore.pmtiles', import.meta.url);
+const blrTilesPath = new URL('../tiles/blr.pmtiles', import.meta.url);
 const GLYPHS_URL =
   'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf';
 const SPRITE_URL =
@@ -72,7 +72,7 @@ const mapStyle = {
   sources: {
     protomaps: {
       type: 'vector',
-      url: `pmtiles://${sgTilesPath}`,
+      url: `pmtiles://${blrTilesPath}`,
       attribution:
         '<a href="https://protomaps.com" target="_blank">Protomaps</a> © <a href="https://openstreetmap.org" target="_blank">OpenStreetMap</a>',
     },

@@ -19,7 +19,7 @@ function App() {
     };
 
     useEffect(() => {
-      fetch('https://data.busrouter.sg/v1/stops.min.json')
+      fetch('../data/stops.min.json')
         .then((d) => d.json())
         .then((d) => {
           const data = {};
@@ -28,7 +28,7 @@ function App() {
           });
           setStopsData(data);
         });
-      fetch('https://data.busrouter.sg/v1/services.min.json')
+      fetch('../data/services.min.json')
         .then((d) => d.json())
         .then((d) => setServicesData(d));
     }, []);
@@ -40,7 +40,7 @@ function App() {
       const totalPages = Math.ceil(services.length / countPerPage);
       return (
         <>
-          <h1>All {services.length} bus routes in Singapore</h1>
+          <h1>All {services.length} bus routes in Bengaluru</h1>
           <p>
             <button class="link" onClick={() => setPage(Math.max(1, page - 1))}>
               ⬅️

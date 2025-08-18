@@ -1,6 +1,6 @@
 export const encode = (id) =>
   parseInt(
-    id.replace(/\w/gi, (c) => '' + c.charCodeAt()),
+    String(id).replace(/\w/gi, (c) => '' + c.charCodeAt()),
     10,
   );
 
