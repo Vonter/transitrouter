@@ -1459,10 +1459,6 @@ const App = () => {
         console.error('Failed to load lrt-station image:', e);
       });
 
-    // Edit style on boundaries layer
-    console.log("List of all layers:", map.getStyle().layers.map(layer => layer.id));
-    map.removeStyleLayer('boundaries');
-
     // Add rail source
     map.addSource('rail', {
       type: 'geojson',
