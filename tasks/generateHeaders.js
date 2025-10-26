@@ -62,8 +62,6 @@ content += `
 /*.jpg
   Cache-Control: public, max-age=2592000
 
-/*.pmtiles
-  Cache-Control: public, max-age=604800
 /*.geojson
   Cache-Control: public, max-age=604800
 

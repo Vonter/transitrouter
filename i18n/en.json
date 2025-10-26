@@ -31,13 +31,12 @@
     "lastBus": "Last Bus"
   },
   "app": {
-    "name": "BusRouter BLR",
-    "title": "$t(app.name) - Bengaluru Bus Routes Explorer",
-    "shortDescription": "Bengaluru Bus Routes Explorer",
-    "description": "Explore bus stops and routes on the map for all bus services in Bengaluru."
+    "name": "TransitRouter",
+    "title": "$t(app.name) - Transit Routes Explorer",
+    "shortDescription": "Transit Routes Explorer",
+    "description": "Explore transit stops and routes across multiple cities on an interactive map."
   },
   "about": {
-    "disclaimerCopyright": "Data <6>© BMTC</6>.",
     "explore": "Let's explore"
   },
   "search": {

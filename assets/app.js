@@ -1,5 +1,6 @@
 import './i18n';
 
+import { getCurrentCity, getCityInfo, getCityBounds, DEFAULT_CITY, isCitySupported } from './config';
 import { h, render, Fragment } from 'preact';
 import { useState, useRef, useEffect, useMemo } from 'preact/hooks';
 import maplibregl from 'maplibre-gl';
@@ -8,9 +9,7 @@ import Fuse from 'fuse.js';
 import intersect from 'just-intersect';
 import CheapRuler from 'cheap-ruler';
 import { useTranslation } from 'react-i18next';
-import { Protocol } from 'pmtiles';
 
-import { createMapStyle } from './map-style';
 import { encode, decode } from './utils/specialID';
 import { sortServices } from './utils/bus';
 import fetchCache from './utils/fetchCache';
@@ -30,15 +29,16 @@ import stopEndImagePath from './images/stop-end.png';
 import mrtStationImagePath from './images/mrt-station.png';
 import lrtStationImagePath from './images/lrt-station.png';
 import openNewWindowImagePath from './images/open-new-window.svg';
-import openNewWindowBlueImagePath from './images/open-new-window-blue.svg';
 import passingRoutesBlueImagePath from './images/passing-routes-blue.svg';
 import iconSVGPath from '../icons/icon.svg';
 import busTinyImagePath from './images/bus-tiny.png';
 
-const dataPath = '/data/';
-const routesJSONPath = dataPath + 'routes.min.json';
-const stopsJSONPath = dataPath + 'stops.min.json';
-const servicesJSONPath = dataPath + 'services.min.json';
+const city = getCurrentCity();
+const dataPath = `/data/${city}`;
+const routesJSONPath = `${dataPath}/routes.min.json`;
+const stopsJSONPath = `${dataPath}/stops.min.json`;
+const servicesJSONPath = `${dataPath}/services.min.json`;
+const railJSONPath = `${dataPath}/rail.json`;
 
 const $map = document.getElementById('map');
 const STORE = {};
@@ -81,10 +81,7 @@ function hideStopTooltip() {
 window.requestIdleCallback =
   window.requestIdleCallback || ((cb) => setTimeout(cb, 1));
 
-const lowerLat = 12.8,
-  upperLat = 13.15,
-  lowerLong = 77.35,
-  upperLong = 77.75;
+const [lowerLong, lowerLat, upperLong, upperLat] = getCityBounds();
 const CACHE_TIME = 24 * 60; // 1 day
 let map;
 let servicesDataArr = [];
@@ -95,11 +92,32 @@ let routesData;
 let fuseServices;
 let fuseStops;
 
+// Helper function to ensure consistent hash navigation with city prefix
+const navigateTo = (path, currentRoute) => {
+  const prefix = path === '/' ? '' : currentRoute.cityPrefix;
+  location.hash = `${prefix}${path}`;
+};
+
 const App = () => {
   const { t, i18n } = useTranslation();
 
   const [route, setRoute] = useState(getRoute());
   const prevRoute = usePrevious(route);
+
+  // Handle city selection and validation
+  useEffect(() => {
+    const { city } = route;
+    
+    // If invalid city code, redirect to default city
+    if (!isCitySupported(city)) {
+      location.hash = `/${DEFAULT_CITY}${route.page === 'home' ? '' : route.path}`;
+      return;
+    }
+
+    // Update page title with city name
+    const cityInfo = getCityInfo();
+    document.title = `${cityInfo.name} Bus Routes - ${t('app.name')}`;
+  }, [route]);
 
   const [routeLoading, setRouteLoading] = useState(true);
   const [services, setServices] = useState([]);
@@ -113,7 +131,6 @@ const App = () => {
   const [showServicePopover, setShowServicePopover] = useState(false);
   const [showArrivalsPopover, setShowArrivalsPopover] = useState(false);
   const [intersectStops, setIntersectStops] = useState(0);
-  const [showAd, setShowAd] = useState(false);
   const [routeServices, setRouteServices] = useState([]);
 
   const [showBetweenPopover, setShowBetweenPopover] = useState(false);
@@ -388,6 +405,8 @@ const App = () => {
     e.preventDefault();
     target.classList.add('highlight');
     highlightRoute(null, service, true);
+    // Navigate to the service route with city prefix
+    navigateTo(`/services/${service}`, route);
   };
 
   const highlightRoute = (e, service, zoomIn) => {
@@ -670,7 +689,11 @@ const App = () => {
     document.title = document.querySelector(
       'meta[property="og:title"]',
     ).content = Array.isArray(title) ? t(...title) : title;
-    if (!/^https?/.test(url)) url = 'https://busrouter-blr.pages.dev/#' + url;
+    if (!/^https?/.test(url)) {
+      const { city } = route;
+      const cityPrefix = city ? `/${city}` : '';
+      url = `https://transitrouter.pages.dev/#${cityPrefix}${url}`;
+    }
     document.querySelector('meta[property="og:url"]').content = url;
     document.querySelector('meta[name="description"]').content =
       document.querySelector('meta[property="og:description"]').content =
@@ -733,7 +756,7 @@ const App = () => {
                 serviceName: name,
               },
             ],
-            url: `/services/${service}`,
+            url: `${route.cityPrefix}/services/${service}`,
           });
 
           setShowServicePopover(true);
@@ -813,7 +836,7 @@ const App = () => {
             .join(', ');
           setHead({
             title: ['service.titleMultiple', { serviceNumbersNames }],
-            url: `/services/${services.join('~')}`,
+            url: `${route.cityPrefix}/services/${services.join('~')}`,
           });
 
           let routeStops = [];
@@ -1199,7 +1222,7 @@ const App = () => {
 
   const setStartStop = (number) => {
     if (betweenEndStop && betweenEndStop != number) {
-      location.hash = `/between/${number}-${betweenEndStop}`;
+      navigateTo(`/between/${number}-${betweenEndStop}`, route);
     } else {
       setBetweenStartStop(number);
       setBetweenEndStop(null);
@@ -1208,7 +1231,7 @@ const App = () => {
 
   const setEndStop = (number) => {
     if (betweenStartStop && betweenStartStop != number) {
-      location.hash = `/between/${betweenStartStop}-${number}`;
+      location.hash = `${route.cityPrefix}/between/${betweenStartStop}-${number}`;
     } else {
       setBetweenStartStop(null);
       setBetweenEndStop(number);
@@ -1295,19 +1318,12 @@ const App = () => {
       servicesDataArr,
     };
 
-    // Set up PMTiles protocol
-    let protocol = new Protocol();
-    maplibregl.addProtocol('pmtiles', protocol.tile);
-
-    // Create map style
-    const mapStyle = createMapStyle();
-
     map = window._map = new maplibregl.Map({
       container: 'map',
-      style: mapStyle,
+      style: '/data/style.json',
       renderWorldCopies: false,
       boxZoom: false,
-      minZoom: 9,
+      minZoom: 4,
       logoPosition: 'bottom-left',
       attributionControl: false,
       pitchWithRotate: false,
@@ -1443,12 +1459,22 @@ const App = () => {
         console.error('Failed to load lrt-station image:', e);
       });
 
+    // Edit style on boundaries layer
+    console.log("List of all layers:", map.getStyle().layers.map(layer => layer.id));
+    map.removeStyleLayer('boundaries');
+
+    // Add rail source
+    map.addSource('rail', {
+      type: 'geojson',
+      data: railJSONPath,
+    });
+
     // Add rail lines layer
     map.addLayer(
       {
         id: 'rail-path',
         type: 'line',
-        source: 'blr-rail',
+        source: 'rail',
         filter: [
           'all',
           ['==', ['geometry-type'], 'LineString'],
@@ -1466,11 +1492,11 @@ const App = () => {
             ['linear'],
             ['zoom'],
             12,
-            1,
-            16,
             3,
-            22,
+            16,
             4,
+            22,
+            6,
           ],
           'line-opacity': 0.5,
         },
@@ -1481,7 +1507,7 @@ const App = () => {
       {
         id: 'rail-path-case',
         type: 'line',
-        source: 'blr-rail',
+        source: 'rail',
         filter: [
           'all',
           ['==', ['geometry-type'], 'LineString'],
@@ -1505,20 +1531,20 @@ const App = () => {
     map.addLayer({
       id: 'rail-stations',
       type: 'symbol',
-      source: 'blr-rail',
+      source: 'rail',
       filter: [
         'all',
         ['==', ['geometry-type'], 'Point'],
         ['==', ['get', 'stop_type'], 'station'],
       ],
-      minzoom: 13,
+      minzoom: 12,
       layout: {
         'icon-image': 'mrt-station',
         'icon-size': 0.2,
         'icon-allow-overlap': false,
         'text-field': ['coalesce', ['get', 'name_en'], ['get', 'name']],
-        'text-font': ['Noto Sans Medium'],
-        'text-size': ['interpolate', ['linear'], ['zoom'], 0, 0, 22, 16],
+        'text-font': ['Noto Sans Regular'],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10, 22, 16],
         'text-variable-anchor': ['left', 'right', 'top'],
         'text-radial-offset': 0.85,
         'text-optional': true,
@@ -1528,15 +1554,10 @@ const App = () => {
         'text-halo-color': [
           'case',
           ['==', ['get', 'station_colors'], 'yellow'],
-          '#000',
+          '#555',
           '#fff',
         ],
-        'text-halo-width': [
-          'case',
-          ['==', ['get', 'station_colors'], 'yellow'],
-          1,
-          0.1,
-        ],
+        'text-halo-width': 0.8
       },
     });
 
@@ -1620,7 +1641,7 @@ const App = () => {
         // 'text-radial-offset': 1,
         'text-padding': 0.5,
         // 'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Regular'],
-        'text-font': ['Noto Sans Medium'],
+        'text-font': ['Noto Sans Regular'],
         'text-max-width': 16,
         'text-line-height': 1.1,
       },
@@ -1649,7 +1670,7 @@ const App = () => {
               'case',
               ['boolean', ['feature-state', 'selected'], false],
               4,
-              0.75,
+              1,
             ],
             14,
             4,
@@ -1697,8 +1718,7 @@ const App = () => {
             0.5,
           ],
         },
-      },
-      'places_subplace',
+      }
     );
 
     map.addLayer({
@@ -1787,7 +1807,7 @@ const App = () => {
       id: 'stops-highlight-circle',
       type: 'circle',
       source: 'stops-highlight',
-      minzoom: 11,
+      minzoom: 4,
       maxzoom: 14,
       filter: [
         'all',
@@ -1795,7 +1815,7 @@ const App = () => {
         ['!=', ['get', 'type'], 'intersect'],
       ],
       paint: {
-        'circle-radius': ['step', ['zoom'], 1.5, 12, 2],
+        'circle-radius': ['step', ['zoom'], 2, 12, 3],
         'circle-color': '#fff',
         'circle-stroke-color': '#f01b48',
         'circle-stroke-width': ['step', ['zoom'], 1.5, 12, 2],
@@ -2036,14 +2056,14 @@ const App = () => {
         id: 'route-arrows',
         type: 'symbol',
         source: 'routes',
-        minzoom: 12,
+        minzoom: 4,
         layout: {
           'symbol-placement': 'line',
           'symbol-spacing': 100,
           'text-field': '→',
           'text-size': 16,
           // 'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Regular'],
-          'text-font': ['Noto Sans Medium'],
+          'text-font': ['Noto Sans Regular'],
           'text-allow-overlap': true,
           'text-ignore-placement': true,
           'text-keep-upright': false,
@@ -2167,7 +2187,7 @@ const App = () => {
         'symbol-placement': 'line',
         'symbol-spacing': 300,
         // 'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Regular'],
-        'text-font': ['Noto Sans Medium'],
+        'text-font': ['Noto Sans Regular'],
         'text-field': '{service}',
         'text-size': 14,
         'text-rotation-alignment': 'viewport',
@@ -2192,14 +2212,14 @@ const App = () => {
         id: 'route-path-arrows',
         type: 'symbol',
         source: 'routes-path',
-        minzoom: 12,
+        minzoom: 4,
         layout: {
           'symbol-placement': 'line',
           'symbol-spacing': 200,
           'text-field': '→',
           'text-size': 16,
           // 'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Regular'],
-          'text-font': ['Noto Sans Medium'],
+          'text-font': ['Noto Sans Regular'],
           // 'text-allow-overlap': true,
           // 'text-ignore-placement': true,
           'text-keep-upright': false,
@@ -2240,7 +2260,7 @@ const App = () => {
       map.on('click', 'routes-path', (e) => {
         if (e.features.length) {
           const { id } = e.features[0];
-          location.hash = `/services/${decode(id)}`;
+          navigateTo(`/services/${decode(id)}`, route);
         }
       });
       map.on('mousemove', 'routes-path', (e) => {
@@ -2322,7 +2342,7 @@ const App = () => {
       id: 'buses-service',
       type: 'symbol',
       source: 'buses-service',
-      minzoom: 9,
+      minzoom: 4,
       layout: {
         'icon-image': 'bus-tiny',
         'icon-allow-overlap': true,
@@ -2436,7 +2456,7 @@ const App = () => {
       id: 'route-between-arrows',
       type: 'symbol',
       source: 'routes-between',
-      minzoom: 12,
+      minzoom: 4,
       layout: {
         'symbol-placement': 'line',
         'symbol-spacing': 100,
@@ -2481,13 +2501,6 @@ const App = () => {
     requestIdleCallback(() => {
       // For cases when user already typed something before fuse.js inits
       if (searchField.current?.value) handleSearch();
-
-      // Finally, show ad
-      map.once('idle', () => {
-        setTimeout(() => {
-          setShowAd(true);
-        }, 1000);
-      });
     });
   }, [mapLoaded]);
 
@@ -2516,7 +2529,7 @@ const App = () => {
           setShrinkSearch(true);
         } else {
           if (feature.source == 'stops') {
-            location.hash = `/stops/${feature.properties.number}`;
+            navigateTo(`/stops/${feature.properties.number}`, route);
           } else {
             _showStopPopover(feature.properties.number);
           }
@@ -2524,7 +2537,7 @@ const App = () => {
       } else {
         const { page, subpage } = route;
         if (page === 'stop' && subpage !== 'routes') {
-          location.hash = '/';
+          navigateTo('/', route);
         } else {
           hideStopPopover();
         }
@@ -2573,9 +2586,9 @@ const App = () => {
           } else if (showStopPopover) {
             hideStopPopover();
           } else if (showBetweenPopover) {
-            location.hash = '/';
+            navigateTo('/', route);
           } else if (showServicePopover) {
-            location.hash = '/';
+            navigateTo('/', route);
           }
           break;
         }
@@ -2621,7 +2634,7 @@ const App = () => {
           hidden={!(showServicesFloatPill || showPassingRoutesFloatPill)}
         >
           <div class="float-pill" ref={floatPill}>
-            <a href="#/" class="popover-close">
+            <a href={`#${route.cityPrefix}/`} class="popover-close">
               &times;
             </a>
             {showServicesFloatPill && (
@@ -2638,7 +2651,7 @@ const App = () => {
                     {routeServices.sort(sortServices).map((service) => (
                       <>
                         <a
-                          href={`#/services/${service}`}
+                          href={`#${route.cityPrefix}/services/${service}`}
                           onClick={(e) => clickRoute(e, service)}
                           onMouseEnter={(e) => highlightRoute(e, service)}
                           onMouseLeave={unhighlightRoute}
@@ -2655,7 +2668,7 @@ const App = () => {
                               const newRouteServices = routeServices.filter(
                                 (s) => s !== service,
                               );
-                              location.hash = `/services/${newRouteServices.join(
+                              location.hash = `${route.cityPrefix}/services/${newRouteServices.join(
                                 '~',
                               )}`;
                               unhighlightRoute();
@@ -2689,7 +2702,7 @@ const App = () => {
                           return (
                             <li key={stop.number}>
                               <a
-                                href={`#/stops/${stop.number}`}
+                                href={`#${route.cityPrefix}/stops/${stop.number}`}
                                 onClick={(e) => {
                                   e.preventDefault();
                                   zoomToStop(s);
@@ -2731,7 +2744,7 @@ const App = () => {
                     })}{' '}
                     ·{' '}
                     <a
-                      href={`#/services/${stopsData[route.value].services
+                      href={`#${route.cityPrefix}/services/${stopsData[route.value].services
                         .sort(sortServices)
                         .join('~')}`}
                     >
@@ -2742,7 +2755,7 @@ const App = () => {
                     .sort(sortServices)
                     .map((service) => (
                       <a
-                        href={`#/services/${service}`}
+                        href={`#${route.cityPrefix}/services/${service}`}
                         onClick={(e) => clickRoute(e, service)}
                         onMouseEnter={(e) => highlightRoute(e, service)}
                         onMouseLeave={unhighlightRoute}
@@ -2792,7 +2805,7 @@ const App = () => {
                     return (
                       <li key={s.number}>
                         <a
-                          href={`#/services/${s.number}`}
+                          href={`#${route.cityPrefix}/services/${s.number}`}
                           class={checked ? 'current' : ''}
                           onMouseEnter={() => previewRoute(s.number)}
                           onMouseLeave={unpreviewRoute}
@@ -2818,11 +2831,11 @@ const App = () => {
                               newServices.sort(sortServices);
                               setTimeout(() => {
                                 if (newServices.length) {
-                                  location.hash = `/services/${newServices.join(
+                                  navigateTo(`/services/${newServices.join(
                                     '~',
-                                  )}`;
+                                  )}`, route);
                                 } else {
-                                  location.hash = '/';
+                                  navigateTo('/', route);
                                 }
                               }, 250);
                             }}
@@ -2835,7 +2848,7 @@ const App = () => {
               : !searching &&
                 [1, 2, 3, 4, 5, 6, 7, 8].map((s, i) => (
                   <li key={s}>
-                    <a href="#">
+                    <a href={`#${route.cityPrefix}/`}>
                       <b class="service-tag">&nbsp;&nbsp;&nbsp;</b>
                       <span class="placeholder">
                         █████{i % 3 == 0 ? '███' : ''} ███
@@ -2848,7 +2861,7 @@ const App = () => {
               !!stops.length &&
               stops.map((s) => (
                 <li key={s.number}>
-                  <a href={`#/stops/${s.number}`}>
+                  <a href={`#${route.cityPrefix}/stops/${s.number}`}>
                     <b class="stop-tag">{s.number}</b> {s.name}
                   </a>
                 </li>
@@ -2866,7 +2879,7 @@ const App = () => {
       >
         {stopPopoverData && (
           <>
-            <a href="#/" onClick={hideStopPopover} class="popover-close">
+            <a href={`#${route.cityPrefix}/`} onClick={hideStopPopover} class="popover-close">
               &times;
             </a>
             <header>
@@ -2881,19 +2894,6 @@ const App = () => {
                   count: stopPopoverData.services.length,
                 })}{' '}
                 ∙{' '}
-                <a
-                  href={`/bus-first-last/#${stopPopoverData.number}`}
-                  target="_blank"
-                >
-                  {t('stop.firstLastBus')}{' '}
-                  <img
-                    src={openNewWindowImagePath}
-                    width="12"
-                    height="12"
-                    alt=""
-                    class="new-window"
-                  />
-                </a>
               </h2>
               <BusServicesArrival
                 active={showStopPopover}
@@ -2905,23 +2905,9 @@ const App = () => {
             </ScrollableContainer>
             <div class="popover-footer">
               <div class="popover-buttons alt-hide">
-                <a
-                  href={`/bus-arrival/#${stopPopoverData.number}`}
-                  target="_blank"
-                  onClick={openBusArrival}
-                  class="popover-button primary"
-                >
-                  {t('glossary.busArrivals')}{' '}
-                  <img
-                    src={openNewWindowBlueImagePath}
-                    width="16"
-                    height="16"
-                    alt=""
-                  />
-                </a>
                 {stopPopoverData.services.length > 1 && (
                   <a
-                    href={`#/stops/${stopPopoverData.number}/routes`}
+                    href={`#${route.cityPrefix}/stops/${stopPopoverData.number}/routes`}
                     class="popover-button"
                   >
                     {t('glossary.passingRoutes')}{' '}
@@ -2958,7 +2944,7 @@ const App = () => {
         class={`popover ${showServicePopover ? 'expand' : ''}`}
         key={``}
       >
-        <a href="#/" onClick={navBackToStop} class="popover-close">
+        <a href={`#${route.cityPrefix}/`} onClick={navBackToStop} class="popover-close">
           &times;
         </a>
         {servicesData && routeServices.length && (
@@ -3011,7 +2997,7 @@ const App = () => {
         class={`popover ${showBetweenPopover ? 'expand' : ''}`}
       >
         {showBetweenPopover && [
-          <a href="#/" onClick={resetStartEndStops} class="popover-close">
+          <a href={`#${route.cityPrefix}/`} onClick={resetStartEndStops} class="popover-close">
             &times;
           </a>,
           <header>
@@ -3100,11 +3086,11 @@ const App = () => {
         class={`popover ${showArrivalsPopover ? 'expand' : ''}`}
       >
         {showArrivalsPopover && [
-          <a href="#/" onClick={closeBusArrival} class="popover-close">
+          <a href={`#${route.cityPrefix}/`} onClick={closeBusArrival} class="popover-close">
             &times;
           </a>,
           <a
-            href={`/bus-arrival/#${showArrivalsPopover.number}`}
+            href={`#${route.cityPrefix}/bus-arrival/${showArrivalsPopover.number}`}
             target="_blank"
             onClick={(e) => {
               openBusArrival(e, true);

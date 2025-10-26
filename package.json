@@ -1,16 +1,15 @@
 {
-  "name": "busrouter-blr",
+  "name": "transitrouter",
   "version": "3.0.0",
-  "description": "Bengaluru Bus Routes Explorer",
+  "description": "Transit Routes Explorer",
   "author": "Vonter",
   "license": "MIT",
   "scripts": {
     "start": "parcel serve index.html bus-arrival/index.html bus-first-last/index.html visualization/index.html -p 8888",
     "build": "parcel build index.html bus-arrival/index.html bus-first-last/index.html visualization/index.html --no-cache --no-scope-hoist",
-    "postbuild": "cpy favicon.ico dist && cpy well-known/* dist/.well-known && cpy tiles/*.pmtiles dist && cpy tiles/*.geojson dist && cpy data/*.json dist && node tasks/generateHeaders",
+    "postbuild": "cpy favicon.ico dist && cpy well-known/* dist/.well-known && cpy data/* dist && node tasks/generateHeaders",
     "prod": "npx serve dist/",
-    "test:e2e": "playwright test",
-    "pmtiles": "pmtiles extract https://demo-bucket.protomaps.com/v4.pmtiles tiles/blr-initial.pmtiles --bbox=77.2,12.6,77.9,13.3 && tile-join -L buildings -o tiles/blr.pmtiles tiles/blr-initial.pmtiles --force && rm tiles/blr-initial.pmtiles"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@deck.gl/core": "9.1.12",
@@ -55,6 +54,7 @@
     "cpy-cli": "5.0.0",
     "netlify-plugin-ttl-cache": "~1.0.2",
     "parcel": "~2.15.4",
+    "path-browserify": "^1.0.1",
     "process": "~0.11.10"
   },
   "alias": {

@@ -6,7 +6,6 @@ import {
 } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 import { CacheableResponsePlugin } from 'workbox-cacheable-response';
-import { RangeRequestsPlugin } from 'workbox-range-requests';
 
 registerRoute(
   ({ request }) => request.mode === 'navigate',
@@ -65,74 +64,6 @@ registerRoute(
       }),
       new CacheableResponsePlugin({
         statuses: [200],
-      }),
-    ],
-  }),
-);
-
-registerRoute(
-  /.*api\.mapbox\.com\/fonts/,
-  new CacheFirst({
-    cacheName: 'mapbox-fonts',
-    plugins: [
-      new ExpirationPlugin({
-        maxEntries: 10,
-        purgeOnQuotaError: true,
-      }),
-      new CacheableResponsePlugin({
-        statuses: [200],
-      }),
-    ],
-  }),
-);
-
-registerRoute(
-  /.*(?:tiles\.mapbox|api\.mapbox)\.com.*$/,
-  new StaleWhileRevalidate({
-    cacheName: 'mapbox',
-    plugins: [
-      new ExpirationPlugin({
-        maxAgeSeconds: 30 * 24 * 60 * 60, // 30 Days
-        purgeOnQuotaError: true,
-      }),
-      new CacheableResponsePlugin({
-        statuses: [200],
-      }),
-    ],
-  }),
-);
-
-// Protomaps fonts and sprites
-registerRoute(
-  /.*protomaps\.github\.io\/basemaps-assets\/(fonts|sprites)/,
-  new CacheFirst({
-    cacheName: 'protomaps-assets',
-    plugins: [
-      new ExpirationPlugin({
-        maxEntries: 30,
-        maxAgeSeconds: 7 * 24 * 60 * 60, // 7 Days
-        purgeOnQuotaError: true,
-      }),
-      new CacheableResponsePlugin({
-        statuses: [200],
-      }),
-    ],
-  }),
-);
-
-// PMTiles requests - need range request support
-registerRoute(
-  /.*\.(pmtiles|geojson)$/,
-  new CacheFirst({
-    cacheName: 'pmtiles',
-    plugins: [
-      new RangeRequestsPlugin(),
-      new ExpirationPlugin({
-        maxAgeSeconds: 7 * 24 * 60 * 60, // 7 Days
-        purgeOnQuotaError: true,
-      }),
-      new CacheableResponsePlugin({
-        statuses: [200, 206], // Include 206 for range requests
       }),
     ],
   }),

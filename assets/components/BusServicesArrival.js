@@ -43,7 +43,7 @@ const setupBusesStopLayerOnce = (map) => {
         'text-optional': true,
         'text-size': 10,
         // 'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Regular'],
-        'text-font': ['Noto Sans Medium'],
+        'text-font': ['Noto Sans Regular'],
         'text-variable-anchor': ['left', 'right', 'bottom', 'top'],
         'text-justify': 'auto',
         'text-padding': ['step', ['zoom'], 4, 15, 6, 16, 8],
@@ -89,7 +89,7 @@ export default function BusServicesArrival({
   const fetchServices = useCallback(() => {
     setIsLoading(true);
     controller = new AbortController();
-    fetch(`https://busrouter-blr.pages.dev/arrival/?id=${id}`, {
+    fetch(`https://transitrouter.pages.dev/arrival/?id=${id}`, {
       signal: controller.signal,
     })
       .then((res) => res.json())
@@ -246,7 +246,7 @@ export default function BusServicesArrival({
         {services.sort(sortServices).map((service) => (
           <>
             <a
-              href={`#/services/${service}`}
+              href={`#${route.cityPrefix}/services/${service}`}
               class={`service-tag ${
                 route.page === 'service' && servicesValue.includes(service)
                   ? 'current'

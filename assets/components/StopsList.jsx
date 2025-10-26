@@ -1,5 +1,6 @@
 import { h, Fragment } from 'preact';
 import { useRef } from 'preact/hooks';
+import getRoute from '../utils/getRoute';
 
 function rowSpaner(stopGrid, column, stop) {
   if (!stop) return 1;
@@ -32,6 +33,8 @@ function areOpposite(stop1, stop2) {
 }
 
 export default function StopsList(props) {
+  const route = getRoute();
+
   const { routes, stopsData, onStopClick, onStopClickAgain } = props;
   if (
     !routes ||
@@ -76,7 +79,7 @@ export default function StopsList(props) {
   const StopLink = ({ stop }) =>
     stop ? (
       <a
-        href={`#/stops/${stop}`}
+        href={`#${route.cityPrefix}/stops/${stop}`}
         data-stop={stop}
         onClick={(e) => {
           e.preventDefault();

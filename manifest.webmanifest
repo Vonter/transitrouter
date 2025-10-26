@@ -1,7 +1,7 @@
 {
-  "name": "BusRouter BLR",
-  "short_name": "BusRouter BLR",
-  "description": "Explore bus stops and routes on the map for all bus services in Bengaluru.",
+  "name": "TransitRouter",
+  "short_name": "TransitRouter",
+  "description": "Explore transit stops and routes across multiple cities on an interactive map.",
   "display": "standalone",
   "background_color": "#F9F5ED",
   "theme_color": "#F9F5ED",

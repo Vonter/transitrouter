@@ -183,7 +183,7 @@ function ArrivalTimes() {
   const [fetchServicesStatus, setFetchServicesStatus] = useState(null); // 'loading', 'error', 'online'
   const [services, setServices] = useState(null);
   const initialPinnedServices =
-    JSON.parse(localStorage.getItem('busrouterblr.arrival.pinnedServices')) ||
+    JSON.parse(localStorage.getItem('transitrouter.arrival.pinnedServices')) ||
     [];
   const [pinnedServices, setPinnedServices] = useState(initialPinnedServices);
 
@@ -232,7 +232,7 @@ function ArrivalTimes() {
     if (!id) return;
     if (window._PAUSED) return;
     setFetchServicesStatus('loading');
-    fetch(`https://busrouter-blr.pages.dev/arrival/?id=${id}`)
+    fetch(`https://transitrouter.pages.dev/arrival/?id=${id}`)
       .then((r) => r.json())
       .then((results) => {
         setFetchServicesStatus(results.services?.length ? 'online' : null);
@@ -268,7 +268,7 @@ function ArrivalTimes() {
     setPinnedServices([...pinnedServices]);
     try {
       localStorage.setItem(
-        'busrouterblr.arrival.pinnedServices',
+        'transitrouter.arrival.pinnedServices',
         JSON.stringify(pinnedServices),
       );
     } catch (e) {}
@@ -305,7 +305,7 @@ function ArrivalTimes() {
     <div>
       <div id="bus-stop-map">
         <img
-          src={`https://busrouter-blr.pages.dev/${lng},${lat},17,0,60/400x200@2x`}
+          src={`https://transitrouter.pages.dev/${lng},${lat},17,0,60/400x200@2x`}
           alt="Bus stop map"
           width="400"
           height="200"
