@@ -17,6 +17,16 @@ export default () => {
   let [_, page, value, subpage] = 
     routePath.match(/(service|stop|between)s?\/([^\/]+)\/?([^\/]+)?/) || [];
   
+  // Decode URI components to handle encoded whitespace and special characters
+  try {
+    if (page) page = decodeURIComponent(page);
+    if (value) value = decodeURIComponent(value);
+    if (subpage) subpage = decodeURIComponent(subpage);
+  } catch (e) {
+    // If decoding fails, use the original values
+    console.warn('Failed to decode URI components:', e);
+  }
+  
   return { 
     city,
     page: page || 'home',
