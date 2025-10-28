@@ -26,6 +26,7 @@ Explore transit stops and routes across multiple cities on an interactive map.
 - Delhi: [OTD Delhi](https://otd.delhi.gov.in/data/static/)
 - Goa: [KTCL Goa](https://ktclgoa.com/gtfs/)
 - Kochi: [Jungle Bus](https://jungle-bus.github.io/KochiTransport/)
+- Pune: [pmpml-gtfs](https://github.com/croyla/pmpml-gtfs)
 - Indian Railways: [Neo2308/indianrailways-gtfs](https://github.com/Neo2308/indianrailways-gtfs/)
 
 ### Web App
