@@ -114,8 +114,8 @@ map.on('load', async () => {
       d.highlighted
         ? [229, 238, 193]
         : d.faded
-        ? [55, 83, 95, 255]
-        : [55, 83, 95, 128],
+          ? [55, 83, 95, 255]
+          : [55, 83, 95, 128],
     pickable: true,
     autoHighlight: true,
     highlightColor: [229, 238, 193],

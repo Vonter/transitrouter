@@ -19,16 +19,39 @@ export default (iconText) => {
   // inset distance of 120 was eyeballed
   ctx.fillStyle = iconBackgroundColor;
   let iconInsetDistance = 120;
-  let arcRadius =  Math.round(c.width * 0.15625);
+  let arcRadius = Math.round(c.width * 0.15625);
   ctx.beginPath();
   ctx.moveTo(iconInsetDistance - arcRadius, iconInsetDistance);
-  ctx.quadraticCurveTo(iconInsetDistance - arcRadius, iconInsetDistance - arcRadius, iconInsetDistance, iconInsetDistance - arcRadius);
+  ctx.quadraticCurveTo(
+    iconInsetDistance - arcRadius,
+    iconInsetDistance - arcRadius,
+    iconInsetDistance,
+    iconInsetDistance - arcRadius,
+  );
   ctx.lineTo(c.width - iconInsetDistance, iconInsetDistance - arcRadius);
-  ctx.quadraticCurveTo(c.width - iconInsetDistance + arcRadius, iconInsetDistance - arcRadius, c.width - iconInsetDistance + arcRadius, iconInsetDistance);
-  ctx.lineTo(c.width - iconInsetDistance + arcRadius, c.height - iconInsetDistance);
-  ctx.quadraticCurveTo(c.width - iconInsetDistance + arcRadius, c.height - iconInsetDistance + arcRadius, c.width - iconInsetDistance, c.height - iconInsetDistance + arcRadius);
+  ctx.quadraticCurveTo(
+    c.width - iconInsetDistance + arcRadius,
+    iconInsetDistance - arcRadius,
+    c.width - iconInsetDistance + arcRadius,
+    iconInsetDistance,
+  );
+  ctx.lineTo(
+    c.width - iconInsetDistance + arcRadius,
+    c.height - iconInsetDistance,
+  );
+  ctx.quadraticCurveTo(
+    c.width - iconInsetDistance + arcRadius,
+    c.height - iconInsetDistance + arcRadius,
+    c.width - iconInsetDistance,
+    c.height - iconInsetDistance + arcRadius,
+  );
   ctx.lineTo(iconInsetDistance, c.height - iconInsetDistance + arcRadius);
-  ctx.quadraticCurveTo(iconInsetDistance - arcRadius, c.height - iconInsetDistance + arcRadius, iconInsetDistance - arcRadius, c.height - iconInsetDistance);
+  ctx.quadraticCurveTo(
+    iconInsetDistance - arcRadius,
+    c.height - iconInsetDistance + arcRadius,
+    iconInsetDistance - arcRadius,
+    c.height - iconInsetDistance,
+  );
   ctx.lineTo(iconInsetDistance - arcRadius, iconInsetDistance);
   ctx.fill();
 
@@ -38,8 +61,10 @@ export default (iconText) => {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = iconPrimaryColor;
-  ctx.fillText(iconText, (c.width / 2), (c.height / 2));
+  ctx.fillText(iconText, c.width / 2, c.height / 2);
 
   // replace existing apple-touch-icon
-  document.querySelector('[rel="apple-touch-icon"]').setAttribute('href', c.toDataURL());
+  document
+    .querySelector('[rel="apple-touch-icon"]')
+    .setAttribute('href', c.toDataURL());
 };

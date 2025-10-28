@@ -1,6 +1,12 @@
 import './i18n';
 
-import { getCurrentCity, getCityInfo, getCityBounds, DEFAULT_CITY, isCitySupported } from './config';
+import {
+  getCurrentCity,
+  getCityInfo,
+  getCityBounds,
+  DEFAULT_CITY,
+  isCitySupported,
+} from './config';
 import { h, render, Fragment } from 'preact';
 import { useState, useRef, useEffect, useMemo } from 'preact/hooks';
 import maplibregl from 'maplibre-gl';
@@ -107,7 +113,7 @@ const App = () => {
   // Handle city selection and validation
   useEffect(() => {
     const { city } = route;
-    
+
     // If invalid city code, redirect to default city
     if (!isCitySupported(city)) {
       location.hash = `/${DEFAULT_CITY}${route.page === 'home' ? '' : route.path}`;
@@ -452,18 +458,18 @@ const App = () => {
                 left: floatPill.current.offsetHeight / 2,
               }
             : BREAKPOINT()
-            ? {
-                top: 80,
-                right: Math.max(floatPill.current.offsetWidth / 2, 80),
-                bottom: 60 + 20 + floatPill.current.offsetHeight / 2,
-                left: Math.max(floatPill.current.offsetWidth / 2, 80),
-              }
-            : {
-                top: 80,
-                right: 80,
-                bottom: 60 + 20 + floatPill.current.offsetHeight, // height of search bar + float pill
-                left: 80,
-              },
+              ? {
+                  top: 80,
+                  right: Math.max(floatPill.current.offsetWidth / 2, 80),
+                  bottom: 60 + 20 + floatPill.current.offsetHeight / 2,
+                  left: Math.max(floatPill.current.offsetWidth / 2, 80),
+                }
+              : {
+                  top: 80,
+                  right: 80,
+                  bottom: 60 + 20 + floatPill.current.offsetHeight, // height of search bar + float pill
+                  left: 80,
+                },
         });
       });
     }
@@ -701,7 +707,6 @@ const App = () => {
     document.querySelector('meta[property="og:image"]').content = image;
   }, [head]);
 
-
   const renderRoute = () => {
     const route = getRoute();
 
@@ -891,18 +896,18 @@ const App = () => {
                     left: floatPill.current.offsetHeight / 2,
                   }
                 : BREAKPOINT()
-                ? {
-                    top: 80,
-                    right: Math.max(floatPill.current.offsetWidth / 2, 80),
-                    bottom: 60 + 20 + floatPill.current.offsetHeight / 2,
-                    left: Math.max(floatPill.current.offsetWidth / 2, 80),
-                  }
-                : {
-                    top: 80,
-                    right: 80,
-                    bottom: 60 + 20 + floatPill.current.offsetHeight, // height of search bar + float pill
-                    left: 80,
-                  },
+                  ? {
+                      top: 80,
+                      right: Math.max(floatPill.current.offsetWidth / 2, 80),
+                      bottom: 60 + 20 + floatPill.current.offsetHeight / 2,
+                      left: Math.max(floatPill.current.offsetWidth / 2, 80),
+                    }
+                  : {
+                      top: 80,
+                      right: 80,
+                      bottom: 60 + 20 + floatPill.current.offsetHeight, // height of search bar + float pill
+                      left: 80,
+                    },
             });
           });
 
@@ -919,8 +924,8 @@ const App = () => {
                   type: endStops.includes(stop)
                     ? 'end'
                     : intersectStops.includes(stop)
-                    ? 'intersect'
-                    : null,
+                      ? 'intersect'
+                      : null,
                   left,
                 },
                 geometry: {
@@ -1002,18 +1007,18 @@ const App = () => {
                     left: floatPill.current.offsetHeight / 2,
                   }
                 : BREAKPOINT()
-                ? {
-                    top: 80,
-                    right: Math.max(floatPill.current.offsetWidth / 2, 80),
-                    bottom: 60 + 20 + floatPill.current.offsetHeight / 2,
-                    left: Math.max(floatPill.current.offsetWidth / 2, 80),
-                  }
-                : {
-                    top: 80,
-                    right: 80,
-                    bottom: 60 + 20 + floatPill.current.offsetHeight, // height of search bar + float pill
-                    left: 80,
-                  },
+                  ? {
+                      top: 80,
+                      right: Math.max(floatPill.current.offsetWidth / 2, 80),
+                      bottom: 60 + 20 + floatPill.current.offsetHeight / 2,
+                      left: Math.max(floatPill.current.offsetWidth / 2, 80),
+                    }
+                  : {
+                      top: 80,
+                      right: 80,
+                      bottom: 60 + 20 + floatPill.current.offsetHeight, // height of search bar + float pill
+                      left: 80,
+                    },
             });
           });
 
@@ -1546,16 +1551,16 @@ const App = () => {
         'text-optional': true,
       },
       paint: {
-        'text-color': [
-          'to-color', ['get', 'station_colors']
-        ],
+        'text-color': ['to-color', ['get', 'station_colors']],
         'text-halo-color': [
           'case',
-          ['==', ['get', 'station_colors'], 'yellow'],  '#555',
-          ['==', ['get', 'station_colors'], 'aqua'],  '#666',
+          ['==', ['get', 'station_colors'], 'yellow'],
+          '#555',
+          ['==', ['get', 'station_colors'], 'aqua'],
+          '#666',
           '#fff',
         ],
-        'text-halo-width': 0.8
+        'text-halo-width': 0.8,
       },
     });
 
@@ -1650,74 +1655,67 @@ const App = () => {
       },
     };
 
-    map.addLayer(
-      {
-        id: 'stops',
-        type: 'circle',
-        source: 'stops',
-        layout: {
-          visibility: 'none',
-        },
-        paint: {
-          'circle-radius': [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            10,
-            [
-              'case',
-              ['boolean', ['feature-state', 'selected'], false],
-              4,
-              1,
-            ],
-            14,
-            4,
-            15,
-            ['case', ['boolean', ['feature-state', 'selected'], false], 12, 6],
-          ],
-          'circle-color': [
-            'case',
-            ['boolean', ['feature-state', 'selected'], false],
-            '#fff',
-            '#f01b48',
-          ],
-          'circle-stroke-color': [
-            'case',
-            ['boolean', ['feature-state', 'selected'], false],
-            '#f01b48',
-            '#fff',
-          ],
-          'circle-stroke-width': [
-            'case',
-            ['boolean', ['feature-state', 'selected'], false],
-            5,
-            1,
-          ],
-          'circle-opacity': [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            10,
-            1,
-            13.9,
-            1,
-            14,
-            0.5,
-          ],
-          'circle-stroke-opacity': [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            10,
-            ['case', ['boolean', ['feature-state', 'selected'], false], 1, 0],
-            13.5,
-            1,
-            14,
-            0.5,
-          ],
-        },
-      }
-    );
+    map.addLayer({
+      id: 'stops',
+      type: 'circle',
+      source: 'stops',
+      layout: {
+        visibility: 'none',
+      },
+      paint: {
+        'circle-radius': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          10,
+          ['case', ['boolean', ['feature-state', 'selected'], false], 4, 1],
+          14,
+          4,
+          15,
+          ['case', ['boolean', ['feature-state', 'selected'], false], 12, 6],
+        ],
+        'circle-color': [
+          'case',
+          ['boolean', ['feature-state', 'selected'], false],
+          '#fff',
+          '#f01b48',
+        ],
+        'circle-stroke-color': [
+          'case',
+          ['boolean', ['feature-state', 'selected'], false],
+          '#f01b48',
+          '#fff',
+        ],
+        'circle-stroke-width': [
+          'case',
+          ['boolean', ['feature-state', 'selected'], false],
+          5,
+          1,
+        ],
+        'circle-opacity': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          10,
+          1,
+          13.9,
+          1,
+          14,
+          0.5,
+        ],
+        'circle-stroke-opacity': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          10,
+          ['case', ['boolean', ['feature-state', 'selected'], false], 1, 0],
+          13.5,
+          1,
+          14,
+          0.5,
+        ],
+      },
+    });
 
     map.addLayer({
       id: 'stops-icon',
@@ -2742,7 +2740,9 @@ const App = () => {
                     })}{' '}
                     ·{' '}
                     <a
-                      href={`#${route.cityPrefix}/services/${stopsData[route.value].services
+                      href={`#${route.cityPrefix}/services/${stopsData[
+                        route.value
+                      ].services
                         .sort(sortServices)
                         .join('~')}`}
                     >
@@ -2829,9 +2829,10 @@ const App = () => {
                               newServices.sort(sortServices);
                               setTimeout(() => {
                                 if (newServices.length) {
-                                  navigateTo(`/services/${newServices.join(
-                                    '~',
-                                  )}`, route);
+                                  navigateTo(
+                                    `/services/${newServices.join('~')}`,
+                                    route,
+                                  );
                                 } else {
                                   navigateTo('/', route);
                                 }
@@ -2877,7 +2878,11 @@ const App = () => {
       >
         {stopPopoverData && (
           <>
-            <a href={`#${route.cityPrefix}/`} onClick={hideStopPopover} class="popover-close">
+            <a
+              href={`#${route.cityPrefix}/`}
+              onClick={hideStopPopover}
+              class="popover-close"
+            >
               &times;
             </a>
             <header>
@@ -2942,7 +2947,11 @@ const App = () => {
         class={`popover ${showServicePopover ? 'expand' : ''}`}
         key={``}
       >
-        <a href={`#${route.cityPrefix}/`} onClick={navBackToStop} class="popover-close">
+        <a
+          href={`#${route.cityPrefix}/`}
+          onClick={navBackToStop}
+          class="popover-close"
+        >
           &times;
         </a>
         {servicesData && routeServices.length && (
@@ -2995,7 +3004,11 @@ const App = () => {
         class={`popover ${showBetweenPopover ? 'expand' : ''}`}
       >
         {showBetweenPopover && [
-          <a href={`#${route.cityPrefix}/`} onClick={resetStartEndStops} class="popover-close">
+          <a
+            href={`#${route.cityPrefix}/`}
+            onClick={resetStartEndStops}
+            class="popover-close"
+          >
             &times;
           </a>,
           <header>
@@ -3084,7 +3097,11 @@ const App = () => {
         class={`popover ${showArrivalsPopover ? 'expand' : ''}`}
       >
         {showArrivalsPopover && [
-          <a href={`#${route.cityPrefix}/`} onClick={closeBusArrival} class="popover-close">
+          <a
+            href={`#${route.cityPrefix}/`}
+            onClick={closeBusArrival}
+            class="popover-close"
+          >
             &times;
           </a>,
           <a
