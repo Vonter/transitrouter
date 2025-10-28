@@ -65,6 +65,18 @@ const CITY_CONFIGS = {
       }
     }
   },
+  pune: {
+    city: {
+      name: 'Pune',
+      code: 'pune',
+      bounds: {
+        lowerLat: 18.35,
+        upperLat: 18.75,
+        lowerLong: 73.65,
+        upperLong: 74.05
+      }
+    }
+  },
   railways: {
     city: {
       name: 'Railways',
