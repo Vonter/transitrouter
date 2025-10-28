@@ -1546,11 +1546,13 @@ const App = () => {
         'text-optional': true,
       },
       paint: {
-        'text-color': ['to-color', ['get', 'station_colors']],
+        'text-color': [
+          'to-color', ['get', 'station_colors']
+        ],
         'text-halo-color': [
           'case',
-          ['==', ['get', 'station_colors'], 'yellow'],
-          '#555',
+          ['==', ['get', 'station_colors'], 'yellow'],  '#555',
+          ['==', ['get', 'station_colors'], 'aqua'],  '#666',
           '#fff',
         ],
         'text-halo-width': 0.8
