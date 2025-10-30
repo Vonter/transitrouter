@@ -1635,10 +1635,10 @@ const App = () => {
         'text-halo-color': [
           'case',
           ['==', ['get', 'station_colors'], 'yellow'],  '#555',
-          ['==', ['get', 'station_colors'], 'orange'],  '#aaa',
+          ['==', ['get', 'station_colors'], 'orange'],  '#999',
           ['==', ['get', 'station_colors'], 'aqua'],  '#666',
           ['==', ['get', 'station_colors'], 'violet'],  '#aaa',
-          ['==', ['get', 'station_colors'], 'pink'],  '#bbb',
+          ['==', ['get', 'station_colors'], 'pink'],  '#888',
           '#fff',
         ],
         'text-halo-width': 0.8
