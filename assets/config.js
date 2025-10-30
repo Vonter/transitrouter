@@ -3,6 +3,9 @@ import getRoute from './utils/getRoute';
 // Constants
 export const DEFAULT_CITY = 'blr';
 
+// Available cities for dropdown
+export const AVAILABLE_CITIES = ['blr', 'chennai', 'delhi', 'goa', 'kochi', 'pune', 'railways'];
+
 // City configs
 const CITY_CONFIGS = {
   blr: {

@@ -6,6 +6,8 @@ import {
   getCityBounds,
   DEFAULT_CITY,
   isCitySupported,
+  AVAILABLE_CITIES,
+  getConfigForCity,
 } from './config';
 import { h, render, Fragment } from 'preact';
 import { useState, useRef, useEffect, useMemo } from 'preact/hooks';
@@ -59,6 +61,89 @@ const supportsTouch =
 const ruler = new CheapRuler(1.3);
 
 const $logo = document.getElementById('logo');
+
+// City dropdown functionality
+let cityDropdownVisible = false;
+const createCityDropdown = () => {
+  const dropdown = document.createElement('div');
+  dropdown.id = 'city-dropdown';
+  dropdown.style.cssText = `
+    position: fixed;
+    top: 72px;
+    left: 12px;
+    background: white;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    min-width: 180px;
+    z-index: 1000;
+    display: none;
+    overflow: hidden;
+  `;
+
+  AVAILABLE_CITIES.forEach(cityCode => {
+    const cityConfig = getConfigForCity(cityCode);
+    const option = document.createElement('div');
+    option.textContent = cityConfig.city.name;
+    option.style.cssText = `
+      padding: 12px 16px;
+      cursor: pointer;
+      transition: background 0.2s;
+      border-bottom: 1px solid #f0f0f0;
+    `;
+    option.onmouseenter = () => option.style.background = '#f7f7f7';
+    option.onmouseleave = () => option.style.background = 'white';
+    option.onclick = (e) => {
+      e.stopPropagation();
+      hideDropdown();
+      // Force a full page reload to switch cities
+      window.location.hash = `/${cityCode}/`;
+      window.location.reload();
+    };
+    dropdown.appendChild(option);
+  });
+
+  // Remove border from last option
+  const lastOption = dropdown.lastChild;
+  if (lastOption) {
+    lastOption.style.borderBottom = 'none';
+  }
+
+  return dropdown;
+};
+
+const dropdown = createCityDropdown();
+document.body.appendChild(dropdown);
+
+const showDropdown = () => {
+  dropdown.style.display = 'block';
+  cityDropdownVisible = true;
+};
+
+const hideDropdown = () => {
+  dropdown.style.display = 'none';
+  cityDropdownVisible = false;
+};
+
+const toggleDropdown = () => {
+  if (cityDropdownVisible) {
+    hideDropdown();
+  } else {
+    showDropdown();
+  }
+};
+
+$logo.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleDropdown();
+});
+
+// Click outside to close
+document.addEventListener('click', (e) => {
+  if (cityDropdownVisible && !dropdown.contains(e.target) && !$logo.contains(e.target)) {
+    hideDropdown();
+  }
+});
 
 let rafST;
 const rafScrollTop = () => {
@@ -1554,10 +1639,16 @@ const App = () => {
         'text-color': ['to-color', ['get', 'station_colors']],
         'text-halo-color': [
           'case',
-          ['==', ['get', 'station_colors'], 'yellow'],
+          ['==', ['get', 'station_colors'], 'yellow'],  
           '#555',
-          ['==', ['get', 'station_colors'], 'aqua'],
+          ['==', ['get', 'station_colors'], 'aqua'],  
           '#666',
+          ['==', ['get', 'station_colors'], 'pink'],  
+          '#888',
+          ['==', ['get', 'station_colors'], 'orange'],  
+          '#999',
+          ['==', ['get', 'station_colors'], 'violet'],  
+          '#aaa',
           '#fff',
         ],
         'text-halo-width': 0.8,
