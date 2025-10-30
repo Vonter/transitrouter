@@ -16,9 +16,9 @@ const CITY_CONFIGS = {
         lowerLat: 12.8,
         upperLat: 13.15,
         lowerLong: 77.4,
-        upperLong: 77.75
-      }
-    }
+        upperLong: 77.75,
+      },
+    },
   },
   goa: {
     city: {
@@ -28,9 +28,9 @@ const CITY_CONFIGS = {
         lowerLat: 15.1,
         upperLat: 15.9,
         lowerLong: 73.75,
-        upperLong: 74.15
-      }
-    }
+        upperLong: 74.15,
+      },
+    },
   },
   kochi: {
     city: {
@@ -40,9 +40,9 @@ const CITY_CONFIGS = {
         lowerLat: 9.8,
         upperLat: 10.2,
         lowerLong: 76.25,
-        upperLong: 76.55
-      }
-    }
+        upperLong: 76.55,
+      },
+    },
   },
   chennai: {
     city: {
@@ -52,9 +52,9 @@ const CITY_CONFIGS = {
         lowerLat: 12.85,
         upperLat: 13.35,
         lowerLong: 80.0,
-        upperLong: 80.4
-      }
-    }
+        upperLong: 80.4,
+      },
+    },
   },
   delhi: {
     city: {
@@ -64,9 +64,9 @@ const CITY_CONFIGS = {
         lowerLat: 28.35,
         upperLat: 28.95,
         lowerLong: 76.95,
-        upperLong: 77.55
-      }
-    }
+        upperLong: 77.55,
+      },
+    },
   },
   pune: {
     city: {
@@ -76,9 +76,9 @@ const CITY_CONFIGS = {
         lowerLat: 18.35,
         upperLat: 18.75,
         lowerLong: 73.65,
-        upperLong: 74.05
-      }
-    }
+        upperLong: 74.05,
+      },
+    },
   },
   railways: {
     city: {
@@ -88,10 +88,10 @@ const CITY_CONFIGS = {
         lowerLat: -5,
         upperLat: 45,
         lowerLong: 70,
-        upperLong: 100
-      }
-    }
-  }
+        upperLong: 100,
+      },
+    },
+  },
 };
 
 export const getCurrentCity = () => {
@@ -122,7 +122,7 @@ export const getCityBounds = () => {
     console.error('Invalid city config:', config);
     return [0, 0, 0, 0]; // Safe fallback
   }
-  
+
   const { lowerLat, upperLat, lowerLong, upperLong } = config.city.bounds;
   return [lowerLong, lowerLat, upperLong, upperLat];
 };
