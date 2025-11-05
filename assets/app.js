@@ -1481,7 +1481,7 @@ const App = () => {
       const routes = servicesData[number];
       servicesDataArr.push({
         number,
-        name: number, // Use route number as name since we're not storing route_long_name
+        name: routes.name
       });
 
       // routes is now an object with destinations as keys, values are arrays of route variations
