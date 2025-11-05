@@ -5,9 +5,11 @@
   "author": "Vonter",
   "license": "MIT",
   "scripts": {
-    "start": "parcel serve index.html bus-arrival/index.html bus-first-last/index.html bus-diagram/index.html visualization/index.html -p 8888",
+    "gtfs": "python data/process.py",
+    "prebuild": "cpy data/* dist && cpy visualization/data/* dist && rm -Rf dist/data/*/*.zip dist/data/*/schedule",
     "build": "parcel build index.html bus-arrival/index.html bus-first-last/index.html bus-diagram/index.html visualization/index.html --no-cache --no-scope-hoist",
-    "postbuild": "cpy favicon.ico dist && cpy well-known/* dist/.well-known && cpy functions/* dist && cpy data/* dist && cpy visualization/data/* dist && node tasks/generateHeaders && rm -Rf dist/data/*/*.zip dist/data/*/schedule",
+    "postbuild": "cpy favicon.ico dist && cpy well-known/* dist/.well-known && cpy functions/* dist && node tasks/generateHeaders",
+    "start": "parcel serve index.html bus-arrival/index.html bus-first-last/index.html bus-diagram/index.html visualization/index.html -p 8888",
     "prod": "npx serve dist/",
     "test:e2e": "playwright test"
   },
