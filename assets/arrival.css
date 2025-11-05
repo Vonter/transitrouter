@@ -44,68 +44,13 @@ main {
 
 #bus-stop-map {
   position: relative;
-  padding-top: 50%;
-}
-
-#bus-stop-map img {
   width: 100%;
-  height: auto;
-  vertical-align: top;
-  position: absolute;
-  left: 0;
-  top: 0;
+  height: 200px;
 }
 
-#bus-stop-map:before {
-  opacity: 0;
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 30px;
-  height: 15px;
-  background-image: radial-gradient(rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0) 70%);
-  z-index: 1;
-  transform: translate(-50%, -50%) scale(0.5);
-  animation: boop 0.3s 0.5s ease-in-out both;
-}
-
-@keyframes boop {
-  80% {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1.1);
-  }
-  100% {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
-  }
-}
-
-#bus-stop-map:after {
-  opacity: 0;
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -150%) scale(0.5);
-  transform-origin: top center;
-  width: 30px;
-  height: 40px;
-  background: transparent url(../assets/images/stop-active.svg) no-repeat bottom;
-  z-index: 2;
-  background-size: contain;
-  animation: appear 0.3s 0.5s ease-in-out both;
-}
-
-@keyframes appear {
-  80% {
-    opacity: 1;
-    transform: translate(-50%, -100%) scale(1.1);
-  }
-  100% {
-    opacity: 1;
-    transform: translate(-50%, -100%) scale(1);
-  }
+#bus-stop-map .maplibregl-canvas {
+  width: 100%;
+  height: 100%;
 }
 
 h1 {
@@ -286,6 +231,10 @@ footer {
   border: 2px solid #fff;
   background-color: limegreen;
 }
+.stop-tag.static:after {
+  border: 2px solid #fff;
+  background-color: #f59e0b;
+}
 .stop-tag.error:after {
   border: 2px solid #fff;
   background-color: orangered;
@@ -306,6 +255,9 @@ footer {
 }
 .stop-tag.online:after {
   animation: blink 3s ease-in-out infinite alternate both;
+}
+.stop-tag.static:after {
+  animation: blink 2s ease-in-out infinite alternate both;
 }
 
 .load {

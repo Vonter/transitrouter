@@ -1,98 +1,14 @@
 import getRoute from './utils/getRoute';
+import {
+  DEFAULT_CITY as SHARED_DEFAULT_CITY,
+  AVAILABLE_CITIES as SHARED_AVAILABLE_CITIES,
+  CITY_CONFIGS,
+  getConfigForCity as sharedGetConfigForCity,
+} from './city-config';
 
-// Constants
-export const DEFAULT_CITY = 'blr';
-
-// Available cities for dropdown
-export const AVAILABLE_CITIES = ['blr', 'chennai', 'delhi', 'goa', 'kochi', 'pune', 'railways'];
-
-// City configs
-const CITY_CONFIGS = {
-  blr: {
-    city: {
-      name: 'Bengaluru',
-      code: 'blr',
-      bounds: {
-        lowerLat: 12.8,
-        upperLat: 13.15,
-        lowerLong: 77.4,
-        upperLong: 77.75,
-      },
-    },
-  },
-  goa: {
-    city: {
-      name: 'Goa',
-      code: 'goa',
-      bounds: {
-        lowerLat: 15.1,
-        upperLat: 15.9,
-        lowerLong: 73.75,
-        upperLong: 74.15,
-      },
-    },
-  },
-  kochi: {
-    city: {
-      name: 'Kochi',
-      code: 'kochi',
-      bounds: {
-        lowerLat: 9.8,
-        upperLat: 10.2,
-        lowerLong: 76.25,
-        upperLong: 76.55,
-      },
-    },
-  },
-  chennai: {
-    city: {
-      name: 'Chennai',
-      code: 'chennai',
-      bounds: {
-        lowerLat: 12.85,
-        upperLat: 13.35,
-        lowerLong: 80.0,
-        upperLong: 80.4,
-      },
-    },
-  },
-  delhi: {
-    city: {
-      name: 'Delhi',
-      code: 'delhi',
-      bounds: {
-        lowerLat: 28.35,
-        upperLat: 28.95,
-        lowerLong: 76.95,
-        upperLong: 77.55,
-      },
-    },
-  },
-  pune: {
-    city: {
-      name: 'Pune',
-      code: 'pune',
-      bounds: {
-        lowerLat: 18.35,
-        upperLat: 18.75,
-        lowerLong: 73.65,
-        upperLong: 74.05,
-      },
-    },
-  },
-  railways: {
-    city: {
-      name: 'Railways',
-      code: 'railways',
-      bounds: {
-        lowerLat: -5,
-        upperLat: 45,
-        lowerLong: 70,
-        upperLong: 100,
-      },
-    },
-  },
-};
+export const DEFAULT_CITY = SHARED_DEFAULT_CITY;
+export const AVAILABLE_CITIES = SHARED_AVAILABLE_CITIES;
+export const getConfigForCity = sharedGetConfigForCity;
 
 export const getCurrentCity = () => {
   try {
@@ -105,15 +21,6 @@ export const getCurrentCity = () => {
 
 export const isCitySupported = (cityCode) => {
   return !!CITY_CONFIGS[cityCode];
-};
-
-export const getConfigForCity = (cityCode) => {
-  const config = CITY_CONFIGS[cityCode] || CITY_CONFIGS[DEFAULT_CITY];
-  if (!config) {
-    console.error(`No config found for city ${cityCode}`);
-    return null;
-  }
-  return config;
 };
 
 export const getCityBounds = () => {

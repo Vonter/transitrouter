@@ -30,6 +30,10 @@ const headers = [
     files: [/^firstlast\..+js$/, /^firstlast\..+css$/],
   },
   {
+    path: '/bus-diagram/',
+    files: [/^diagram\..+js$/, /^diagram\..+css$/],
+  },
+  {
     path: '/visualization/',
     files: [/^visualization\..+js$/],
   },

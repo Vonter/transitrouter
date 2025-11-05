@@ -25,6 +25,8 @@ import getRoute from './utils/getRoute';
 import getDistance from './utils/getDistance';
 import getWalkingMinutes from './utils/getWalkingMinutes';
 import usePrevious from './utils/usePrevious';
+import { createVehicleTracker } from './utils/fetchVehicles';
+import { setRafInterval, clearRafInterval } from './utils/rafInterval';
 
 import BusServicesArrival from './components/BusServicesArrival';
 import GeolocateControl from './components/GeolocateControl';
@@ -37,6 +39,7 @@ import stopEndImagePath from './images/stop-end.png';
 import mrtStationImagePath from './images/mrt-station.png';
 import lrtStationImagePath from './images/lrt-station.png';
 import openNewWindowImagePath from './images/open-new-window.svg';
+import openNewWindowBlueImagePath from './images/open-new-window-blue.svg';
 import passingRoutesBlueImagePath from './images/passing-routes-blue.svg';
 import iconSVGPath from '../icons/icon.svg';
 import busTinyImagePath from './images/bus-tiny.png';
@@ -81,7 +84,7 @@ const createCityDropdown = () => {
     overflow: hidden;
   `;
 
-  AVAILABLE_CITIES.forEach(cityCode => {
+  AVAILABLE_CITIES.forEach((cityCode) => {
     const cityConfig = getConfigForCity(cityCode);
     const option = document.createElement('div');
     option.textContent = cityConfig.city.name;
@@ -91,8 +94,8 @@ const createCityDropdown = () => {
       transition: background 0.2s;
       border-bottom: 1px solid #f0f0f0;
     `;
-    option.onmouseenter = () => option.style.background = '#f7f7f7';
-    option.onmouseleave = () => option.style.background = 'white';
+    option.onmouseenter = () => (option.style.background = '#f7f7f7');
+    option.onmouseleave = () => (option.style.background = 'white');
     option.onclick = (e) => {
       e.stopPropagation();
       hideDropdown();
@@ -140,7 +143,11 @@ $logo.addEventListener('click', (e) => {
 
 // Click outside to close
 document.addEventListener('click', (e) => {
-  if (cityDropdownVisible && !dropdown.contains(e.target) && !$logo.contains(e.target)) {
+  if (
+    cityDropdownVisible &&
+    !dropdown.contains(e.target) &&
+    !$logo.contains(e.target)
+  ) {
     hideDropdown();
   }
 });
@@ -223,6 +230,7 @@ const App = () => {
   const [showArrivalsPopover, setShowArrivalsPopover] = useState(false);
   const [intersectStops, setIntersectStops] = useState(0);
   const [routeServices, setRouteServices] = useState([]);
+  const [routeVehicles, setRouteVehicles] = useState([]);
 
   const [showBetweenPopover, setShowBetweenPopover] = useState(false);
   const [betweenStartStop, setBetweenStartStop] = useState(null);
@@ -236,6 +244,7 @@ const App = () => {
   const floatPill = useRef(null);
   const betweenPopover = useRef(null);
   const servicePopover = useRef(null);
+  const vehicleTracker = useRef(null);
 
   let previewRAF = useRef(null).current;
 
@@ -313,7 +322,8 @@ const App = () => {
   };
 
   const _showStopPopover = (number) => {
-    const { services, coordinates, name } = stopsData[number];
+    const stopData = stopsData[number];
+    const { services, coordinates, name } = stopData;
 
     const popoverHeight = stopPopover.current?.offsetHeight;
     const offset = BREAKPOINT() ? [0, 0] : [0, -popoverHeight / 2];
@@ -371,7 +381,7 @@ const App = () => {
     setShrinkSearch(true);
     prevStopNumber.current = number;
     setShowStopPopover(true);
-    setStopPopoverData({ number, name, services });
+    setStopPopoverData(stopData);
 
     requestAnimationFrame(() => {
       if (popoverHeight === stopPopover.current?.offsetHeight) return;
@@ -783,7 +793,7 @@ const App = () => {
     if (!/^https?/.test(url)) {
       const { city } = route;
       const cityPrefix = city ? `/${city}` : '';
-      url = `https://transitrouter.pages.dev/#${cityPrefix}${url}`;
+      url = `https://transitrouter.vonter.in/#${cityPrefix}${url}`;
     }
     document.querySelector('meta[property="og:url"]').content = url;
     document.querySelector('meta[name="description"]').content =
@@ -800,6 +810,10 @@ const App = () => {
     setShowStopPopover(false);
     setShowServicePopover(false);
     setShowBetweenPopover(false);
+
+    // Stop vehicle tracking when changing routes
+    vehicleTracker.current?.stop();
+
     [
       'stops-highlight',
       'routes',
@@ -837,7 +851,24 @@ const App = () => {
 
         if (services.length === 1) {
           const service = services[0];
-          const { name, routes } = servicesData[service];
+          const serviceData = servicesData[service];
+          const { name } = serviceData;
+
+          // Extract routes from all destinations
+          const routes = [];
+          Object.keys(serviceData).forEach((key) => {
+            if (key !== 'name') {
+              // Each destination has an array of route variations
+              const destinationRoutes = serviceData[key];
+              if (
+                Array.isArray(destinationRoutes) &&
+                destinationRoutes.length > 0
+              ) {
+                routes.push(...destinationRoutes);
+              }
+            }
+          });
+
           setHead({
             title: [
               'service.title',
@@ -852,71 +883,76 @@ const App = () => {
           setShowServicePopover(true);
 
           // Show stops of the selected service
-          const endStops = [routes[0][0], routes[0][routes[0].length - 1]];
-          if (routes[1])
-            endStops.push(routes[1][0], routes[1][routes[1].length - 1]);
-          let routeStops = [...routes[0], ...(routes[1] || [])].filter(
-            (el, pos, arr) => arr.indexOf(el) == pos,
-          ); // Merge and unique
+          if (routes.length > 0 && routes[0] && routes[0].length > 0) {
+            const endStops = [routes[0][0], routes[0][routes[0].length - 1]];
+            if (routes[1] && routes[1].length > 0)
+              endStops.push(routes[1][0], routes[1][routes[1].length - 1]);
+            let routeStops = [...routes[0], ...(routes[1] || [])].filter(
+              (el, pos, arr) => arr.indexOf(el) == pos,
+            ); // Merge and unique
 
-          // Fit map to route bounds
-          const bounds = new maplibregl.LngLatBounds();
-          routeStops.forEach((stop) => {
-            const { coordinates } = stopsData[stop];
-            bounds.extend(coordinates);
-          });
-          requestAnimationFrame(() => {
-            map.fitBounds(bounds, {
-              padding: BREAKPOINT()
-                ? {
-                    top: 80,
-                    right: servicePopover.current.offsetWidth + 80,
-                    bottom: 80,
-                    left: 80,
-                  }
-                : {
-                    top: 80,
-                    right: 80,
-                    bottom: servicePopover.current.offsetHeight + 20,
-                    left: 80,
-                  },
+            // Fit map to route bounds
+            const bounds = new maplibregl.LngLatBounds();
+            routeStops.forEach((stop) => {
+              const { coordinates } = stopsData[stop];
+              bounds.extend(coordinates);
             });
-          });
+            requestAnimationFrame(() => {
+              map.fitBounds(bounds, {
+                padding: BREAKPOINT()
+                  ? {
+                      top: 80,
+                      right: servicePopover.current.offsetWidth + 80,
+                      bottom: 80,
+                      left: 80,
+                    }
+                  : {
+                      top: 80,
+                      right: 80,
+                      bottom: servicePopover.current.offsetHeight + 20,
+                      left: 80,
+                    },
+              });
+            });
 
-          map.getSource('stops-highlight').setData({
-            type: 'FeatureCollection',
-            features: routeStops.map((stop, i) => {
-              const { name, left } = stopsData[stop];
-              return {
-                type: 'Feature',
-                id: encode(stop),
-                properties: {
-                  name,
-                  number: stop,
-                  type: endStops.includes(stop) ? 'end' : null,
-                  left,
-                },
-                geometry: {
-                  type: 'Point',
-                  coordinates: stopsData[stop].coordinates,
-                },
-              };
-            }),
-          });
-
-          // Show routes
-          requestAnimationFrame(() => {
-            const routes = routesData[service];
-            const geometries = routes.map((route) => toGeoJSON(route));
-            map.getSource('routes').setData({
+            map.getSource('stops-highlight').setData({
               type: 'FeatureCollection',
-              features: geometries.map((geometry) => ({
-                type: 'Feature',
-                properties: {},
-                geometry,
-              })),
+              features: routeStops.map((stop, i) => {
+                const { name, left } = stopsData[stop];
+                return {
+                  type: 'Feature',
+                  id: encode(stop),
+                  properties: {
+                    name,
+                    number: stop,
+                    type: endStops.includes(stop) ? 'end' : null,
+                    left,
+                  },
+                  geometry: {
+                    type: 'Point',
+                    coordinates: stopsData[stop].coordinates,
+                  },
+                };
+              }),
             });
-          });
+
+            // Show routes
+            requestAnimationFrame(() => {
+              const routes = routesData[service];
+              const geometries = routes.map((route) => toGeoJSON(route));
+              map.getSource('routes').setData({
+                type: 'FeatureCollection',
+                features: geometries.map((geometry) => ({
+                  type: 'Feature',
+                  properties: {},
+                  geometry,
+                })),
+              });
+            });
+
+            // Start vehicle tracking for this route (will fetch route ID dynamically)
+            vehicleTracker.current?.start(service);
+          }
         } else {
           const serviceNumbersNames = services
             .map((s) => {
@@ -933,25 +969,43 @@ const App = () => {
           let endStops = [];
           let serviceGeometries = [];
           services.forEach((service) => {
-            const { routes } = servicesData[service];
-            endStops.push(routes[0][0], routes[0][routes[0].length - 1]);
-            if (routes[1]) {
-              endStops.push(routes[1][0], routes[1][routes[1].length - 1]);
+            const serviceData = servicesData[service];
+            // Extract routes from all destinations
+            const routes = [];
+            Object.keys(serviceData).forEach((key) => {
+              if (key !== 'name') {
+                const destinationRoutes = serviceData[key];
+                if (
+                  Array.isArray(destinationRoutes) &&
+                  destinationRoutes.length > 0
+                ) {
+                  routes.push(...destinationRoutes);
+                }
+              }
+            });
+
+            if (routes.length > 0) {
+              endStops.push(routes[0][0], routes[0][routes[0].length - 1]);
+              if (routes[1]) {
+                endStops.push(routes[1][0], routes[1][routes[1].length - 1]);
+              }
+              const allRoutes = [...routes[0], ...(routes[1] || [])].filter(
+                (el, pos, arr) => {
+                  return arr.indexOf(el) === pos;
+                },
+              );
+              routeStops = routeStops.concat(allRoutes);
             }
-            const allRoutes = [...routes[0], ...(routes[1] || [])].filter(
-              (el, pos, arr) => {
-                return arr.indexOf(el) === pos;
-              },
-            );
-            routeStops = routeStops.concat(allRoutes);
 
             const routeGeometries = routesData[service];
-            serviceGeometries = serviceGeometries.concat(
-              routeGeometries.map((r) => ({
-                service,
-                geometry: toGeoJSON(r),
-              })),
-            );
+            if (routeGeometries) {
+              serviceGeometries = serviceGeometries.concat(
+                routeGeometries.map((r) => ({
+                  service,
+                  geometry: toGeoJSON(r),
+                })),
+              );
+            }
           });
 
           // Merge and unique stops
@@ -1068,13 +1122,22 @@ const App = () => {
           const otherStops = new Set();
           routes.forEach((route) => {
             const routeIndex = route.lastIndexOf('-');
-            const service = route.substring(0, routeIndex);
-            const index = route.substring(routeIndex + 1, route.length);
-            const stops = servicesData[service].routes[index];
-            stops.forEach((s) => stop !== s && otherStops.add(s));
+            const routeService = route.substring(0, routeIndex);
+            const serviceIndex = routeService.lastIndexOf('-', routeIndex + 1);
+            const service = routeService.substring(0, serviceIndex);
+            const directionIndex = route.lastIndexOf('-');
+            const direction = route.substring(serviceIndex + 1, directionIndex);
+            const stops = servicesData[service][direction];
+            stops.flat().forEach((stopId) => {
+              if (stopId !== stop) {
+                otherStops.add(stopId);
+              }
+            });
           });
-          [...otherStops].map((s) => {
-            allStopsCoords.push(stopsData[s].coordinates);
+          [...otherStops].forEach((stopId) => {
+            if (stopsData[stopId] && stopsData[stopId].coordinates) {
+              allStopsCoords.push(stopsData[stopId].coordinates);
+            }
           });
 
           // Fit map to route bounds
@@ -1129,17 +1192,35 @@ const App = () => {
 
           // Show all routes
           requestAnimationFrame(() => {
-            const serviceGeometries = routes.map((route) => {
-              const routeIndex = route.lastIndexOf('-');
-              const service = route.substring(0, routeIndex);
-              const index = route.substring(routeIndex + 1, route.length);
-              const line = routesData[service][index];
-              const geometry = toGeoJSON(line);
-              return {
-                service,
-                geometry,
-              };
-            });
+            const serviceGeometries = routes
+              .map((route) => {
+                const routeIndex = route.lastIndexOf('-');
+                const routeService = route.substring(0, routeIndex);
+                const serviceIndex = routeService.lastIndexOf(
+                  '-',
+                  routeIndex + 1,
+                );
+                const service = routeService.substring(0, serviceIndex);
+                const directionIndex = route.lastIndexOf('-');
+                const direction = route.substring(
+                  directionIndex + 1,
+                  route.length,
+                );
+                const line =
+                  routesData[service] && routesData[service][direction];
+                if (!line) {
+                  console.warn(
+                    `Route data not found for service: ${service}, direction: ${direction}`,
+                  );
+                  return null;
+                }
+                const geometry = toGeoJSON(line);
+                return {
+                  service,
+                  geometry,
+                };
+              })
+              .filter(Boolean);
 
             map.getSource('routes-path').setData({
               type: 'FeatureCollection',
@@ -1194,23 +1275,45 @@ const App = () => {
         function findRoutesBetween(startStop, endStop) {
           const results = [];
 
-          const endServicesStops = endStop.routes.map((route) => {
-            const routeIndex = route.lastIndexOf('-');
-            const service = route.substring(0, routeIndex);
-            const index = route.substring(routeIndex + 1, route.length);
-            let serviceStops = servicesData[service].routes[index];
-            serviceStops = serviceStops.slice(
-              0,
-              serviceStops.indexOf(endStop.number) + 1,
-            );
-            return { service, stops: serviceStops, route };
-          });
+          const endServicesStops = endStop.routes
+            .map((route) => {
+              // Parse route key format: serviceNumber-destination-variantIdx
+              const lastDashIndex = route.lastIndexOf('-');
+              const variantIdx = parseInt(route.substring(lastDashIndex + 1));
+              const serviceAndDest = route.substring(0, lastDashIndex);
+              const secondLastDashIndex = serviceAndDest.lastIndexOf('-');
+              const service = serviceAndDest.substring(0, secondLastDashIndex);
+              const destination = serviceAndDest.substring(
+                secondLastDashIndex + 1,
+              );
+
+              let serviceStops =
+                servicesData[service]?.[destination]?.[variantIdx];
+              if (!serviceStops) return null;
+
+              serviceStops = serviceStops.slice(
+                0,
+                serviceStops.indexOf(endStop.number) + 1,
+              );
+              return { service, stops: serviceStops, route };
+            })
+            .filter(Boolean);
 
           startStop.routes.forEach((route) => {
-            const routeIndex = route.lastIndexOf('-');
-            const service = route.substring(0, routeIndex);
-            const index = route.substring(routeIndex + 1, route.length);
-            let serviceStops = servicesData[service].routes[index];
+            // Parse route key format: serviceNumber-destination-variantIdx
+            const lastDashIndex = route.lastIndexOf('-');
+            const variantIdx = parseInt(route.substring(lastDashIndex + 1));
+            const serviceAndDest = route.substring(0, lastDashIndex);
+            const secondLastDashIndex = serviceAndDest.lastIndexOf('-');
+            const service = serviceAndDest.substring(0, secondLastDashIndex);
+            const destination = serviceAndDest.substring(
+              secondLastDashIndex + 1,
+            );
+
+            let serviceStops =
+              servicesData[service]?.[destination]?.[variantIdx];
+            if (!serviceStops) return;
+
             serviceStops = serviceStops.slice(
               serviceStops.indexOf(startStop.number),
             );
@@ -1380,17 +1483,63 @@ const App = () => {
 
     servicesData = await fetchServicesP;
     Object.keys(servicesData).forEach((number) => {
-      const { name, routes } = servicesData[number];
+      const routes = servicesData[number];
       servicesDataArr.push({
         number,
-        name,
+        name: number, // Use route number as name since we're not storing route_long_name
       });
-      routes.forEach((route, i) => {
-        route.forEach((stop) => {
-          if (stopsData[stop] && !stopsData[stop].services.includes(number)) {
-            stopsData[stop].services.push(number);
-            stopsData[stop].routes.push(number + '-' + i);
-          }
+
+      // routes is now an object with destinations as keys, values are arrays of route variations
+      Object.keys(routes).forEach((destination) => {
+        if (destination === 'name') return;
+        const routeVariations = routes[destination];
+        // Process each route variation for this destination
+        routeVariations.forEach((route, variantIdx) => {
+          route.forEach((stop, stopIdx) => {
+            if (stopsData[stop]) {
+              // Add service to services array if not already present
+              if (!stopsData[stop].services.includes(number)) {
+                stopsData[stop].services.push(number);
+              }
+
+              // Store destination-grouped data for this stop
+              if (!stopsData[stop].destinationGroups) {
+                stopsData[stop].destinationGroups = {};
+              }
+              if (!stopsData[stop].destinationGroups[number]) {
+                stopsData[stop].destinationGroups[number] = {};
+              }
+              if (!stopsData[stop].destinationGroups[number][destination]) {
+                stopsData[stop].destinationGroups[number][destination] = {
+                  destination: destination,
+                  routes: [],
+                  stopCount: 0, // Count stops from this stop to destination
+                };
+              }
+
+              // Calculate remaining stops to destination for this route
+              const remainingStops = route.length - stopIdx - 1;
+
+              // Store route info with variant index
+              const routeKey = number + '-' + destination + '-' + variantIdx;
+              if (!stopsData[stop].routes.includes(routeKey)) {
+                stopsData[stop].routes.push(routeKey);
+                stopsData[stop].destinationGroups[number][
+                  destination
+                ].routes.push(route);
+                // Track the maximum stop count (in case of multiple route variations)
+                if (
+                  remainingStops >
+                  stopsData[stop].destinationGroups[number][destination]
+                    .stopCount
+                ) {
+                  stopsData[stop].destinationGroups[number][
+                    destination
+                  ].stopCount = remainingStops;
+                }
+              }
+            }
+          });
         });
       });
     });
@@ -1503,7 +1652,6 @@ const App = () => {
     await new Promise((resolve, reject) => {
       map.once('styledata', () => {
         const layers = map.getStyle().layers;
-        console.log(layers);
 
         labelLayerId = layers.find(
           (l) => l.type == 'symbol' && l.layout['text-field'],
@@ -1639,15 +1787,15 @@ const App = () => {
         'text-color': ['to-color', ['get', 'station_colors']],
         'text-halo-color': [
           'case',
-          ['==', ['get', 'station_colors'], 'yellow'],  
+          ['==', ['get', 'station_colors'], 'yellow'],
           '#555',
-          ['==', ['get', 'station_colors'], 'aqua'],  
+          ['==', ['get', 'station_colors'], 'aqua'],
           '#666',
-          ['==', ['get', 'station_colors'], 'pink'],  
+          ['==', ['get', 'station_colors'], 'pink'],
           '#888',
-          ['==', ['get', 'station_colors'], 'orange'],  
+          ['==', ['get', 'station_colors'], 'orange'],
           '#999',
-          ['==', ['get', 'station_colors'], 'violet'],  
+          ['==', ['get', 'station_colors'], 'violet'],
           '#aaa',
           '#fff',
         ],
@@ -2062,17 +2210,17 @@ const App = () => {
           'line-cap': 'round',
         },
         paint: {
-          'line-color': '#f01b48',
+          'line-color': '#1a1a1a',
           'line-gradient': [
             'interpolate',
             ['linear'],
             ['line-progress'],
             0,
-            '#f01b48',
+            '#1a1a1a',
             0.5,
-            '#972FFE',
+            '#666666',
             1,
-            '#f01b48',
+            '#1a1a1a',
           ],
           'line-opacity': [
             'interpolate',
@@ -2198,17 +2346,17 @@ const App = () => {
           'line-cap': 'round',
         },
         paint: {
-          'line-color': '#f01b48',
+          'line-color': '#1a1a1a',
           'line-gradient': [
             'interpolate',
             ['linear'],
             ['line-progress'],
             0,
-            '#f01b48',
+            '#1a1a1a',
             0.5,
-            '#972FFE',
+            '#666666',
             1,
-            '#f01b48',
+            '#1a1a1a',
           ],
           'line-opacity': [
             'case',
@@ -2435,6 +2583,29 @@ const App = () => {
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
         'icon-size': ['step', ['zoom'], 0.3, 14, 0.35, 15, 0.45, 16, 0.55],
+        'text-field': ['get', 'vehicleNumber'],
+        'text-optional': true,
+        'text-size': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          12,
+          8,
+          14,
+          10,
+          16,
+          12,
+        ],
+        'text-font': ['Noto Sans Regular'],
+        'text-variable-anchor': ['left', 'right', 'bottom', 'top'],
+        'text-justify': 'auto',
+        'text-offset': [0.5, 1],
+        'text-padding': 4,
+      },
+      paint: {
+        'text-color': '#000',
+        'text-halo-color': '#fff',
+        'text-halo-width': 2,
       },
     });
 
@@ -2463,10 +2634,10 @@ const App = () => {
             'match',
             ['get', 'type'],
             'start',
-            '#f01b48',
+            '#1a1a1a',
             'end',
-            '#972FFE',
-            '#f01b48',
+            '#666666',
+            '#1a1a1a',
           ],
           'line-opacity': 0.7,
           'line-width': [
@@ -2595,11 +2766,9 @@ const App = () => {
     if (!mapLoaded) return;
     const handleMapClick = (e) => {
       if (e.originalEvent.altKey) {
-        console.log(e.lngLat);
         const layers = map.queryRenderedFeatures(e.point, {
           validate: false,
         });
-        console.log({ layers });
       }
       const { point } = e;
       const features = map.queryRenderedFeatures(point, {
@@ -2698,6 +2867,51 @@ const App = () => {
   document.addEventListener('keyup', () => {
     document.body.classList.remove('alt-mode');
   });
+
+  // Initialize vehicle tracker when map loads
+  useEffect(() => {
+    if (!mapLoaded || !map) return;
+
+    // Create vehicle tracker instance
+    const cityConfig = getConfigForCity(route.city);
+    vehicleTracker.current = createVehicleTracker({
+      cityConfig,
+      map,
+      setRafInterval,
+      clearRafInterval,
+    });
+
+    // Subscribe to vehicle updates
+    const unsubscribe = vehicleTracker.current.subscribe((vehicles) => {
+      setRouteVehicles(vehicles);
+    });
+
+    // Cleanup on unmount
+    return () => {
+      unsubscribe();
+      vehicleTracker.current?.stop();
+    };
+  }, [mapLoaded, route.city]);
+
+  // Auto-start vehicle tracking if a single service route is loaded initially
+  useEffect(() => {
+    if (!vehicleTracker.current || !mapLoaded || !servicesData) return;
+
+    const currentRoute = getRoute();
+
+    // Check if we're on a service page with a single service
+    if (currentRoute.page === 'service' && currentRoute.value) {
+      const services = currentRoute.value
+        .split('~')
+        .filter((s) => servicesData[s]);
+
+      // Only start tracking for single service routes
+      if (services.length === 1) {
+        const service = services[0];
+        vehicleTracker.current.start(service);
+      }
+    }
+  }, [mapLoaded, servicesData]);
 
   const showServicesFloatPill =
     route.page === 'service' && servicesData && routeServices.length > 1;
@@ -2984,10 +3198,23 @@ const App = () => {
             </header>
             <ScrollableContainer class="popover-scroll">
               <h2>
-                {t('glossary.nServices', {
+                {t('glossary.nServices_plural', {
                   count: stopPopoverData.services.length,
                 })}{' '}
                 ∙{' '}
+                <a
+                  href={`/bus-first-last/#${stopPopoverData.number}`}
+                  target="_blank"
+                >
+                  {t('stop.firstLastBus')}{' '}
+                  <img
+                    src={openNewWindowImagePath}
+                    width="12"
+                    height="12"
+                    alt=""
+                    class="new-window"
+                  />
+                </a>
               </h2>
               <BusServicesArrival
                 active={showStopPopover}
@@ -2995,10 +3222,25 @@ const App = () => {
                 showBusesOnMap={route.page !== 'service'}
                 id={stopPopoverData.number}
                 services={stopPopoverData.services}
+                stopData={stopPopoverData}
               />
             </ScrollableContainer>
             <div class="popover-footer">
               <div class="popover-buttons alt-hide">
+                <a
+                  href={`/bus-arrival/#${route.cityPrefix}/${stopPopoverData.number}`}
+                  target="_blank"
+                  onClick={openBusArrival}
+                  class="popover-button primary"
+                >
+                  {t('glossary.busArrivals')}{' '}
+                  <img
+                    src={openNewWindowBlueImagePath}
+                    width="16"
+                    height="16"
+                    alt=""
+                  />
+                </a>
                 {stopPopoverData.services.length > 1 && (
                   <a
                     href={`#${route.cityPrefix}/stops/${stopPopoverData.number}/routes`}
@@ -3045,49 +3287,72 @@ const App = () => {
         >
           &times;
         </a>
-        {servicesData && routeServices.length && (
-          <>
-            <header>
-              <h1>
-                <b class="service-tag">{routeServices[0]}</b>
-                {servicesData[routeServices[0]].name}
-              </h1>
-            </header>
-            <ScrollableContainer
-              class="popover-scroll"
-              scrollToTopKey={`sttk-${routeServices[0]}`}
-            >
-              <h2>
-                {t('glossary.nRoutes', {
-                  count: servicesData[routeServices[0]].routes.length,
-                })}{' '}
-                ∙{' '}
-                {servicesData[routeServices[0]].routes
-                  .map((route) => t('glossary.nStops', { count: route.length }))
-                  .join(' ∙ ')}
-                &nbsp;&nbsp;
-                <button
-                  type="button"
-                  class="plus"
-                  onClick={() => {
-                    setExpandSearch(true);
-                    setExpandedSearchOnce(true);
-                  }}
-                  title={t('multiRoute.addRoute')}
-                />
-              </h2>
-              <StopsList
-                routes={servicesData[routeServices[0]].routes}
-                stopsData={stopsData}
-                onStopClick={zoomToStop}
-                onStopClickAgain={_showStopPopover}
-              />
-              <div class="callout info">
-                <span class="legend-opposite" /> {t('service.oppositeLegend')}
-              </div>
-            </ScrollableContainer>
-          </>
-        )}
+        {servicesData &&
+          routeServices.length &&
+          (() => {
+            const serviceData = servicesData[routeServices[0]];
+            // Extract routes from all destinations
+            const routes = [];
+            Object.keys(serviceData).forEach((key) => {
+              if (key !== 'name') {
+                const destinationRoutes = serviceData[key];
+                if (
+                  Array.isArray(destinationRoutes) &&
+                  destinationRoutes.length > 0
+                ) {
+                  routes.push(...destinationRoutes);
+                }
+              }
+            });
+
+            return (
+              <>
+                <header>
+                  <h1>
+                    <b class="service-tag">{routeServices[0]}</b>
+                    {serviceData.name}
+                  </h1>
+                </header>
+                <ScrollableContainer
+                  class="popover-scroll"
+                  scrollToTopKey={`sttk-${routeServices[0]}`}
+                >
+                  <h2>
+                    {t('glossary.nRoutes', {
+                      count: routes.length,
+                    })}{' '}
+                    ∙{' '}
+                    {routes
+                      .map((route) =>
+                        t('glossary.nStops', { count: route.length }),
+                      )
+                      .join(' ∙ ')}
+                    &nbsp;&nbsp;
+                    <button
+                      type="button"
+                      class="plus"
+                      onClick={() => {
+                        setExpandSearch(true);
+                        setExpandedSearchOnce(true);
+                      }}
+                      title={t('multiRoute.addRoute')}
+                    />
+                  </h2>
+                  <StopsList
+                    routes={routes}
+                    stopsData={stopsData}
+                    vehicles={routeVehicles}
+                    onStopClick={zoomToStop}
+                    onStopClickAgain={_showStopPopover}
+                  />
+                  <div class="callout info">
+                    <span class="legend-opposite" />{' '}
+                    {t('service.oppositeLegend')}
+                  </div>
+                </ScrollableContainer>
+              </>
+            );
+          })()}
       </div>
       <div
         id="between-popover"
@@ -3196,7 +3461,7 @@ const App = () => {
             &times;
           </a>,
           <a
-            href={`#${route.cityPrefix}/bus-arrival/${showArrivalsPopover.number}`}
+            href={`/bus-arrival/#${route.cityPrefix}/${showArrivalsPopover.number}`}
             target="_blank"
             onClick={(e) => {
               openBusArrival(e, true);

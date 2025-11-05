@@ -1,5 +1,11 @@
 import { h, Fragment } from 'preact';
-import { useRef, useState, useEffect, useCallback } from 'preact/hooks';
+import {
+  useRef,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+} from 'preact/hooks';
 import CheapRuler from 'cheap-ruler';
 const ruler = new CheapRuler(1.3);
 import { useTranslation } from 'react-i18next';
@@ -8,6 +14,8 @@ import { encode } from '../utils/specialID';
 import getRoute from '../utils/getRoute';
 import { setRafInterval, clearRafInterval } from '../utils/rafInterval';
 import { timeDisplay, sortServices } from '../utils/bus';
+import { getConfigForCity, getApiUrl } from '../city-config';
+import fetchCache from '../utils/fetchCache';
 
 import ArrivalTimeText from './ArrivalTimeText';
 
@@ -73,6 +81,7 @@ export default function BusServicesArrival({
   map,
   active,
   showBusesOnMap,
+  stopData, // Added to access destination groups
 }) {
   if (!id) return;
   const { t } = useTranslation();
@@ -82,18 +91,32 @@ export default function BusServicesArrival({
   const [liveBusCount, setLiveBusCount] = useState(0);
   const [oneServiceHasMultipleDirections, setOneServiceHasMultipleDirections] =
     useState(false);
+  const [scheduleData, setScheduleData] = useState(null);
   const route = getRoute();
 
   let controller;
   const renderStopsTimeout = useRef();
-  const fetchServices = useCallback(() => {
+  const fetchServices = useCallback(async () => {
     setIsLoading(true);
     controller = new AbortController();
-    fetch(`https://transitrouter.pages.dev/arrival/?id=${id}`, {
-      signal: controller.signal,
-    })
-      .then((res) => res.json())
-      .then((results) => {
+
+    try {
+      // Get city config to find the arrivals API path
+      const cityConfig = getConfigForCity(route.city);
+      const arrivalsApiPath = cityConfig?.liveArrivals?.apiPath;
+      const apiUrl = `${getApiUrl(arrivalsApiPath)}?stationid=${id}`;
+
+      const response = await fetch(apiUrl, {
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch arrivals: ${response.status}`);
+      }
+
+      const results = await response.json();
+
+      if (results) {
         const servicesArrivals = {};
         const { services } = results;
         services.forEach((service) => {
@@ -219,16 +242,36 @@ export default function BusServicesArrival({
             map.loaded() ? 0 : 1000,
           );
         }
-      })
-      .catch(() => {
-        // Silent fail
-      });
+      }
+    } catch (error) {
+      // Silent fail
+      console.error('Error fetching arrivals:', error);
+    } finally {
+      setIsLoading(false);
+    }
   }, [id]);
+
+  // Fetch schedule data to get trip_count for each service
+  useEffect(() => {
+    if (!id) return;
+
+    const cityConfig = getConfigForCity(route.city);
+    const scheduleJSONPath = `https://data.transitrouter.vonter.in/${route.city}/schedule`;
+
+    fetchCache(`${scheduleJSONPath}/${id}.json`, 60 * 60) // Cache for 1 hour
+      .then((data) => {
+        setScheduleData(data);
+      })
+      .catch((error) => {
+        console.error('Failed to fetch schedule data:', error);
+        setScheduleData(null);
+      });
+  }, [id, route.city]);
 
   useEffect(() => {
     let intervalID;
     if (active) {
-      intervalID = setRafInterval(fetchServices, 15 * 1000); // 15 seconds
+      intervalID = setRafInterval(fetchServices, 60 * 1000); // 60 seconds
     }
     return () => {
       clearRafInterval(intervalID);
@@ -240,30 +283,134 @@ export default function BusServicesArrival({
 
   const servicesValue = route.value?.split('~') || [];
 
+  // Group by destination and collect all services going to each destination
+  const groupedByDestination = useMemo(() => {
+    if (!stopData?.destinationGroups) {
+      // Fallback to old format if destinationGroups not available
+      return {
+        hasGroups: false,
+        destinations: [],
+        ungroupedServices: services.sort(sortServices),
+      };
+    }
+
+    // Build a map of service number to trip_count from schedule data
+    const serviceTripCounts = new Map();
+    if (scheduleData?.services) {
+      scheduleData.services.forEach((serviceData) => {
+        serviceTripCounts.set(serviceData.no, serviceData.trip_count || 0);
+      });
+    }
+
+    // Map to collect all services for each destination
+    const destinationMap = new Map();
+
+    services.forEach((service) => {
+      const destinationData = stopData.destinationGroups[service];
+      if (destinationData) {
+        // For each destination this service goes to
+        Object.keys(destinationData).forEach((destId) => {
+          if (!destinationMap.has(destId)) {
+            destinationMap.set(destId, {
+              id: destId,
+              name: window._data?.stopsData?.[destId]?.name || destId,
+              services: [],
+              maxStopCount: 0,
+              totalTripCount: 0,
+            });
+          }
+
+          const dest = destinationMap.get(destId);
+          dest.services.push(service);
+
+          // Track the maximum stop count to this destination
+          const stopCount = destinationData[destId].stopCount || 0;
+          if (stopCount > dest.maxStopCount) {
+            dest.maxStopCount = stopCount;
+          }
+
+          // Add trip_count to total for this destination
+          const tripCount = serviceTripCounts.get(service) || 0;
+          dest.totalTripCount += tripCount;
+        });
+      }
+    });
+
+    // Convert to array and sort by total trip_count (descending)
+    const destinations = Array.from(destinationMap.values()).sort((a, b) => {
+      // Sort by total trip_count (descending)
+      return b.totalTripCount - a.totalTripCount;
+    });
+
+    return {
+      hasGroups: true,
+      destinations,
+      ungroupedServices: [],
+    };
+  }, [services, stopData, scheduleData]);
+
   return (
     <>
-      <p class={`services-list ${isLoading ? 'loading' : ''}`}>
-        {services.sort(sortServices).map((service) => (
-          <>
-            <a
-              href={`#${route.cityPrefix}/services/${service}`}
-              class={`service-tag ${
-                route.page === 'service' && servicesValue.includes(service)
-                  ? 'current'
-                  : ''
-              }`}
-            >
-              {service}
-              {servicesIssues.includes(service) && ' ⚠️'}
-              {servicesArrivals[service] && (
-                <span>
-                  <ArrivalTimeText ms={servicesArrivals[service]} />
-                </span>
-              )}
-            </a>{' '}
-          </>
-        ))}
-      </p>
+      {groupedByDestination.hasGroups ? (
+        <>
+          {groupedByDestination.destinations.map((dest) => (
+            <div key={dest.id} class="service-destination-group">
+              <p class="service-destination-info">
+                <strong>{dest.name}</strong>
+              </p>
+              <p
+                class={`services-list ${isLoading ? 'loading' : ''}`}
+                style={{ marginTop: '4px' }}
+              >
+                {dest.services.sort(sortServices).map((service) => (
+                  <>
+                    <a
+                      href={`#${route.cityPrefix}/services/${service}`}
+                      class={`service-tag ${
+                        route.page === 'service' &&
+                        servicesValue.includes(service)
+                          ? 'current'
+                          : ''
+                      }`}
+                    >
+                      {service}
+                      {servicesIssues.includes(service) && ' ⚠️'}
+                      {servicesArrivals[service] && (
+                        <span>
+                          <ArrivalTimeText ms={servicesArrivals[service]} />
+                        </span>
+                      )}
+                    </a>{' '}
+                  </>
+                ))}
+              </p>
+            </div>
+          ))}
+        </>
+      ) : (
+        <p class={`services-list ${isLoading ? 'loading' : ''}`}>
+          {groupedByDestination.ungroupedServices.map((service) => (
+            <>
+              <a
+                href={`#${route.cityPrefix}/services/${service}`}
+                class={`service-tag ${
+                  route.page === 'service' && servicesValue.includes(service)
+                    ? 'current'
+                    : ''
+                }`}
+              >
+                {service}
+                {servicesIssues.includes(service) && ' ⚠️'}
+                {servicesArrivals[service] && (
+                  <span>
+                    <ArrivalTimeText ms={servicesArrivals[service]} />
+                  </span>
+                )}
+              </a>{' '}
+            </>
+          ))}
+        </p>
+      )}
       {oneServiceHasMultipleDirections && (
         <div class="callout warning iconic">
           {t('stop.multipleDirectionsWarning')}

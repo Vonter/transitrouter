@@ -1,5 +1,6 @@
 import './i18n';
 
+import { getCurrentCity } from './config';
 import { h, render, Fragment } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import format from 'date-fns/format';
@@ -9,18 +10,10 @@ import { useTranslation } from 'react-i18next';
 import fetchCache from './utils/fetchCache';
 import { sortServices } from './utils/bus';
 
-const dataPath = '/data/';
-const firstLastJSONPath = dataPath + 'firstlast.min.json';
-const stopsJSONPath = dataPath + 'stops.min.json';
-
-// TODO: add locales when it's supported
-import { zhCN, ms, ta, ja } from 'date-fns/locale';
-const dateLocales = {
-  zh: zhCN,
-  ms,
-  ta,
-  ja,
-};
+const city = getCurrentCity();
+const dataPath = `/data/${city}`;
+const firstLastJSONPath = `${dataPath}/firstlast.min.json`;
+const stopsJSONPath = `${dataPath}/stops.min.json`;
 
 const timeStrToDate = (time) => {
   if (time instanceof Date) return time;
@@ -34,14 +27,14 @@ const timeStrToDate = (time) => {
 
 const timeFormat = (time, language) => {
   const date = timeStrToDate(time);
-  return date ? format(date, 'p', { locale: dateLocales[language] }) : '-';
+  return date ? format(date, 'HH:mm') : '-';
 };
 
 const formatDuration = (duration, language) => {
   const h = duration;
   const hours = Math.floor(h);
   const minutes = Math.round((h - hours) * 60);
-  return _formatDuration({ hours, minutes }, { locale: dateLocales[language] });
+  return _formatDuration({ hours, minutes });
 };
 
 const convertTimeToNumber = (time) => {
@@ -93,6 +86,8 @@ function FirstLastTimes() {
   const [stop, setStop] = useState(null);
   const [stopName, setStopName] = useState(null);
   const [data, setData] = useState([]);
+  const [hasSaturdayTimings, setHasSaturdayTimings] = useState(false);
+  const [hasSundayTimings, setHasSundayTimings] = useState(false);
 
   const [timeLeft, setTimeLeft] = useState(null);
   const [timeDate, setTimeDate] = useState(null);
@@ -121,23 +116,117 @@ function FirstLastTimes() {
 
         setStop(stop);
         setStopName(stopsData[stop][2]);
-        setData(
-          data
-            .map((d) => {
-              const serviceTimings = d.split(/\s+/);
-              // If '=', means it's same timings as weekdays
-              if (serviceTimings[3] === '=')
-                serviceTimings[3] = serviceTimings[1];
-              if (serviceTimings[4] === '=')
-                serviceTimings[4] = serviceTimings[2];
-              if (serviceTimings[5] === '=')
-                serviceTimings[5] = serviceTimings[1];
-              if (serviceTimings[6] === '=')
-                serviceTimings[6] = serviceTimings[2];
-              return serviceTimings;
-            })
-            .sort((a, b) => sortServices(a[0], b[0])),
+        const processedData = data
+          .map((d) => {
+            const parts = d.split(/\s+/);
+            if (parts.length < 7) {
+              return parts;
+            }
+            const timings = parts.slice(-6); // Last 6 elements are timings
+            const routeName = parts.slice(0, -6).join(' '); // Everything else is route name
+            return [routeName, ...timings];
+          })
+          .sort((a, b) => sortServices(a[0], b[0]));
+
+        // Combine duplicate services: take earliest first bus and latest last bus
+        const serviceMap = new Map();
+        processedData.forEach((serviceTimings) => {
+          const [service, wd1, wd2, sat1, sat2, sun1, sun2] = serviceTimings;
+
+          if (!serviceMap.has(service)) {
+            serviceMap.set(service, [
+              service,
+              wd1,
+              wd2,
+              sat1,
+              sat2,
+              sun1,
+              sun2,
+            ]);
+          } else {
+            const existing = serviceMap.get(service);
+            // For each day type, take earliest first and latest last
+            const combineTimes = (existFirst, existLast, newFirst, newLast) => {
+              // Handle special cases like '=' (same as weekday)
+              if (newFirst === '=' || !newFirst || !/\d{4}/.test(newFirst)) {
+                return [existFirst, existLast];
+              }
+              if (
+                existFirst === '=' ||
+                !existFirst ||
+                !/\d{4}/.test(existFirst)
+              ) {
+                return [newFirst, newLast];
+              }
+
+              const first = Math.min(
+                convertTimeToNumber(existFirst),
+                convertTimeToNumber(newFirst),
+              );
+              const last = Math.max(
+                convertTimeToNumber(existLast),
+                convertTimeToNumber(newLast),
+              );
+
+              // Convert back to HHMM format
+              const firstHH = Math.floor(first).toString().padStart(2, '0');
+              const firstMM = Math.round((first % 1) * 60)
+                .toString()
+                .padStart(2, '0');
+              const lastHH = Math.floor(last).toString().padStart(2, '0');
+              const lastMM = Math.round((last % 1) * 60)
+                .toString()
+                .padStart(2, '0');
+
+              return [`${firstHH}${firstMM}`, `${lastHH}${lastMM}`];
+            };
+
+            const [wdFirst, wdLast] = combineTimes(
+              existing[1],
+              existing[2],
+              wd1,
+              wd2,
+            );
+            const [satFirst, satLast] = combineTimes(
+              existing[3],
+              existing[4],
+              sat1,
+              sat2,
+            );
+            const [sunFirst, sunLast] = combineTimes(
+              existing[5],
+              existing[6],
+              sun1,
+              sun2,
+            );
+
+            serviceMap.set(service, [
+              service,
+              wdFirst,
+              wdLast,
+              satFirst,
+              satLast,
+              sunFirst,
+              sunLast,
+            ]);
+          }
+        });
+
+        const deduplicatedData = Array.from(serviceMap.values());
+
+        // Check if any service has Saturday or Sunday timings
+        const hasValidTiming = (time) =>
+          time && time !== '=' && /\d{4}/.test(time);
+        const hasSat = deduplicatedData.some(
+          (d) => hasValidTiming(d[3]) || hasValidTiming(d[4]),
         );
+        const hasSun = deduplicatedData.some(
+          (d) => hasValidTiming(d[5]) || hasValidTiming(d[6]),
+        );
+
+        setData(deduplicatedData);
+        setHasSaturdayTimings(hasSat);
+        setHasSundayTimings(hasSun);
       };
       window.onhashchange();
     });
@@ -172,7 +261,7 @@ function FirstLastTimes() {
     return timeStr;
   };
 
-  const isInBengaluru = new Date().getTimezoneOffset() === -480;
+  const isInTimezone = new Date().getTimezoneOffset() === -480;
 
   return (
     <div>
@@ -185,25 +274,33 @@ function FirstLastTimes() {
           {stopName ? stopName : <span class="placeholder">██████ ███</span>}
         </b>
       </h1>
-      <p class="legend">
-        <span>
-          <span class="abbr">{t('glossary.weekdaysShort')}</span>{' '}
-          {t('glossary.weekdays')}
-        </span>
-        <span>
-          <span class="abbr">{t('glossary.saturdaysShort')}</span>{' '}
-          {t('glossary.saturdays')}
-        </span>
-        <span>
-          <span class="abbr">{t('glossary.sundaysPublicHolidaysShort')}</span>{' '}
-          {t('glossary.sundaysPublicHolidays')}
-        </span>
-      </p>
+      {(hasSaturdayTimings || hasSundayTimings) && (
+        <p class="legend">
+          <span>
+            <span class="abbr">{t('glossary.weekdaysShort')}</span>{' '}
+            {t('glossary.weekdays')}
+          </span>
+          {hasSaturdayTimings && (
+            <span>
+              <span class="abbr">{t('glossary.saturdaysShort')}</span>{' '}
+              {t('glossary.saturdays')}
+            </span>
+          )}
+          {hasSundayTimings && (
+            <span>
+              <span class="abbr">
+                {t('glossary.sundaysPublicHolidaysShort')}
+              </span>{' '}
+              {t('glossary.sundaysPublicHolidays')}
+            </span>
+          )}
+        </p>
+      )}
       <table>
         <thead>
           <tr>
             <th>{t('glossary.service')}</th>
-            <th></th>
+            {(hasSaturdayTimings || hasSundayTimings) && <th></th>}
             <th>{t('glossary.firstBus')}</th>
             <th>{t('glossary.lastBus')}</th>
             <th class="timerange-header">
@@ -211,7 +308,7 @@ function FirstLastTimes() {
               <span>6</span>
               <span>12 🌞</span>
               <span>6</span>
-              {isInBengaluru && !!data.length && !!timeLeft && !!timeDate && (
+              {isInTimezone && !!data.length && !!timeLeft && !!timeDate && (
                 <div
                   class="timerange-indicator"
                   style={{ left: `${timeLeft}%` }}
@@ -225,17 +322,40 @@ function FirstLastTimes() {
         {data.length
           ? data.map((d, i) => {
               const [service, ...times] = d;
-              const sameAsPrevService =
-                data[i - 1] && service === data[i - 1][0];
               const [wd1raw, wd2raw, sat1raw, sat2raw, sun1raw, sun2raw] =
                 times;
               const [wd1, wd2, sat1, sat2, sun1, sun2] = times.map((t) =>
                 timeFormat(t, i18n.resolvedLanguage),
               );
+
+              // Calculate dynamic rowspan based on visible day types
+              const rowspan =
+                1 + (hasSaturdayTimings ? 1 : 0) + (hasSundayTimings ? 1 : 0);
+
+              // If only weekday data, show simplified view
+              if (!hasSaturdayTimings && !hasSundayTimings) {
+                return (
+                  <tbody>
+                    <tr>
+                      <td>{service}</td>
+                      <td class="time-value" title={wd1raw}>
+                        {wd1}
+                      </td>
+                      <td class="time-value" title={wd2raw}>
+                        {wd2}
+                      </td>
+                      <td class="time-cell">
+                        <TimeRanger values={[wd1raw, wd2raw]} />
+                      </td>
+                    </tr>
+                  </tbody>
+                );
+              }
+
               return (
-                <tbody class={sameAsPrevService ? 'insignificant' : ''}>
+                <tbody>
                   <tr>
-                    <td rowspan="3">{service}</td>
+                    <td rowspan={rowspan}>{service}</td>
                     <th>
                       <abbr title={t('glossary.weekdays')}>
                         {t('glossary.weekdaysShort')}
@@ -247,94 +367,132 @@ function FirstLastTimes() {
                       <TimeRanger values={[wd1raw, wd2raw]} />
                     </td>
                   </tr>
-                  <tr>
-                    <th>
-                      <abbr title={t('glossary.saturdays')}>
-                        {t('glossary.saturdaysShort')}
-                      </abbr>
-                    </th>
-                    <td title={sat1raw}>{sat1}</td>
-                    <td title={sat2raw}>{sat2}</td>
-                    <td class="time-cell">
-                      <TimeRanger values={[sat1raw, sat2raw]} />
-                    </td>
-                  </tr>
-                  <tr>
-                    <th>
-                      <abbr title={t('glossary.sundaysPublicHolidays')}>
-                        {t('glossary.sundaysPublicHolidaysShort')}
-                      </abbr>
-                    </th>
-                    <td title={sun1raw}>{sun1}</td>
-                    <td title={sun2raw}>{sun2}</td>
-                    <td class="time-cell">
-                      <TimeRanger values={[sun1raw, sun2raw]} />
-                    </td>
-                  </tr>
+                  {hasSaturdayTimings && (
+                    <tr>
+                      <th>
+                        <abbr title={t('glossary.saturdays')}>
+                          {t('glossary.saturdaysShort')}
+                        </abbr>
+                      </th>
+                      <td title={sat1raw}>{sat1}</td>
+                      <td title={sat2raw}>{sat2}</td>
+                      <td class="time-cell">
+                        <TimeRanger values={[sat1raw, sat2raw]} />
+                      </td>
+                    </tr>
+                  )}
+                  {hasSundayTimings && (
+                    <tr>
+                      <th>
+                        <abbr title={t('glossary.sundaysPublicHolidays')}>
+                          {t('glossary.sundaysPublicHolidaysShort')}
+                        </abbr>
+                      </th>
+                      <td title={sun1raw}>{sun1}</td>
+                      <td title={sun2raw}>{sun2}</td>
+                      <td class="time-cell">
+                        <TimeRanger values={[sun1raw, sun2raw]} />
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               );
             })
-          : [1, 2, 3].map((v) => (
-              <tbody key={v}>
-                <tr>
-                  <td rowspan="3">
-                    <span class="placeholder">██</span>
-                  </td>
-                  <th>
-                    <abbr title={t('glossary.weekdays')}>
-                      {t('glossary.weekdaysShort')}
-                    </abbr>
-                  </th>
-                  <td>
-                    <span class="placeholder">████</span>
-                  </td>
-                  <td>
-                    <span class="placeholder">████</span>
-                  </td>
-                  <td class="time-cell">
-                    <TimeRanger />
-                  </td>
-                </tr>
-                <tr>
-                  <th>
-                    <abbr title={t('glossary.saturdays')}>
-                      {t('glossary.saturdaysShort')}
-                    </abbr>
-                  </th>
-                  <td>
-                    <span class="placeholder">████</span>
-                  </td>
-                  <td>
-                    <span class="placeholder">████</span>
-                  </td>
-                  <td class="time-cell">
-                    <TimeRanger />
-                  </td>
-                </tr>
-                <tr>
-                  <th>
-                    <abbr title={t('glossary.sundaysPublicHolidays')}>
-                      {t('glossary.sundaysPublicHolidaysShort')}
-                    </abbr>
-                  </th>
-                  <td>
-                    <span class="placeholder">████</span>
-                  </td>
-                  <td>
-                    <span class="placeholder">████</span>
-                  </td>
-                  <td class="time-cell">
-                    <TimeRanger />
-                  </td>
-                </tr>
-              </tbody>
-            ))}
+          : [1, 2, 3].map((v) => {
+              const placeholderRowspan =
+                1 + (hasSaturdayTimings ? 1 : 0) + (hasSundayTimings ? 1 : 0);
+
+              // If only weekday data, show simplified placeholder
+              if (!hasSaturdayTimings && !hasSundayTimings) {
+                return (
+                  <tbody key={v}>
+                    <tr>
+                      <td>
+                        <span class="placeholder">██</span>
+                      </td>
+                      <td class="time-value">
+                        <span class="placeholder">████</span>
+                      </td>
+                      <td class="time-value">
+                        <span class="placeholder">████</span>
+                      </td>
+                      <td class="time-cell">
+                        <TimeRanger />
+                      </td>
+                    </tr>
+                  </tbody>
+                );
+              }
+
+              return (
+                <tbody key={v}>
+                  <tr>
+                    <td rowspan={placeholderRowspan}>
+                      <span class="placeholder">██</span>
+                    </td>
+                    <th>
+                      <abbr title={t('glossary.weekdays')}>
+                        {t('glossary.weekdaysShort')}
+                      </abbr>
+                    </th>
+                    <td>
+                      <span class="placeholder">████</span>
+                    </td>
+                    <td>
+                      <span class="placeholder">████</span>
+                    </td>
+                    <td class="time-cell">
+                      <TimeRanger />
+                    </td>
+                  </tr>
+                  {hasSaturdayTimings && (
+                    <tr>
+                      <th>
+                        <abbr title={t('glossary.saturdays')}>
+                          {t('glossary.saturdaysShort')}
+                        </abbr>
+                      </th>
+                      <td>
+                        <span class="placeholder">████</span>
+                      </td>
+                      <td>
+                        <span class="placeholder">████</span>
+                      </td>
+                      <td class="time-cell">
+                        <TimeRanger />
+                      </td>
+                    </tr>
+                  )}
+                  {hasSundayTimings && (
+                    <tr>
+                      <th>
+                        <abbr title={t('glossary.sundaysPublicHolidays')}>
+                          {t('glossary.sundaysPublicHolidaysShort')}
+                        </abbr>
+                      </th>
+                      <td>
+                        <span class="placeholder">████</span>
+                      </td>
+                      <td>
+                        <span class="placeholder">████</span>
+                      </td>
+                      <td class="time-cell">
+                        <TimeRanger />
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              );
+            })}
         <tfoot>
           <tr>
-            <td colspan="5">
+            <td colspan={hasSaturdayTimings || hasSundayTimings ? 5 : 4}>
               <p>
                 {!!data.length && (
-                  <>{t('glossary.nServices', { count: data.length })} · </>
+                  <>
+                    {t('glossary.nServices_plural', { count: data.length })}{' '}
+                    ·{' '}
+                  </>
                 )}
                 <a href="/">{t('app.name')}</a>
               </p>

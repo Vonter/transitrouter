@@ -51,6 +51,7 @@
     "title": "Bus stop {{stopNumber}}: {{stopName}} - $t(app.name)",
     "titleRoutes": "Routes passing bus stop {{stopNumber}}: {{stopName}} - $t(app.name)",
     "firstLastBus": "First/last bus",
+    "diagramBus": "Bus route diagram",
     "multipleDirectionsWarning": "Some services serve multiple directions. Open \"Bus arrivals\" to see more details.",
     "liveBusTrack": "{{count}} bus now on track",
     "liveBusTrack_plural": "{{count}} buses now on track."

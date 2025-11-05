@@ -4,21 +4,39 @@ import SolidPolygonLayer from '@deck.gl/layers/dist/solid-polygon-layer/solid-po
 import PathLayer from '@deck.gl/layers/dist/path-layer/path-layer';
 import { sortServices } from '../assets/utils/bus';
 import fetchCache from '../assets/utils/fetchCache';
-import routesJSONPath from './data/routes.json';
-import stops3DJSONPath from './data/stops.3d.json';
+import {
+  AVAILABLE_CITIES,
+  DEFAULT_CITY,
+  getConfigForCity,
+} from '../assets/config';
+
+// Detect city from URL path (e.g., /visualization/?city=blr or /blr/visualization/)
+const urlParams = new URLSearchParams(window.location.search);
+const pathSegments = window.location.pathname.split('/').filter(Boolean);
+const cityFromQuery = urlParams.get('city');
+const cityFromPath = pathSegments.find((segment) =>
+  AVAILABLE_CITIES.includes(segment),
+);
+const city = cityFromQuery || cityFromPath || DEFAULT_CITY;
+
+console.log(`Loading visualization for city: ${city}`);
+
+// Get city config from centralized config
+const cityConfig = getConfigForCity(city);
+const { name, bounds } = cityConfig.city;
+const { lowerLat, upperLat, lowerLong, upperLong } = bounds;
+
+// Load city-specific data files
+const routesJSONPath = `./data/${city}/routes.json`;
+const stops3DJSONPath = `./data/${city}/stops.3d.json`;
 
 const CACHE_TIME = 7 * 24 * 60; // 1 week
 const stopsFetch = fetchCache(stops3DJSONPath, CACHE_TIME);
 const routesFetch = fetchCache(routesJSONPath, CACHE_TIME);
 
-const lowerLat = 1.1,
-  upperLat = 1.58,
-  lowerLong = 103.49,
-  upperLong = 104.15;
-
 const map = new maplibregl.Map({
   container: 'map',
-  style: 'https://tiles.openfreemap.org/styles/positron',
+  style: 'https://tiles.openfreemap.org/styles/dark',
   boxZoom: false,
   minZoom: 8,
   renderWorldCopies: false,

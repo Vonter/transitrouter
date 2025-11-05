@@ -1,0 +1,4 @@
+# Cloudflare Functions
+.dev.vars
+*.log
+

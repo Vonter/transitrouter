@@ -114,7 +114,8 @@ table tbody th abbr {
   text-align: right;
   font-size: 0.8em;
 }
-table tbody th ~ td {
+table tbody th ~ td,
+table tbody td.time-value {
   text-align: center;
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;

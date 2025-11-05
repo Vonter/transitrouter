@@ -1,6 +1,8 @@
 import { h, Fragment } from 'preact';
-import { useRef } from 'preact/hooks';
+import { useRef, useMemo } from 'preact/hooks';
 import getRoute from '../utils/getRoute';
+
+import busTinyImagePath from '../images/bus-tiny.png';
 
 function rowSpaner(stopGrid, column, stop) {
   if (!stop) return 1;
@@ -35,7 +37,8 @@ function areOpposite(stop1, stop2) {
 export default function StopsList(props) {
   const route = getRoute();
 
-  const { routes, stopsData, onStopClick, onStopClickAgain } = props;
+  const { routes, stopsData, vehicles = [], onStopClick, onStopClickAgain } = props;
+  
   if (
     !routes ||
     !routes.length ||
@@ -76,6 +79,48 @@ export default function StopsList(props) {
 
   const lastStop = useRef();
 
+  // Map vehicles to their positions based on API data
+  const vehiclePositions = useMemo(() => {
+    if (!vehicles || vehicles.length === 0) {
+      return new Map();
+    }
+    
+    const positions = new Map();
+    
+    vehicles.forEach(vehicle => {
+      // Use the stop information from the API response
+      // Vehicle is between "last" stop and "current/next" stop
+      // We'll display the vehicle after the stop it has passed (lastLocationId)
+      let stopKey = null;
+      
+      if (vehicle.stops) {
+        // Priority: lastLocationId > currentLocationId > nextLocationId
+        // This determines where we show the vehicle in the route list
+        if (vehicle.stops.lastLocationId) {
+          stopKey = String(vehicle.stops.lastLocationId);
+        } else if (vehicle.stops.currentLocationId) {
+          stopKey = String(vehicle.stops.currentLocationId);
+        } else if (vehicle.stops.nextLocationId) {
+          // As a fallback, show before the next stop
+          stopKey = String(vehicle.stops.nextLocationId);
+        }
+      } else {
+        console.warn(`Vehicle ${vehicle.vehicleNumber} has no stops information`, vehicle);
+      }
+      
+      if (stopKey) {
+        if (!positions.has(stopKey)) {
+          positions.set(stopKey, []);
+        }
+        positions.get(stopKey).push(vehicle);
+      } else {
+        console.warn(`Could not determine position for vehicle ${vehicle.vehicleNumber}`, vehicle);
+      }
+    });
+    
+    return positions;
+  }, [vehicles]);
+
   const StopLink = ({ stop }) =>
     stop ? (
       <a
@@ -97,6 +142,30 @@ export default function StopsList(props) {
       </a>
     ) : null;
 
+  // Render vehicle indicator
+  const VehicleIndicator = ({ vehicle }) => (
+    <div class="vehicle-inline" title={`${vehicle.vehicleNumber} - ${vehicle.serviceType}`}>
+      <img src={busTinyImagePath} width="14" height="14" alt="Bus" />
+      <span class="vehicle-inline-number">{vehicle.vehicleNumber}</span>
+    </div>
+  );
+
+  // Render vehicles after a stop
+  const VehiclesAfterStop = ({ stop }) => {
+    // Ensure stop is a string for consistent lookup
+    const stopKey = String(stop);
+    const vehiclesHere = vehiclePositions.get(stopKey);
+    if (!vehiclesHere || vehiclesHere.length === 0) return null;
+    
+    return (
+      <div class="vehicles-at-stop">
+        {vehiclesHere.map(vehicle => (
+          <VehicleIndicator key={vehicle.vehicleId} vehicle={vehicle} />
+        ))}
+      </div>
+    );
+  };
+
   // Only 1 route & not a loop
   if (!route2 && route1FirstStop !== route1LastStop) {
     // Contains duplicates
@@ -110,6 +179,7 @@ export default function StopsList(props) {
         {route1.map((s) => (
           <li>
             <StopLink stop={s} />
+            <VehiclesAfterStop stop={s} />
           </li>
         ))}
       </ol>
@@ -177,7 +247,6 @@ export default function StopsList(props) {
       if (hasMidStop) {
         // Odd
         const midStop = route1[half];
-        console.log({ midStop });
         if (areOpposite(midStop, route1[half - 1])) {
           // ~~~ = Dummy stop to connect at the end
           route2Copy.push(midStop, '~~~');
@@ -331,8 +400,6 @@ export default function StopsList(props) {
       }
     }
 
-    console.log({ route1, route2, stopGrid });
-
     const stopGridStops = stopGrid
       .flat()
       .filter((v) => /\d/.test(v))
@@ -346,12 +413,12 @@ export default function StopsList(props) {
 
     return (
       <table class="stops-table">
-        <colgroup>
-          <col class="stop" />
-          <col class="middle" />
-          <col class="stop" />
-        </colgroup>
-        {stopGrid.map(
+          <colgroup>
+            <col class="stop" />
+            <col class="middle" />
+            <col class="stop" />
+          </colgroup>
+          {stopGrid.map(
           (
             [
               s1,
@@ -385,14 +452,15 @@ export default function StopsList(props) {
                 )}
                 <tr class={isEdgeRows ? 'edge' : ''}>
                   {isEdgeRows ? (
-                    <td
-                      class={`stop-${
-                        s1 === '~~~' ? 'u' : index === 0 ? 'start' : 'end'
-                      } ${loopRoute ? 'loop' : ''}`}
-                      colspan="3"
-                    >
-                      {s1 !== '~~~' && <StopLink stop={s1} />}
-                    </td>
+                  <td
+                    class={`stop-${
+                      s1 === '~~~' ? 'u' : index === 0 ? 'start' : 'end'
+                    } ${loopRoute ? 'loop' : ''}`}
+                    colspan="3"
+                  >
+                    {s1 !== '~~~' && <StopLink stop={s1} />}
+                    {s1 !== '~~~' && <VehiclesAfterStop stop={s1} />}
+                  </td>
                   ) : (
                     <>
                       {s1 ? (
@@ -410,6 +478,7 @@ export default function StopsList(props) {
                             }
                           >
                             <StopLink stop={s1} />
+                            <VehiclesAfterStop stop={s1} />
                           </td>
                         )
                       ) : (
@@ -433,6 +502,7 @@ export default function StopsList(props) {
                             }
                           >
                             <StopLink stop={s2} />
+                            <VehiclesAfterStop stop={s2} />
                           </td>
                         )
                       ) : (

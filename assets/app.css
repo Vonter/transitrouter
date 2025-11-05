@@ -768,6 +768,59 @@ a:active {
   cursor: pointer;
 }
 
+.vehicles-at-stop {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 4px 16px;
+  padding-left: 8px;
+}
+
+.vehicle-inline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: #fff8e1;
+  border: 1px solid #ff9800;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #333;
+  transition: all 0.2s;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.vehicle-inline:hover {
+  background: #ffecb3;
+  border-color: #f57c00;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.vehicle-inline img {
+  flex-shrink: 0;
+}
+
+.vehicle-inline-number {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+}
+
+.stops-table td.stop .vehicles-at-stop {
+  margin-left: 20px;
+}
+
+.stops-table td.stop:first-child .vehicles-at-stop {
+  margin-left: 0;
+  margin-right: 20px;
+  padding-left: 0;
+  padding-right: 4px;
+  align-items: flex-end;
+}
+
 .stops-table {
   border-collapse: collapse;
   border-spacing: 0;
@@ -1036,6 +1089,25 @@ span.legend-opposite {
   white-space: nowrap;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
+}
+.service-destination-group {
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+.service-destination-group:last-child {
+  border-bottom: none;
+}
+.service-destination-info {
+  font-size: 0.85em;
+  color: #333;
+  margin: 0 0 4px 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+.service-destination-info strong {
+  color: #000;
+  font-weight: 600;
 }
 h1 .service-tag {
   font-weight: bold;
