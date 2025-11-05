@@ -214,7 +214,7 @@ const App = () => {
 
     // Update page title with city name
     const cityInfo = getCityInfo();
-    document.title = `${cityInfo.name} Bus Routes - ${t('app.name')}`;
+    document.title = `${cityInfo.name} Transit Routes - ${t('app.name')}`;
   }, [route]);
 
   const [routeLoading, setRouteLoading] = useState(true);
@@ -2184,7 +2184,7 @@ const App = () => {
       });
     });
 
-    // Bus service routes
+    // Transit service routes
     map.addSource('routes', {
       type: 'geojson',
       tolerance: 1,
@@ -2320,7 +2320,7 @@ const App = () => {
       'stops',
     );
 
-    // Bus service routes (passing, overlapping)
+    // Transit service routes (passing, overlapping)
     map.addSource('routes-path', {
       type: 'geojson',
       tolerance: 1,

@@ -514,7 +514,7 @@ function BusDiagram() {
 
   useEffect(() => {
     if (!currentStopId || !currentStopName) return;
-    document.title = `Bus Route Diagram - ${currentStopName} (${currentStopId})`;
+    document.title = `Transit Route Diagram - ${currentStopName} (${currentStopId})`;
   }, [currentStopId, currentStopName]);
 
   useEffect(() => {
