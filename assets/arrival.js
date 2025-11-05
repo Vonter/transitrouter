@@ -197,14 +197,18 @@ function ArrivalTimes() {
   // Initialize pinned services from localStorage
   const [pinnedServices, setPinnedServices] = useState(() => {
     try {
-      const stored = localStorage.getItem('transitrouter.arrival.pinnedServices');
+      const stored = localStorage.getItem(
+        'transitrouter.arrival.pinnedServices',
+      );
       if (!stored) return [];
       const parsed = JSON.parse(stored);
       if (!Array.isArray(parsed)) return [];
       // Convert old format (strings) to new format (objects)
       return parsed
         .map((item) => (typeof item === 'string' ? { serviceNo: item } : item))
-        .filter((item) => item?.serviceNo || (typeof item === 'object' && item));
+        .filter(
+          (item) => item?.serviceNo || (typeof item === 'object' && item),
+        );
     } catch (e) {
       console.warn('Failed to parse pinned services from localStorage:', e);
       return [];
@@ -299,8 +303,18 @@ function ArrivalTimes() {
           frequency: upcomingTrips.length,
           next: createTrip(upcomingTrips[0].duration_ms, origin, destination),
         };
-        if (upcomingTrips[1]) result.next2 = createTrip(upcomingTrips[1].duration_ms, origin, destination);
-        if (upcomingTrips[2]) result.next3 = createTrip(upcomingTrips[2].duration_ms, origin, destination);
+        if (upcomingTrips[1])
+          result.next2 = createTrip(
+            upcomingTrips[1].duration_ms,
+            origin,
+            destination,
+          );
+        if (upcomingTrips[2])
+          result.next3 = createTrip(
+            upcomingTrips[2].duration_ms,
+            origin,
+            destination,
+          );
 
         return result;
       })
@@ -312,7 +326,7 @@ function ArrivalTimes() {
   async function fetchLiveArrivalData(stationId) {
     try {
       const response = await fetch(
-        `${getApiUrl(cityConfig?.liveArrivals?.apiPath)}?stationid=${stationId}`
+        `${getApiUrl(cityConfig?.liveArrivals?.apiPath)}?stationid=${stationId}`,
       );
       if (!response.ok) {
         console.error(`Live arrival API error for ${city}:`, response.status);
@@ -337,7 +351,9 @@ function ArrivalTimes() {
     return fetchCache(`${scheduleJSONPath}/${id}.json`, 60)
       .then((scheduleData) => {
         const convertedServices = convertScheduleToArrival(scheduleData);
-        setFetchServicesStatus(convertedServices.length > 0 ? 'static' : 'error');
+        setFetchServicesStatus(
+          convertedServices.length > 0 ? 'static' : 'error',
+        );
         setServices(convertedServices.length > 0 ? convertedServices : []);
         scheduleRetry(id, 30000);
       })
@@ -538,7 +554,17 @@ function ArrivalTimes() {
             'icon-size': ['step', ['zoom'], 0.3, 14, 0.35, 15, 0.45, 16, 0.55],
             'text-field': ['get', 'vehicleNumber'],
             'text-optional': true,
-            'text-size': ['interpolate', ['linear'], ['zoom'], 12, 8, 14, 10, 16, 12],
+            'text-size': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              12,
+              8,
+              14,
+              10,
+              16,
+              12,
+            ],
             'text-font': ['Noto Sans Regular'],
             'text-variable-anchor': ['left', 'right', 'bottom', 'top'],
             'text-justify': 'auto',
@@ -588,14 +614,17 @@ function ArrivalTimes() {
 
     (async () => {
       try {
-        const isEmpty = !pinnedServices?.length || !Array.isArray(pinnedServices);
-        
+        const isEmpty =
+          !pinnedServices?.length || !Array.isArray(pinnedServices);
+
         // Filter to only active pinned services that exist in current services
         const activePinnedServices = isEmpty
           ? []
           : pinnedServices.filter((pinned) => {
               const serviceNoStr = toServiceNoStr(getServiceNo(pinned));
-              return services?.some((s) => toServiceNoStr(s.no) === serviceNoStr);
+              return services?.some(
+                (s) => toServiceNoStr(s.no) === serviceNoStr,
+              );
             });
 
         if (!activePinnedServices.length) {
@@ -640,7 +669,8 @@ function ArrivalTimes() {
       return () => clearTimeout(timeoutId);
     }
 
-    const isEmpty = !services || !pinnedServices?.length || !Array.isArray(pinnedServices);
+    const isEmpty =
+      !services || !pinnedServices?.length || !Array.isArray(pinnedServices);
     if (isEmpty) {
       clearMapSource(map, 'buses-service');
       return;
@@ -648,7 +678,11 @@ function ArrivalTimes() {
 
     const pinnedServiceNumbers = getPinnedServiceNumbers(pinnedServices);
     const extractLocation = (trip) => {
-      let location = trip.location || (trip.lat !== undefined && trip.lng !== undefined ? { lat: trip.lat, lng: trip.lng } : null);
+      let location =
+        trip.location ||
+        (trip.lat !== undefined && trip.lng !== undefined
+          ? { lat: trip.lat, lng: trip.lng }
+          : null);
       if (!location) return null;
 
       let lat, lng;
@@ -661,9 +695,12 @@ function ArrivalTimes() {
       }
 
       if (
-        typeof lat !== 'number' || typeof lng !== 'number' ||
-        isNaN(lat) || isNaN(lng) ||
-        Math.abs(lat) > 90 || Math.abs(lng) > 180 ||
+        typeof lat !== 'number' ||
+        typeof lng !== 'number' ||
+        isNaN(lat) ||
+        isNaN(lng) ||
+        Math.abs(lat) > 90 ||
+        Math.abs(lng) > 180 ||
         (lat === 0 && lng === 0)
       ) {
         return null;
@@ -682,8 +719,12 @@ function ArrivalTimes() {
         if (!location) return;
 
         vehicles.push({
-          vehicleId: trip.vehicle_id || trip.vehicleId || `vehicle-${serviceNoStr}-${trip.duration_ms}`,
-          vehicleNumber: trip.bus_no || trip.busNo || trip.vehicleNumber || serviceNoStr,
+          vehicleId:
+            trip.vehicle_id ||
+            trip.vehicleId ||
+            `vehicle-${serviceNoStr}-${trip.duration_ms}`,
+          vehicleNumber:
+            trip.bus_no || trip.busNo || trip.vehicleNumber || serviceNoStr,
           routeNo: serviceNoStr,
           location,
           heading: trip.heading || null,
@@ -710,11 +751,13 @@ function ArrivalTimes() {
     };
 
     vehiclesSource.setData(geoJSON);
-    
+
     // Clean up vehicle location cache
     for (const [vehicleId] of vehicleLocationCache.current.entries()) {
       const belongsToPinned = Array.from(pinnedServiceNumbers).some(
-        (serviceNo) => vehicleId.includes(serviceNo) || vehicleId.startsWith(`vehicle-${serviceNo}-`)
+        (serviceNo) =>
+          vehicleId.includes(serviceNo) ||
+          vehicleId.startsWith(`vehicle-${serviceNo}-`),
       );
       if (!belongsToPinned) {
         vehicleLocationCache.current.delete(vehicleId);
@@ -731,8 +774,14 @@ function ArrivalTimes() {
     for (const service of services) {
       for (const trip of [service.next, service.next2, service.next3]) {
         if (!trip?.location) continue;
-        const tripVehicleId = trip.vehicle_id || trip.vehicleId || `vehicle-${service.no}-${trip.duration_ms}`;
-        if (tripVehicleId === followedVehicleId || `vehicle-${tripVehicleId}` === followedVehicleId) {
+        const tripVehicleId =
+          trip.vehicle_id ||
+          trip.vehicleId ||
+          `vehicle-${service.no}-${trip.duration_ms}`;
+        if (
+          tripVehicleId === followedVehicleId ||
+          `vehicle-${tripVehicleId}` === followedVehicleId
+        ) {
           vehicleLocation = trip.location;
           break;
         }
@@ -740,30 +789,42 @@ function ArrivalTimes() {
       if (vehicleLocation) break;
     }
 
-    if (vehicleLocation?.lng && typeof vehicleLocation.lng === 'number' && typeof vehicleLocation.lat === 'number') {
-      map.easeTo({ center: [vehicleLocation.lng, vehicleLocation.lat], duration: 800 });
+    if (
+      vehicleLocation?.lng &&
+      typeof vehicleLocation.lng === 'number' &&
+      typeof vehicleLocation.lat === 'number'
+    ) {
+      map.easeTo({
+        center: [vehicleLocation.lng, vehicleLocation.lat],
+        duration: 800,
+      });
     }
   }, [followedVehicleId, services]);
 
   function togglePin(no, destination = null) {
     if (!destination && services) {
       const service = services.find((s) => s.no === no);
-      destination = service?.destination || service?.next?.destination_code || null;
+      destination =
+        service?.destination || service?.next?.destination_code || null;
     }
 
     const serviceNoStr = toServiceNoStr(no);
-    const pinnedIndex = pinnedServices.findIndex((p) => 
-      toServiceNoStr(getServiceNo(p)) === serviceNoStr
+    const pinnedIndex = pinnedServices.findIndex(
+      (p) => toServiceNoStr(getServiceNo(p)) === serviceNoStr,
     );
-    
-    const updatedPinned = pinnedIndex >= 0
-      ? pinnedServices.filter((_, i) => i !== pinnedIndex)
-      : [...pinnedServices, { serviceNo: no, destination }];
-    
+
+    const updatedPinned =
+      pinnedIndex >= 0
+        ? pinnedServices.filter((_, i) => i !== pinnedIndex)
+        : [...pinnedServices, { serviceNo: no, destination }];
+
     // Clean up vehicle cache when unpinning
     if (pinnedIndex >= 0) {
       for (const [vehicleId] of vehicleLocationCache.current.entries()) {
-        if (vehicleId.includes(serviceNoStr) || vehicleId.startsWith(`vehicle-${serviceNoStr}-`)) {
+        if (
+          vehicleId.includes(serviceNoStr) ||
+          vehicleId.startsWith(`vehicle-${serviceNoStr}-`)
+        ) {
           vehicleLocationCache.current.delete(vehicleId);
         }
       }
@@ -771,7 +832,10 @@ function ArrivalTimes() {
 
     setPinnedServices(updatedPinned);
     try {
-      localStorage.setItem('transitrouter.arrival.pinnedServices', JSON.stringify(updatedPinned));
+      localStorage.setItem(
+        'transitrouter.arrival.pinnedServices',
+        JSON.stringify(updatedPinned),
+      );
     } catch (e) {}
   }
 
@@ -793,31 +857,36 @@ function ArrivalTimes() {
   const { code, name } = busStop;
 
   // Group services by route number and destination
-  const groupedServices = services ? (() => {
-    const groups = {};
-    services.forEach((service) => {
-      const key = `${service.no}-${service.destination || service.next?.destination_code || ''}`;
-      if (!groups[key]) {
-        groups[key] = {
-          no: service.no,
-          destination: service.destination || service.next?.destination_code,
-          frequency: 0,
-          buses: [],
-        };
-      }
-      [service.next, service.next2, service.next3].filter(Boolean).forEach((bus) => {
-        groups[key].buses.push(bus);
-      });
-      groups[key].frequency += service.frequency || 0;
-    });
+  const groupedServices = services
+    ? (() => {
+        const groups = {};
+        services.forEach((service) => {
+          const key = `${service.no}-${service.destination || service.next?.destination_code || ''}`;
+          if (!groups[key]) {
+            groups[key] = {
+              no: service.no,
+              destination:
+                service.destination || service.next?.destination_code,
+              frequency: 0,
+              buses: [],
+            };
+          }
+          [service.next, service.next2, service.next3]
+            .filter(Boolean)
+            .forEach((bus) => {
+              groups[key].buses.push(bus);
+            });
+          groups[key].frequency += service.frequency || 0;
+        });
 
-    return Object.values(groups).sort((a, b) => {
-      const aPinned = isPinned(a.no, pinnedServices);
-      const bPinned = isPinned(b.no, pinnedServices);
-      if (aPinned !== bPinned) return aPinned ? -1 : 1;
-      return b.frequency - a.frequency;
-    });
-  })() : [];
+        return Object.values(groups).sort((a, b) => {
+          const aPinned = isPinned(a.no, pinnedServices);
+          const bPinned = isPinned(b.no, pinnedServices);
+          if (aPinned !== bPinned) return aPinned ? -1 : 1;
+          return b.frequency - a.frequency;
+        });
+      })()
+    : [];
 
   return (
     <div>
@@ -835,16 +904,25 @@ function ArrivalTimes() {
               {groupedServices.map((group) => {
                 const { no, destination, buses } = group;
                 const pinned = isPinned(no, pinnedServices);
-                const sortedBuses = [...buses].sort((a, b) => a.duration_ms - b.duration_ms);
+                const sortedBuses = [...buses].sort(
+                  (a, b) => a.duration_ms - b.duration_ms,
+                );
                 const buses1 = sortedBuses.filter((b) => b?.visit_number === 1);
                 const buses2 = sortedBuses.filter((b) => b?.visit_number === 2);
                 return (
                   <>
                     <tr class={pinned ? 'pin' : ''}>
-                      <th onClick={(e) => { e.preventDefault(); togglePin(no, destination); }}>
+                      <th
+                        onClick={(e) => {
+                          e.preventDefault();
+                          togglePin(no, destination);
+                        }}
+                      >
                         {no}
                       </th>
-                      <td class={`bus-lane-cell ${buses2.length ? 'multiple' : ''}`}>
+                      <td
+                        class={`bus-lane-cell ${buses2.length ? 'multiple' : ''}`}
+                      >
                         {buses2.length ? (
                           <>
                             <BusLane index={1} no={no} buses={buses1} />
@@ -858,7 +936,9 @@ function ArrivalTimes() {
                     <tr class={pinned ? 'pin' : ''}>
                       <th colspan="2">
                         <small class="destination">
-                          {(destination && stopsData[destination]?.[2]) || destination || ''}
+                          {(destination && stopsData[destination]?.[2]) ||
+                            destination ||
+                            ''}
                         </small>
                       </th>
                     </tr>

@@ -238,29 +238,34 @@ export function createVehicleTracker({
 
     try {
       // Fetch vehicles for all tracked services in parallel
-      const fetchPromises = Array.from(trackedServices).map(async (serviceNumber) => {
-        const routeId = serviceRouteIds.get(serviceNumber);
-        if (!routeId) {
-          console.warn(`No route ID for service: ${serviceNumber}`);
-          return { serviceNumber, vehicles: [] };
-        }
-
-        try {
-          const vehicleData = await fetchVehicles(
-            vehicleTracking.apiPath,
-            routeId,
-          );
-
-          if (vehicleData) {
-            const vehicles = extractVehicles(vehicleData);
-            return { serviceNumber, vehicles };
+      const fetchPromises = Array.from(trackedServices).map(
+        async (serviceNumber) => {
+          const routeId = serviceRouteIds.get(serviceNumber);
+          if (!routeId) {
+            console.warn(`No route ID for service: ${serviceNumber}`);
+            return { serviceNumber, vehicles: [] };
           }
-          return { serviceNumber, vehicles: [] };
-        } catch (error) {
-          console.error(`Error fetching vehicles for service ${serviceNumber}:`, error);
-          return { serviceNumber, vehicles: [] };
-        }
-      });
+
+          try {
+            const vehicleData = await fetchVehicles(
+              vehicleTracking.apiPath,
+              routeId,
+            );
+
+            if (vehicleData) {
+              const vehicles = extractVehicles(vehicleData);
+              return { serviceNumber, vehicles };
+            }
+            return { serviceNumber, vehicles: [] };
+          } catch (error) {
+            console.error(
+              `Error fetching vehicles for service ${serviceNumber}:`,
+              error,
+            );
+            return { serviceNumber, vehicles: [] };
+          }
+        },
+      );
 
       const results = await Promise.all(fetchPromises);
 

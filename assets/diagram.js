@@ -17,22 +17,25 @@ const TARGET_MAJOR_STOPS = 5;
  */
 function findRoutesForStop(stopId, servicesData) {
   const routes = [];
-  
+
   // Convert stopId to both string and number for comparison
   // (sequences store stops as integers, but stopId comes in as string)
   const stopIdNum = parseInt(stopId, 10);
   const stopIdStr = String(stopId);
-  
+
   for (const [routeId, routeData] of Object.entries(servicesData)) {
     // Check each destination in the route
-    for (const [destinationStopId, stopSequences] of Object.entries(routeData)) {
+    for (const [destinationStopId, stopSequences] of Object.entries(
+      routeData,
+    )) {
       if (destinationStopId === 'name') continue; // Skip the name field
-      
+
       // Check each stop sequence variant
       for (const stopSequence of stopSequences) {
         // Check both as number and string since data might use either format
-        const hasStop = stopSequence.includes(stopIdNum) || stopSequence.includes(stopIdStr);
-        
+        const hasStop =
+          stopSequence.includes(stopIdNum) || stopSequence.includes(stopIdStr);
+
         if (hasStop) {
           routes.push({
             routeId,
@@ -45,7 +48,7 @@ function findRoutesForStop(stopId, servicesData) {
       }
     }
   }
-  
+
   return routes;
 }
 
@@ -57,7 +60,7 @@ function getAllStopsFromRoutes(routes, currentStopId) {
   const stopPositions = new Map(); // stop_id -> Set of positions
   const currentStopStr = String(currentStopId);
   const currentStopNum = parseInt(currentStopId, 10);
-  
+
   routes.forEach((route) => {
     // Find the index of current stop in this route
     let currentStopIndex = -1;
@@ -68,33 +71,36 @@ function getAllStopsFromRoutes(routes, currentStopId) {
         break;
       }
     }
-    
+
     // If current stop not in route, skip this route
     if (currentStopIndex === -1) return;
-    
+
     // Only process stops from current stop onwards (forward direction)
-    route.stopSequence.slice(currentStopIndex).forEach((stopId, relativeIndex) => {
-      // Normalize to string for consistent comparison
-      const stopIdStr = String(stopId);
-      if (!stopPositions.has(stopIdStr)) {
-        stopPositions.set(stopIdStr, new Set());
-      }
-      // Use relative position from current stop
-      stopPositions.get(stopIdStr).add(relativeIndex);
-    });
+    route.stopSequence
+      .slice(currentStopIndex)
+      .forEach((stopId, relativeIndex) => {
+        // Normalize to string for consistent comparison
+        const stopIdStr = String(stopId);
+        if (!stopPositions.has(stopIdStr)) {
+          stopPositions.set(stopIdStr, new Set());
+        }
+        // Use relative position from current stop
+        stopPositions.get(stopIdStr).add(relativeIndex);
+      });
   });
-  
+
   // Calculate average position for each stop for sorting
   const stopsWithAvgPosition = Array.from(stopPositions.entries()).map(
     ([stopId, positions]) => {
-      const avgPosition = Array.from(positions).reduce((a, b) => a + b, 0) / positions.size;
+      const avgPosition =
+        Array.from(positions).reduce((a, b) => a + b, 0) / positions.size;
       return { stopId, avgPosition };
-    }
+    },
   );
-  
+
   // Sort by average position (current stop will be first with position 0)
   stopsWithAvgPosition.sort((a, b) => a.avgPosition - b.avgPosition);
-  
+
   return stopsWithAvgPosition.map((s) => s.stopId);
 }
 
@@ -109,55 +115,57 @@ function filterMajorStops(allStops, currentStopId, rankingData, routes) {
     ranking: rankingData[stopId] || 0,
     isCurrent: stopId === currentStopId,
   }));
-  
+
   // Get first and last stops from each route (always include these)
   const terminalStops = new Set();
   routes.forEach((route) => {
     if (route.stopSequence.length > 0) {
       // Normalize to string for consistent comparison
       terminalStops.add(String(route.stopSequence[0])); // First stop
-      terminalStops.add(String(route.stopSequence[route.stopSequence.length - 1])); // Last stop
+      terminalStops.add(
+        String(route.stopSequence[route.stopSequence.length - 1]),
+      ); // Last stop
     }
   });
-  
+
   // Mark terminal stops
   stopsWithRankings.forEach((stop) => {
     stop.isTerminal = terminalStops.has(stop.stopId);
   });
-  
+
   // Sort by ranking (descending) - higher ranking = more important
   stopsWithRankings.sort((a, b) => b.ranking - a.ranking);
-  
+
   // Calculate a significance threshold: stops with ranking > 20% of max are significant
   const maxRanking = stopsWithRankings[0]?.ranking || 0;
   const significanceThreshold = maxRanking * 0.2;
-  
+
   // Select stops in priority order:
   // 1. Current stop (always)
   // 2. Terminal stops (always - first/last of routes)
   // 3. Highly ranked stops (ranking > significance threshold)
   // 4. Additional stops to reach approximately TARGET_MAJOR_STOPS
   const selectedStops = new Set();
-  
+
   // Add current stop
   if (currentStopId) {
     selectedStops.add(currentStopId);
   }
-  
+
   // Add all terminal stops (can exceed target)
   stopsWithRankings.forEach((stop) => {
     if (stop.isTerminal) {
       selectedStops.add(stop.stopId);
     }
   });
-  
+
   // Add highly significant stops (can exceed target if important)
   stopsWithRankings.forEach((stop) => {
     if (stop.ranking >= significanceThreshold) {
       selectedStops.add(stop.stopId);
     }
   });
-  
+
   // If we're below target, add more high-ranking stops
   for (const stop of stopsWithRankings) {
     if (selectedStops.size >= TARGET_MAJOR_STOPS) {
@@ -166,7 +174,7 @@ function filterMajorStops(allStops, currentStopId, rankingData, routes) {
     }
     selectedStops.add(stop.stopId);
   }
-  
+
   // Ensure we have at least 5 stops (or all available if less)
   const minStops = Math.min(5, allStops.length);
   if (selectedStops.size < minStops) {
@@ -175,7 +183,7 @@ function filterMajorStops(allStops, currentStopId, rankingData, routes) {
       selectedStops.add(stop.stopId);
     }
   }
-  
+
   // Return stops in their original order
   return allStops.filter((stopId) => selectedStops.has(stopId));
 }
@@ -195,7 +203,9 @@ function createStopPositionMap(routes, orderedStops, currentStopId, stopsData) {
     orderedStops.forEach((stopId) => {
       if (stopId === currentStopId) return;
       const stopIdNum = parseInt(stopId, 10);
-      const inRoute = route.stopSequence.includes(stopIdNum) || route.stopSequence.includes(stopId);
+      const inRoute =
+        route.stopSequence.includes(stopIdNum) ||
+        route.stopSequence.includes(stopId);
       if (inRoute) {
         const name = stopsData[stopId]?.[2] || String(stopId);
         names.add(name);
@@ -212,7 +222,8 @@ function createStopPositionMap(routes, orderedStops, currentStopId, stopsData) {
   });
 
   // Current stop name (to exclude from common anchors)
-  const currentStopName = stopsData[currentStopId]?.[2] || String(currentStopId);
+  const currentStopName =
+    stopsData[currentStopId]?.[2] || String(currentStopId);
 
   // Ordered unique list of common names as they appear in orderedStops
   const seen = new Set();
@@ -234,7 +245,9 @@ function createStopPositionMap(routes, orderedStops, currentStopId, stopsData) {
   const nameToPosition = {};
   if (commonNames.length > 0) {
     commonNames.forEach((name, index) => {
-      const position = leftPadding + (index / Math.max(commonNames.length - 1, 1)) * usableWidth;
+      const position =
+        leftPadding +
+        (index / Math.max(commonNames.length - 1, 1)) * usableWidth;
       nameToPosition[name] = position;
     });
   }
@@ -244,7 +257,10 @@ function createStopPositionMap(routes, orderedStops, currentStopId, stopsData) {
     const routeStops = orderedStops.filter((stopId) => {
       if (stopId === currentStopId) return false;
       const stopIdNum = parseInt(stopId, 10);
-      return route.stopSequence.includes(stopIdNum) || route.stopSequence.includes(stopId);
+      return (
+        route.stopSequence.includes(stopIdNum) ||
+        route.stopSequence.includes(stopId)
+      );
     });
 
     // Position stops
@@ -252,7 +268,10 @@ function createStopPositionMap(routes, orderedStops, currentStopId, stopsData) {
       const name = stopsData[stopId]?.[2] || String(stopId);
       if (nameToPosition[name] !== undefined) {
         // Common-name stop: fixed anchor
-        stopPositionMap[stopId] = { position: nameToPosition[name], isCommon: true };
+        stopPositionMap[stopId] = {
+          position: nameToPosition[name],
+          isCommon: true,
+        };
         return;
       }
 
@@ -278,27 +297,33 @@ function createStopPositionMap(routes, orderedStops, currentStopId, stopsData) {
 
       if (backIdx !== -1 && fwdIdx !== -1) {
         // Interpolate between two anchored names
-        const startName = stopsData[routeStops[backIdx]]?.[2] || String(routeStops[backIdx]);
-        const endName = stopsData[routeStops[fwdIdx]]?.[2] || String(routeStops[fwdIdx]);
+        const startName =
+          stopsData[routeStops[backIdx]]?.[2] || String(routeStops[backIdx]);
+        const endName =
+          stopsData[routeStops[fwdIdx]]?.[2] || String(routeStops[fwdIdx]);
         const startPos = nameToPosition[startName];
         const endPos = nameToPosition[endName];
         const progress = (stopIndex - backIdx) / (fwdIdx - backIdx);
         position = startPos + (endPos - startPos) * progress;
       } else if (backIdx !== -1) {
         // Extend after the last anchor
-        const baseName = stopsData[routeStops[backIdx]]?.[2] || String(routeStops[backIdx]);
+        const baseName =
+          stopsData[routeStops[backIdx]]?.[2] || String(routeStops[backIdx]);
         const basePos = nameToPosition[baseName];
         const offset = (stopIndex - backIdx) * 8;
         position = Math.min(basePos + offset, 95);
       } else if (fwdIdx !== -1) {
         // Extend before the first anchor
-        const baseName = stopsData[routeStops[fwdIdx]]?.[2] || String(routeStops[fwdIdx]);
+        const baseName =
+          stopsData[routeStops[fwdIdx]]?.[2] || String(routeStops[fwdIdx]);
         const basePos = nameToPosition[baseName];
         const offset = (fwdIdx - stopIndex) * 8;
         position = Math.max(basePos - offset, 5);
       } else {
         // No anchors in route - distribute evenly
-        position = leftPadding + (stopIndex / Math.max(routeStops.length - 1, 1)) * usableWidth;
+        position =
+          leftPadding +
+          (stopIndex / Math.max(routeStops.length - 1, 1)) * usableWidth;
       }
 
       stopPositionMap[stopId] = { position, isCommon: false };
@@ -308,14 +333,13 @@ function createStopPositionMap(routes, orderedStops, currentStopId, stopsData) {
   return stopPositionMap;
 }
 
-
 /**
  * Calculate route similarity score (Jaccard similarity)
  */
 function calculateRouteSimilarity(route1Stops, route2Stops) {
   const set1 = new Set(route1Stops.map(String));
   const set2 = new Set(route2Stops.map(String));
-  const intersection = new Set([...set1].filter(x => set2.has(x)));
+  const intersection = new Set([...set1].filter((x) => set2.has(x)));
   const union = new Set([...set1, ...set2]);
   return union.size === 0 ? 0 : intersection.size / union.size;
 }
@@ -327,30 +351,30 @@ function calculateRouteSimilarity(route1Stops, route2Stops) {
 function clusterRoutesByStops(routes, minSimilarity = 0.2) {
   if (routes.length === 0) return [];
   if (routes.length === 1) return [[routes[0]]];
-  
+
   const clusters = [];
   const processed = new Set();
-  
+
   routes.forEach((route, index) => {
     if (processed.has(index)) return;
-    
+
     const cluster = [route];
     processed.add(index);
-    
+
     // Find all routes similar to any route in this cluster
     let changed = true;
     while (changed) {
       changed = false;
-      
+
       routes.forEach((otherRoute, otherIndex) => {
         if (processed.has(otherIndex)) return;
-        
+
         // Check similarity with any route in the cluster
         for (const clusterRoute of cluster) {
           const a = clusterRoute.seqForGrouping || clusterRoute.stopSequence;
           const b = otherRoute.seqForGrouping || otherRoute.stopSequence;
           const similarity = calculateRouteSimilarity(a, b);
-          
+
           if (similarity >= minSimilarity) {
             cluster.push(otherRoute);
             processed.add(otherIndex);
@@ -360,13 +384,13 @@ function clusterRoutesByStops(routes, minSimilarity = 0.2) {
         }
       });
     }
-    
+
     clusters.push(cluster);
   });
-  
+
   // Sort clusters by size (largest first)
   clusters.sort((a, b) => b.length - a.length);
-  
+
   return clusters;
 }
 
@@ -376,36 +400,50 @@ function clusterRoutesByStops(routes, minSimilarity = 0.2) {
  */
 function orderClusterBySimilarity(cluster) {
   if (cluster.length <= 2) return [...cluster];
-  const seqs = cluster.map(r => r.seqForGrouping || r.stopSequence);
+  const seqs = cluster.map((r) => r.seqForGrouping || r.stopSequence);
   const sim = seqs.map(() => Array(seqs.length).fill(0));
   for (let i = 0; i < seqs.length; i++) {
     for (let j = i + 1; j < seqs.length; j++) {
       sim[i][j] = sim[j][i] = calculateRouteSimilarity(seqs[i], seqs[j]);
     }
   }
-  let current = 0, bestTotal = -1;
+  let current = 0,
+    bestTotal = -1;
   for (let i = 0; i < sim.length; i++) {
     const total = sim[i].reduce((a, b) => a + b, 0);
-    if (total > bestTotal) { bestTotal = total; current = i; }
+    if (total > bestTotal) {
+      bestTotal = total;
+      current = i;
+    }
   }
   const used = new Set([current]);
   const order = [current];
   while (order.length < seqs.length) {
-    let next = -1, best = -1;
+    let next = -1,
+      best = -1;
     for (let j = 0; j < seqs.length; j++) {
       if (used.has(j)) continue;
       const s = sim[current][j];
-      if (s > best || (s === best && sortServices(cluster[j]?.routeId, cluster[next]?.routeId) < 0)) {
-        best = s; next = j;
+      if (
+        s > best ||
+        (s === best &&
+          sortServices(cluster[j]?.routeId, cluster[next]?.routeId) < 0)
+      ) {
+        best = s;
+        next = j;
       }
     }
     if (next === -1) {
       // Fallback: pick remaining with highest total similarity
-      let fallback = -1, totBest = -1;
+      let fallback = -1,
+        totBest = -1;
       for (let j = 0; j < seqs.length; j++) {
         if (used.has(j)) continue;
         const tot = sim[j].reduce((a, b) => a + b, 0);
-        if (tot > totBest) { totBest = tot; fallback = j; }
+        if (tot > totBest) {
+          totBest = tot;
+          fallback = j;
+        }
       }
       next = fallback;
     }
@@ -413,7 +451,7 @@ function orderClusterBySimilarity(cluster) {
     order.push(next);
     current = next;
   }
-  return order.map(i => cluster[i]);
+  return order.map((i) => cluster[i]);
 }
 
 /**
@@ -425,11 +463,13 @@ function compareRoutesByForwardPrefix(a, b) {
   const sa = (a.seqForGrouping || a.stopSequence).map(String);
   const sb = (b.seqForGrouping || b.stopSequence).map(String);
   for (let i = 1, max = Math.max(sa.length, sb.length); i < max; i++) {
-    const va = sa[i], vb = sb[i];
+    const va = sa[i],
+      vb = sb[i];
     if (va === vb) continue;
     if (va === undefined) return -1;
     if (vb === undefined) return 1;
-    const na = Number(va), nb = Number(vb);
+    const na = Number(va),
+      nb = Number(vb);
     if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
     const cmp = String(va).localeCompare(String(vb));
     if (cmp !== 0) return cmp;
@@ -464,12 +504,14 @@ function createGroupSizeComparator(stats, stopsData) {
     const sa = (a.seqForGrouping || a.stopSequence).map(String);
     const sb = (b.seqForGrouping || b.stopSequence).map(String);
     for (let i = 1, max = Math.max(sa.length, sb.length); i < max; i++) {
-      const na = sa[i] === undefined ? undefined : (stopsData[sa[i]]?.[2] || sa[i]);
-      const nb = sb[i] === undefined ? undefined : (stopsData[sb[i]]?.[2] || sb[i]);
+      const na =
+        sa[i] === undefined ? undefined : stopsData[sa[i]]?.[2] || sa[i];
+      const nb =
+        sb[i] === undefined ? undefined : stopsData[sb[i]]?.[2] || sb[i];
       if (na === nb) continue;
       const map = stats[i] || new Map();
-      const ca = na === undefined ? -1 : (map.get(na) || 0);
-      const cb = nb === undefined ? -1 : (map.get(nb) || 0);
+      const ca = na === undefined ? -1 : map.get(na) || 0;
+      const cb = nb === undefined ? -1 : map.get(nb) || 0;
       if (ca !== cb) return cb - ca;
       if (na === undefined) return 1;
       if (nb === undefined) return -1;
@@ -487,15 +529,15 @@ function createGroupSizeComparator(stats, stopsData) {
 function getOrderedStopsForCluster(cluster, currentStopId, rankingData) {
   // Get all stops from this cluster (forward direction only)
   const allStops = getAllStopsFromRoutes(cluster, currentStopId);
-  
+
   // Filter to major stops
   const majorStops = filterMajorStops(
     allStops,
     currentStopId,
     rankingData,
-    cluster
+    cluster,
   );
-  
+
   return majorStops;
 }
 
@@ -521,7 +563,7 @@ function BusDiagram() {
     // Get city from URL (supports both #12345 and #/blr/12345 formats)
     const city = getCurrentCity();
     setCurrentCity(city);
-    
+
     const dataPath = `/data/${city}`;
     const servicesJSONPath = `${dataPath}/services.min.json`;
     const stopsJSONPath = `${dataPath}/stops.min.json`;
@@ -539,21 +581,21 @@ function BusDiagram() {
         window.onhashchange = () => {
           setLoading(true);
           setError(null);
-          
+
           // Extract stop ID from hash, handling city prefix
           // Supports: #12345 or #/blr/12345
           let stopId = location.hash.slice(1);
-          
+
           // If hash contains city prefix like #/blr/12345, extract just the stop ID
           const route = getRoute();
           if (route.path && route.path !== '/') {
             // Remove city prefix if present: /blr/12345 -> 12345
             stopId = route.path.replace(/^\/[a-z]+\//i, '');
           }
-          
+
           // Clean up any remaining slashes
           stopId = stopId.replace(/^\/+|\/+$/g, '');
-          
+
           if (!stopId) {
             setError('No stop ID provided in URL');
             setLoading(false);
@@ -576,7 +618,7 @@ function BusDiagram() {
           if (routesFound.length === 0) {
             setError(
               `No routes found for stop ${stopId} (${stopName}). ` +
-              `This stop may have infrequent service or no active routes in the dataset.`
+                `This stop may have infrequent service or no active routes in the dataset.`,
             );
             setLoading(false);
             return;
@@ -590,30 +632,37 @@ function BusDiagram() {
             let currentIndex = -1;
             for (let i = 0; i < route.stopSequence.length; i++) {
               const s = route.stopSequence[i];
-              if (s === currentStopNumForGroup || String(s) === currentStopStrForGroup) {
+              if (
+                s === currentStopNumForGroup ||
+                String(s) === currentStopStrForGroup
+              ) {
                 currentIndex = i;
                 break;
               }
             }
             // Keep stop IDs in seqForGrouping (needed for other operations)
-            route.seqForGrouping = currentIndex === -1
-              ? route.stopSequence.map(String)
-              : route.stopSequence.slice(currentIndex).map(String);
+            route.seqForGrouping =
+              currentIndex === -1
+                ? route.stopSequence.map(String)
+                : route.stopSequence.slice(currentIndex).map(String);
           });
 
           // Progressive grouping: sort routes so larger common groups appear first (top)
           // Group by stop names instead of stop IDs
           const stats = buildForwardGroupStats(routesFound, stopsDataLoaded);
-          const groupComparator = createGroupSizeComparator(stats, stopsDataLoaded);
+          const groupComparator = createGroupSizeComparator(
+            stats,
+            stopsDataLoaded,
+          );
           const routesToUse = [...routesFound].sort(groupComparator);
 
           // For each route, identify its major stops (up to 10 per route, forward direction only)
           const allMajorStops = new Set();
           allMajorStops.add(stopId); // Always include current stop
-          
+
           const currentStopStr = String(stopId);
           const currentStopNum = parseInt(stopId, 10);
-          
+
           // Calculate how many routes each stop appears in
           const stopRouteCount = new Map();
           routesToUse.forEach((route) => {
@@ -627,13 +676,13 @@ function BusDiagram() {
               }
             }
             if (currentIndex !== -1) {
-              route.stopSequence.slice(currentIndex).forEach(s => {
+              route.stopSequence.slice(currentIndex).forEach((s) => {
                 const sStr = String(s);
                 stopRouteCount.set(sStr, (stopRouteCount.get(sStr) || 0) + 1);
               });
             }
           });
-          
+
           routesToUse.forEach((route) => {
             // Find current stop index in this route
             let currentIndex = -1;
@@ -644,37 +693,39 @@ function BusDiagram() {
                 break;
               }
             }
-            
+
             if (currentIndex === -1) return; // Current stop not in this route
-            
+
             // Get stops from current stop onwards (forward direction only)
-            const forwardStops = route.stopSequence.slice(currentIndex).map(String);
-            
+            const forwardStops = route.stopSequence
+              .slice(currentIndex)
+              .map(String);
+
             // Rank forward stops by their importance
             const forwardStopsRanked = forwardStops
-              .map(s => ({ stopId: s, ranking: rankingDataLoaded[s] || 0 }))
+              .map((s) => ({ stopId: s, ranking: rankingDataLoaded[s] || 0 }))
               .sort((a, b) => b.ranking - a.ranking);
-            
+
             // Always include the last stop (destination)
             if (forwardStops.length > 0) {
               allMajorStops.add(forwardStops[forwardStops.length - 1]);
             }
-            
+
             // Add up to 10 highest-ranked forward stops from this route
-            forwardStopsRanked.slice(0, TARGET_MAJOR_STOPS).forEach(s => {
+            forwardStopsRanked.slice(0, TARGET_MAJOR_STOPS).forEach((s) => {
               allMajorStops.add(s.stopId);
             });
           });
-          
+
           // Get all unique stops and order them (forward direction only)
           const allStops = getAllStopsFromRoutes(routesToUse, stopId);
-          
+
           // Keep only stops that are in allMajorStops and maintain their order
-          const majorStops = allStops.filter(s => allMajorStops.has(s));
-          
+          const majorStops = allStops.filter((s) => allMajorStops.has(s));
+
           // Store stop route counts for label positioning
           const stopCounts = {};
-          majorStops.forEach(s => {
+          majorStops.forEach((s) => {
             stopCounts[s] = stopRouteCount.get(s) || 0;
           });
 
@@ -729,7 +780,9 @@ function BusDiagram() {
 
   // Calculate required height based on number of stops
   // Each stop needs ~70px vertical space, minimum 500px
-  const stopCount = orderedStops.filter(stopId => stopId !== currentStopId).length;
+  const stopCount = orderedStops.filter(
+    (stopId) => stopId !== currentStopId,
+  ).length;
   const requiredHeight = Math.max(500, stopCount * 70 + 100);
 
   return (
@@ -747,15 +800,23 @@ function BusDiagram() {
           {/* Build map of stop positions for connecting lines */}
           {(() => {
             // Create smart position map based on route commonality (by stop name)
-            const stopPosMap = createStopPositionMap(routes, orderedStops, currentStopId, stopsData);
-            
+            const stopPosMap = createStopPositionMap(
+              routes,
+              orderedStops,
+              currentStopId,
+              stopsData,
+            );
+
             const stopPositions = {}; // stopId -> [{ routeIndex, position }]
-            
+
             routes.forEach((route, routeIndex) => {
               const routeStopsInOrder = orderedStops.filter((stopId) => {
                 if (stopId === currentStopId) return false;
                 const stopIdNum = parseInt(stopId, 10);
-                return route.stopSequence.includes(stopIdNum) || route.stopSequence.includes(stopId);
+                return (
+                  route.stopSequence.includes(stopIdNum) ||
+                  route.stopSequence.includes(stopId)
+                );
               });
 
               routeStopsInOrder.forEach((stopId) => {
@@ -769,15 +830,18 @@ function BusDiagram() {
             });
 
             // Build name-based aggregation: stopName -> [{ routeIndex, position }]
-            const namePositions = Object.keys(stopPositions).reduce((acc, stopId) => {
-              const name = stopsData[stopId]?.[2] || stopId;
-              (acc[name] ||= []).push(...stopPositions[stopId]);
-              return acc;
-            }, {});
+            const namePositions = Object.keys(stopPositions).reduce(
+              (acc, stopId) => {
+                const name = stopsData[stopId]?.[2] || stopId;
+                (acc[name] ||= []).push(...stopPositions[stopId]);
+                return acc;
+              },
+              {},
+            );
 
             // Common names are those appearing in multiple routes
             const commonNames = Object.keys(namePositions).filter(
-              name => namePositions[name].length > 1
+              (name) => namePositions[name].length > 1,
             );
 
             return (
@@ -790,7 +854,10 @@ function BusDiagram() {
                     const routeStopsInOrder = orderedStops.filter((stopId) => {
                       if (stopId === currentStopId) return false;
                       const stopIdNum = parseInt(stopId, 10);
-                      return stopSequence.includes(stopIdNum) || stopSequence.includes(stopId);
+                      return (
+                        stopSequence.includes(stopIdNum) ||
+                        stopSequence.includes(stopId)
+                      );
                     });
 
                     if (routeStopsInOrder.length === 0) return null;
@@ -806,39 +873,63 @@ function BusDiagram() {
                             if (!routeStopsInOrder.length) return null;
                             // Get position of the last stop in the route
                             const minPos = 0;
-                            
+
                             // Find the last stop that has a marker for this route (not a common stop)
                             // Common stops don't render individual markers per route, so we need to find
                             // the last non-common stop that will actually have a marker
                             let lastStopWithMarker = null;
-                            for (let i = routeStopsInOrder.length - 1; i >= 0; i--) {
+                            for (
+                              let i = routeStopsInOrder.length - 1;
+                              i >= 0;
+                              i--
+                            ) {
                               const stopId = routeStopsInOrder[i];
                               const stopName = stopsData[stopId]?.[2] || stopId;
-                              const isCommon = namePositions[stopName] && namePositions[stopName].length > 1;
-                              
+                              const isCommon =
+                                namePositions[stopName] &&
+                                namePositions[stopName].length > 1;
+
                               if (!isCommon) {
                                 lastStopWithMarker = stopId;
                                 break;
                               }
                             }
-                            
+
                             // If no non-common stop found, fall back to last stop in route
-                            const lastStopId = lastStopWithMarker || routeStopsInOrder[routeStopsInOrder.length - 1];
-                            const lastStopPos = (stopPosMap[lastStopId] || { position: 50 }).position;
-                            
-                            if (typeof lastStopPos !== 'number' || Number.isNaN(lastStopPos)) return null;
+                            const lastStopId =
+                              lastStopWithMarker ||
+                              routeStopsInOrder[routeStopsInOrder.length - 1];
+                            const lastStopPos = (
+                              stopPosMap[lastStopId] || { position: 50 }
+                            ).position;
+
+                            if (
+                              typeof lastStopPos !== 'number' ||
+                              Number.isNaN(lastStopPos)
+                            )
+                              return null;
                             const maxPos = Math.min(100, lastStopPos);
                             const width = Math.max(0, maxPos - minPos);
                             return (
-                              <div class="route-path-line" style={{ left: `${minPos}%`, width: `${width}%` }}></div>
+                              <div
+                                class="route-path-line"
+                                style={{
+                                  left: `${minPos}%`,
+                                  width: `${width}%`,
+                                }}
+                              ></div>
                             );
                           })()}
-                          
+
                           {/* Stop markers only (labels rendered separately). Hide per-route marker for common stops */}
                           {routeStopsInOrder.map((stopId) => {
-                            const posData = stopPosMap[stopId] || { position: 50 };
+                            const posData = stopPosMap[stopId] || {
+                              position: 50,
+                            };
                             const stopName = stopsData[stopId]?.[2] || stopId;
-                            const isCommon = namePositions[stopName] && namePositions[stopName].length > 1;
+                            const isCommon =
+                              namePositions[stopName] &&
+                              namePositions[stopName].length > 1;
 
                             if (isCommon) return null;
 
@@ -846,7 +937,7 @@ function BusDiagram() {
                               <div
                                 key={`stop-${routeIndex}-${stopId}`}
                                 class="route-stop"
-                                style={{ 
+                                style={{
                                   left: `${posData.position}%`,
                                 }}
                                 data-stop-id={stopId}
@@ -872,7 +963,9 @@ function BusDiagram() {
                     if (!positions || positions.length < 2) return null;
 
                     // Sort by route index and build contiguous segments
-                    const sorted = [...positions].sort((a, b) => a.routeIndex - b.routeIndex);
+                    const sorted = [...positions].sort(
+                      (a, b) => a.routeIndex - b.routeIndex,
+                    );
                     const x = sorted[0].position;
                     const segments = [];
                     let segStart = sorted[0];
@@ -890,10 +983,10 @@ function BusDiagram() {
                     segments.push([segStart, prev]);
 
                     return segments.map(([start, end], idx) => {
-                      const y1 = (start.routeIndex * 72 + 100);
-                      const y2 = (end.routeIndex * 72 + 100);
+                      const y1 = start.routeIndex * 72 + 100;
+                      const y2 = end.routeIndex * 72 + 100;
                       const top = y1 - 8; // encompass circle radius
-                      const height = (y2 - y1) + 16;
+                      const height = y2 - y1 + 16;
                       return (
                         <div
                           key={`merged-marker-${stopName}-${idx}`}
@@ -915,35 +1008,47 @@ function BusDiagram() {
                 <div class="stop-labels-layer">
                   {(() => {
                     // Build label entries using positions from markers
-                    const entries = Object.entries(namePositions).map(([name, positions]) => {
-                      const isCommon = positions.length > 1;
-                      let xPosition;
-                      
-                      if (isCommon) {
-                        // For common stops, get x position from merged-stop-marker
-                        // This matches the logic used for merged-stop-marker at line 876
-                        const sorted = [...positions].sort((a, b) => a.routeIndex - b.routeIndex);
-                        xPosition = sorted[0].position;
-                      } else {
-                        // For non-common stops, get x position from stop-marker
-                        // Find any stopId with this name to get position from stopPosMap
-                        const stopIdForName = Object.keys(stopPositions).find(
-                          stopId => (stopsData[stopId]?.[2] || stopId) === name
+                    const entries = Object.entries(namePositions)
+                      .map(([name, positions]) => {
+                        const isCommon = positions.length > 1;
+                        let xPosition;
+
+                        if (isCommon) {
+                          // For common stops, get x position from merged-stop-marker
+                          // This matches the logic used for merged-stop-marker at line 876
+                          const sorted = [...positions].sort(
+                            (a, b) => a.routeIndex - b.routeIndex,
+                          );
+                          xPosition = sorted[0].position;
+                        } else {
+                          // For non-common stops, get x position from stop-marker
+                          // Find any stopId with this name to get position from stopPosMap
+                          const stopIdForName = Object.keys(stopPositions).find(
+                            (stopId) =>
+                              (stopsData[stopId]?.[2] || stopId) === name,
+                          );
+                          const posData = stopIdForName
+                            ? stopPosMap[stopIdForName] || { position: 50 }
+                            : { position: 50 };
+                          xPosition = posData.position;
+                        }
+
+                        const avgIdx =
+                          positions.reduce((s, p) => s + p.routeIndex, 0) /
+                          positions.length;
+                        const minIdx = positions.reduce(
+                          (m, p) => Math.min(m, p.routeIndex),
+                          Infinity,
                         );
-                        const posData = stopIdForName ? (stopPosMap[stopIdForName] || { position: 50 }) : { position: 50 };
-                        xPosition = posData.position;
-                      }
-                      
-                      const avgIdx = positions.reduce((s, p) => s + p.routeIndex, 0) / positions.length;
-                      const minIdx = positions.reduce((m, p) => Math.min(m, p.routeIndex), Infinity);
-                      const useIdx = positions.length > 1 ? minIdx : avgIdx;
-                      return {
-                        stopName: name,
-                        x: xPosition,
-                        topPosition: useIdx * 72 + 48,
-                        isCommon: isCommon,
-                      };
-                    }).sort((a, b) => a.x - b.x);
+                        const useIdx = positions.length > 1 ? minIdx : avgIdx;
+                        return {
+                          stopName: name,
+                          x: xPosition,
+                          topPosition: useIdx * 72 + 48,
+                          isCommon: isCommon,
+                        };
+                      })
+                      .sort((a, b) => a.x - b.x);
 
                     return entries.map((e) => {
                       return (
@@ -952,7 +1057,7 @@ function BusDiagram() {
                           class={`shared-stop-label ${e.isCommon ? 'common' : ''}`}
                           style={{
                             left: `${e.x}%`,
-                            top: `${e.topPosition}px`
+                            top: `${e.topPosition}px`,
                           }}
                           data-stop-name={e.stopName}
                         >
@@ -979,4 +1084,3 @@ function BusDiagram() {
 
 const $diagram = document.getElementById('diagram');
 render(<BusDiagram />, $diagram);
-

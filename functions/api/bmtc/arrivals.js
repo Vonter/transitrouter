@@ -149,14 +149,14 @@ async function getRouteIdForService(routeNo, context) {
   try {
     const baseUrl = new URL(context.request.url);
     const routesApiUrl = `${baseUrl.origin}/api/bmtc/routes?routetext=${encodeURIComponent(routeNo)}`;
-    
+
     const response = await fetch(routesApiUrl);
     if (!response.ok) return null;
-    
+
     const data = await response.json();
     if (data.routes && data.routes.length > 0) {
       const exactMatch = data.routes.find(
-        (r) => r.routeNo.toLowerCase() === routeNo.toLowerCase()
+        (r) => r.routeNo.toLowerCase() === routeNo.toLowerCase(),
       );
       return exactMatch ? exactMatch.routeId : null;
     }
@@ -194,10 +194,10 @@ async function fetchVehicleDataForRoute(routeId) {
     if (!bmtcResponse.ok) return null;
 
     const result = await bmtcResponse.json();
-    
+
     // Extract vehicles from both directions
     const vehicles = new Map();
-    
+
     // Process up direction
     if (result.up?.data) {
       result.up.data.forEach((station) => {
@@ -219,7 +219,7 @@ async function fetchVehicleDataForRoute(routeId) {
         }
       });
     }
-    
+
     // Process down direction
     if (result.down?.data) {
       result.down.data.forEach((station) => {
@@ -244,7 +244,7 @@ async function fetchVehicleDataForRoute(routeId) {
         }
       });
     }
-    
+
     return vehicles;
   } catch (error) {
     console.error(`Error fetching vehicle data for route ${routeId}:`, error);
@@ -265,11 +265,11 @@ async function convertBMTCToServices(data, context) {
   // First pass: collect all unique route numbers and vehicles
   const uniqueRoutes = new Set();
   const vehicleIds = new Map(); // Map vehicle_id to trip info
-  
+
   data.forEach((trip) => {
     const routeNo = trip.routeno;
     uniqueRoutes.add(routeNo);
-    
+
     if (trip.vehicleid) {
       vehicleIds.set(trip.vehicleid, {
         routeNo,
@@ -283,7 +283,7 @@ async function convertBMTCToServices(data, context) {
     const routeId = await getRouteIdForService(routeNo, context);
     return { routeNo, routeId };
   });
-  
+
   const routeIds = await Promise.all(routeIdPromises);
   const routeIdMap = new Map();
   routeIds.forEach(({ routeNo, routeId }) => {
@@ -291,11 +291,13 @@ async function convertBMTCToServices(data, context) {
   });
 
   // Fetch vehicle data for all routes in parallel
-  const vehiclePromises = Array.from(routeIdMap.entries()).map(async ([routeNo, routeId]) => {
-    const vehicles = await fetchVehicleDataForRoute(routeId);
-    return { routeNo, vehicles };
-  });
-  
+  const vehiclePromises = Array.from(routeIdMap.entries()).map(
+    async ([routeNo, routeId]) => {
+      const vehicles = await fetchVehicleDataForRoute(routeId);
+      return { routeNo, vehicles };
+    },
+  );
+
   const vehicleDataResults = await Promise.all(vehiclePromises);
   const allVehicles = new Map();
   vehicleDataResults.forEach(({ routeNo, vehicles }) => {
@@ -336,14 +338,14 @@ async function convertBMTCToServices(data, context) {
     }
 
     const service = servicesMap.get(key);
-    
+
     // Get vehicle location if available
     let vehicleLocation = null;
     if (trip.vehicleid && allVehicles.has(trip.vehicleid)) {
       const vehicle = allVehicles.get(trip.vehicleid);
       vehicleLocation = vehicle.location;
     }
-    
+
     service.trips.push({
       duration_ms,
       type: 'SD', // Default to single deck

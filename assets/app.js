@@ -1169,7 +1169,7 @@ const App = () => {
                       right: 80,
                       bottom: 60 + 20 + floatPill.current.offsetHeight, // height of search bar + float pill
                       left: 80,
-                    }
+                    },
             });
           });
 
@@ -1481,7 +1481,7 @@ const App = () => {
       const routes = servicesData[number];
       servicesDataArr.push({
         number,
-        name: routes.name
+        name: routes.name,
       });
 
       // routes is now an object with destinations as keys, values are arrays of route variations
