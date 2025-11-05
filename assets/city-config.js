@@ -8,6 +8,7 @@ export const AVAILABLE_CITIES = [
   'kochi',
   'pune',
   'railways',
+  'greyhound',
 ];
 
 export const CITY_CONFIGS = {
@@ -101,6 +102,18 @@ export const CITY_CONFIGS = {
         upperLat: 45,
         lowerLong: 70,
         upperLong: 100,
+      },
+    },
+  },
+  greyhound: {
+    city: {
+      name: 'Greyhound',
+      code: 'greyhound',
+      bounds: {
+        lowerLat: 24.9493,
+        upperLat: 49.5904,
+        lowerLong: -125.0011,
+        upperLong: -66.9326,
       },
     },
   },

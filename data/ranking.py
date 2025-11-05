@@ -12,8 +12,23 @@ DEFAULT_MIN_TRIPS = 2
 
 def read_gtfs_file(zip_path: str, filename: str) -> pl.DataFrame:
     """Read a GTFS file from the zip archive into a polars DataFrame."""
+    # Ensure stable types across GTFS files: IDs as strings; decimals as Float64.
+    id_columns = [
+        'route_id', 'trip_id', 'stop_id', 'shape_id', 'service_id',
+        'agency_id', 'block_id', 'fare_id', 'zone_id', 'parent_station'
+    ]
+    float_columns = [
+        'shape_dist_traveled', 'stop_lat', 'stop_lon', 'shape_pt_lat', 'shape_pt_lon'
+    ]
+    schema_overrides = {col: pl.Utf8 for col in id_columns}
+    schema_overrides.update({col: pl.Float64 for col in float_columns})
+
     with zipfile.ZipFile(zip_path) as z:
-        return pl.read_csv(z.open(filename))
+        return pl.read_csv(
+            z.open(filename),
+            schema_overrides=schema_overrides,
+            infer_schema_length=10000
+        )
 
 
 def get_valid_routes(trips_df: pl.DataFrame, routes_df: pl.DataFrame, min_trips: int) -> Set[str]:
@@ -56,14 +71,21 @@ def get_valid_routes(trips_df: pl.DataFrame, routes_df: pl.DataFrame, min_trips:
     ).fill_null(0)
     
     # Return routes with at least min_trips in any direction
-    valid_routes = set()
-    for row in trip_counts.iter_rows(named=True):
-        route_id = row['route_id']
-        # Check all direction columns (excluding route_id)
-        counts = [v for k, v in row.items() if k != 'route_id']
-        if any(c >= min_trips for c in counts):
-            valid_routes.add(route_id)
-    
+    def compute_valid(min_required: int) -> Set[str]:
+        valid = set()
+        for row in trip_counts.iter_rows(named=True):
+            route_id = row['route_id']
+            # Check all direction columns (excluding route_id)
+            counts = [v for k, v in row.items() if k != 'route_id']
+            if any(c >= min_required for c in counts):
+                valid.add(route_id)
+        return valid
+
+    valid_routes = compute_valid(min_trips)
+    # Fallback for sparse datasets: if nothing qualifies, relax to 1
+    if not valid_routes and min_trips > 1:
+        valid_routes = compute_valid(1)
+
     return valid_routes
 
 

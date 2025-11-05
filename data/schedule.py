@@ -12,8 +12,23 @@ DEFAULT_MIN_TRIPS = 2
 
 def read_gtfs_file(zip_path: str, filename: str) -> pl.DataFrame:
     """Read a GTFS file from the zip archive into a polars DataFrame."""
+    # Ensure stable types across GTFS files: IDs as strings; decimals as Float64.
+    id_columns = [
+        'route_id', 'trip_id', 'stop_id', 'shape_id', 'service_id',
+        'agency_id', 'block_id', 'fare_id', 'zone_id', 'parent_station'
+    ]
+    float_columns = [
+        'shape_dist_traveled', 'stop_lat', 'stop_lon', 'shape_pt_lat', 'shape_pt_lon'
+    ]
+    schema_overrides = {col: pl.Utf8 for col in id_columns}
+    schema_overrides.update({col: pl.Float64 for col in float_columns})
+
     with zipfile.ZipFile(zip_path) as z:
-        return pl.read_csv(z.open(filename))
+        return pl.read_csv(
+            z.open(filename),
+            schema_overrides=schema_overrides,
+            infer_schema_length=10000
+        )
 
 
 def has_direction_id(trips_df: pl.DataFrame) -> bool:
@@ -154,10 +169,21 @@ def process_schedules(gtfs_path: str, output_dir: str, min_trips: int = DEFAULT_
     # Filter routes by minimum trips
     print("Filtering routes by minimum trips...")
     trip_counts = count_trips_per_route(trips_df)
-    valid_routes = {
-        route_id for route_id, counts in trip_counts.items()
-        if counts["0"] >= min_trips or counts["1"] >= min_trips
-    }
+    
+    # Return routes with at least min_trips in any direction
+    def compute_valid(min_required: int) -> set:
+        valid = set()
+        for route_id, counts in trip_counts.items():
+            # Check all direction counts
+            direction_counts = [counts.get("0", 0), counts.get("1", 0)]
+            if any(c >= min_required for c in direction_counts):
+                valid.add(route_id)
+        return valid
+    
+    valid_routes = compute_valid(min_trips)
+    # Fallback for sparse datasets: if nothing qualifies, relax to 1
+    if not valid_routes and min_trips > 1:
+        valid_routes = compute_valid(1)
     
     print(f"Found {len(valid_routes)} valid routes out of {len(routes_df)} total routes")
     

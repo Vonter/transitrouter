@@ -17,3 +17,4 @@ data/3/route-lines
 data/*.zip
 data/**/schedule
 data/**/*.zip
+data/parse.log

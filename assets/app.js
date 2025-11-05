@@ -1121,18 +1121,21 @@ const App = () => {
           allStopsCoords.push(coordinates);
           const otherStops = new Set();
           routes.forEach((route) => {
-            const routeIndex = route.lastIndexOf('-');
-            const routeService = route.substring(0, routeIndex);
-            const serviceIndex = routeService.lastIndexOf('-', routeIndex + 1);
-            const service = routeService.substring(0, serviceIndex);
-            const directionIndex = route.lastIndexOf('-');
-            const direction = route.substring(serviceIndex + 1, directionIndex);
-            const stops = servicesData[service][direction];
-            stops.flat().forEach((stopId) => {
-              if (stopId !== stop) {
-                otherStops.add(stopId);
-              }
-            });
+            const service = route.split('|')[0];
+            const destination = route.split('|')[1];
+            const variantIdx = route.split('|')[2];
+            if (!service || !destination || !variantIdx) {
+              console.warn(`Failed to parse route key: ${route}`);
+              return;
+            }
+            const stops = servicesData[service]?.[destination]?.[variantIdx];
+            if (stops) {
+              stops.forEach((stopId) => {
+                if (stopId !== stop) {
+                  otherStops.add(stopId);
+                }
+              });
+            }
           });
           [...otherStops].forEach((stopId) => {
             if (stopsData[stopId] && stopsData[stopId].coordinates) {
@@ -1166,7 +1169,7 @@ const App = () => {
                       right: 80,
                       bottom: 60 + 20 + floatPill.current.offsetHeight, // height of search bar + float pill
                       left: 80,
-                    },
+                    }
             });
           });
 
@@ -1194,23 +1197,17 @@ const App = () => {
           requestAnimationFrame(() => {
             const serviceGeometries = routes
               .map((route) => {
-                const routeIndex = route.lastIndexOf('-');
-                const routeService = route.substring(0, routeIndex);
-                const serviceIndex = routeService.lastIndexOf(
-                  '-',
-                  routeIndex + 1,
-                );
-                const service = routeService.substring(0, serviceIndex);
-                const directionIndex = route.lastIndexOf('-');
-                const direction = route.substring(
-                  directionIndex + 1,
-                  route.length,
-                );
+                const service = route.split('|')[0];
+                const variantIdx = route.split('|')[2];
+                if (!service || !variantIdx) {
+                  console.warn(`Failed to parse route key: ${route}`);
+                  return null;
+                }
                 const line =
-                  routesData[service] && routesData[service][direction];
+                  routesData[service] && routesData[service][variantIdx];
                 if (!line) {
                   console.warn(
-                    `Route data not found for service: ${service}, direction: ${direction}`,
+                    `Route data not found for service: ${service}, variantIdx: ${variantIdx}`,
                   );
                   return null;
                 }
@@ -1277,15 +1274,14 @@ const App = () => {
 
           const endServicesStops = endStop.routes
             .map((route) => {
-              // Parse route key format: serviceNumber-destination-variantIdx
-              const lastDashIndex = route.lastIndexOf('-');
-              const variantIdx = parseInt(route.substring(lastDashIndex + 1));
-              const serviceAndDest = route.substring(0, lastDashIndex);
-              const secondLastDashIndex = serviceAndDest.lastIndexOf('-');
-              const service = serviceAndDest.substring(0, secondLastDashIndex);
-              const destination = serviceAndDest.substring(
-                secondLastDashIndex + 1,
-              );
+              // Parse route key format: serviceNumber|destination|variantIdx
+              const service = route.split('|')[0];
+              const destination = route.split('|')[1];
+              const variantIdx = route.split('|')[2];
+              if (!service || !destination || !variantIdx) {
+                console.warn(`Failed to parse route key: ${route}`);
+                return null;
+              }
 
               let serviceStops =
                 servicesData[service]?.[destination]?.[variantIdx];
@@ -1300,15 +1296,14 @@ const App = () => {
             .filter(Boolean);
 
           startStop.routes.forEach((route) => {
-            // Parse route key format: serviceNumber-destination-variantIdx
-            const lastDashIndex = route.lastIndexOf('-');
-            const variantIdx = parseInt(route.substring(lastDashIndex + 1));
-            const serviceAndDest = route.substring(0, lastDashIndex);
-            const secondLastDashIndex = serviceAndDest.lastIndexOf('-');
-            const service = serviceAndDest.substring(0, secondLastDashIndex);
-            const destination = serviceAndDest.substring(
-              secondLastDashIndex + 1,
-            );
+            // Parse route key format: serviceNumber|destination|variantIdx
+            const service = route.split('|')[0];
+            const destination = route.split('|')[1];
+            const variantIdx = route.split('|')[2];
+            if (!service || !destination || !variantIdx) {
+              console.warn(`Failed to parse route key: ${route}`);
+              return;
+            }
 
             let serviceStops =
               servicesData[service]?.[destination]?.[variantIdx];
@@ -1521,7 +1516,7 @@ const App = () => {
               const remainingStops = route.length - stopIdx - 1;
 
               // Store route info with variant index
-              const routeKey = number + '-' + destination + '-' + variantIdx;
+              const routeKey = number + '|' + destination + '|' + variantIdx;
               if (!stopsData[stop].routes.includes(routeKey)) {
                 stopsData[stop].routes.push(routeKey);
                 stopsData[stop].destinationGroups[number][
