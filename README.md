@@ -32,20 +32,20 @@ Refer to [DATA.md](DATA.md) for more details on the data sources and processing 
 
 ## TODO
 
-Base Functionality:
+- Base Functionality:
     - `bus-diagram/` page for visualizing major stops of major routes passing through the selected stop
-User Experience
+- User Experience
     - Navigation flow
     - Typography/styling of elements
-Extend Support:
+- Extend Support:
     - Add OSM to rail.json script
     - CI Pipeline to process all GTFS
     - More cities
     - Cleanup unused dependencies and components
-Release Collaterals:
+- Release Collaterals:
     - Update styling for OpenFreeMap tiles to resemble original PMTiles
     - New custom assets for TransitRouter
-Future Goals:
+- Future Goals:
     - `bus-pois/` page for visualizing POIs accessible by routes passing through the selected stop (POIs by category, distance from stop, etc.)
     - Interchange stops support
     - Multi-operator support
