@@ -231,6 +231,7 @@ const App = () => {
   const [intersectStops, setIntersectStops] = useState(0);
   const [routeServices, setRouteServices] = useState([]);
   const [routeVehicles, setRouteVehicles] = useState([]);
+  const [followedVehicleId, setFollowedVehicleId] = useState(null);
 
   const [showBetweenPopover, setShowBetweenPopover] = useState(false);
   const [betweenStartStop, setBetweenStartStop] = useState(null);
@@ -2908,6 +2909,26 @@ const App = () => {
     }
   }, [mapLoaded, servicesData]);
 
+  // Follow selected vehicle on the map
+  useEffect(() => {
+    if (!mapLoaded || !followedVehicleId || !routeVehicles.length) return;
+
+    const vehicle = routeVehicles.find(
+      (v) => v.vehicleId === followedVehicleId,
+    );
+    if (!vehicle || !vehicle.location) return;
+
+    const { lat, lng } = vehicle.location;
+    if (typeof lat !== 'number' || typeof lng !== 'number') return;
+
+    // Zoom to and follow the vehicle
+    map.easeTo({
+      center: [lng, lat],
+      zoom: Math.max(map.getZoom(), 16),
+      duration: 800,
+    });
+  }, [followedVehicleId, routeVehicles, mapLoaded]);
+
   const showServicesFloatPill =
     route.page === 'service' && servicesData && routeServices.length > 1;
   const showPassingRoutesFloatPill =
@@ -3198,7 +3219,7 @@ const App = () => {
                 })}{' '}
                 ∙{' '}
                 <a
-                  href={`/bus-first-last/#${stopPopoverData.number}`}
+                  href={`/first-last/#${stopPopoverData.number}`}
                   target="_blank"
                 >
                   {t('stop.firstLastBus')}{' '}
@@ -3223,7 +3244,7 @@ const App = () => {
             <div class="popover-footer">
               <div class="popover-buttons alt-hide">
                 <a
-                  href={`/bus-arrival/#${route.cityPrefix}/${stopPopoverData.number}`}
+                  href={`/arrival/#${route.cityPrefix}/${stopPopoverData.number}`}
                   target="_blank"
                   onClick={openBusArrival}
                   class="popover-button primary"
@@ -3339,6 +3360,9 @@ const App = () => {
                     vehicles={routeVehicles}
                     onStopClick={zoomToStop}
                     onStopClickAgain={_showStopPopover}
+                    onVehicleClick={(vehicleId) =>
+                      setFollowedVehicleId(vehicleId)
+                    }
                   />
                   <div class="callout info">
                     <span class="legend-opposite" />{' '}
@@ -3456,7 +3480,7 @@ const App = () => {
             &times;
           </a>,
           <a
-            href={`/bus-arrival/#${route.cityPrefix}/${showArrivalsPopover.number}`}
+            href={`/arrival/#${route.cityPrefix}/${showArrivalsPopover.number}`}
             target="_blank"
             onClick={(e) => {
               openBusArrival(e, true);

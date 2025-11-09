@@ -68,3 +68,20 @@ registerRoute(
     ],
   }),
 );
+
+registerRoute(
+  ({ url }) => url.hostname === 'tiles.openfreemap.org',
+  new CacheFirst({
+    cacheName: 'tiles',
+    plugins: [
+      new ExpirationPlugin({
+        maxEntries: 2000,
+        maxAgeSeconds: 30 * 24 * 60 * 60, // 30 Days
+        purgeOnQuotaError: true,
+      }),
+      new CacheableResponsePlugin({
+        statuses: [0, 200],
+      }),
+    ],
+  }),
+);

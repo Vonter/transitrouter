@@ -1,71 +1,29 @@
 import { getApiUrl } from '../city-config.js';
 
 /**
- * Search for a route by text to get its route ID
- * @param {string} routesApiPath - The routes API path from city config
- * @param {string} routeText - The route/service number to search for (e.g., "KIA-14")
- * @returns {Promise} Promise resolving to route search results
- */
-export async function searchRoute(routesApiPath, routeText) {
-  if (!routesApiPath || !routeText) {
-    return null;
-  }
-
-  try {
-    const url = `${getApiUrl(routesApiPath)}?routetext=${encodeURIComponent(routeText)}`;
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      throw new Error(`Failed to search route: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Error searching route:', error);
-    return null;
-  }
-}
-
-/**
- * Get the route ID for a specific service number
- * @param {string} routesApiPath - The routes API path from city config
- * @param {string} serviceNumber - The service number (e.g., "KIA-14")
- * @returns {Promise<number|null>} Promise resolving to the route ID or null if not found
- */
-export async function getRouteId(routesApiPath, serviceNumber) {
-  const searchResults = await searchRoute(routesApiPath, serviceNumber);
-
-  if (
-    !searchResults ||
-    !searchResults.routes ||
-    searchResults.routes.length === 0
-  ) {
-    return null;
-  }
-
-  // Find exact match (case-insensitive)
-  const exactMatch = searchResults.routes.find(
-    (route) => route.routeNo.toLowerCase() === serviceNumber.toLowerCase(),
-  );
-
-  return exactMatch ? exactMatch.routeId : null;
-}
-
-/**
- * Utility to fetch live vehicle tracking data from the BMTC vehicles API
+ * Fetch live vehicles data from the vehicles API
+ * Accepts either route name (routetext) or route ID
  * @param {string} apiPath - The API path from city config
- * @param {number} routeId - The BMTC route ID
+ * @param {string|number} routeIdentifier - The route name (e.g., "KIA-14") or route ID
  * @param {number} serviceTypeId - The service type ID (default: 0 for all types)
- * @returns {Promise} Promise resolving to vehicle data
+ * @returns {Promise} Promise resolving to vehicle data with vehicles array and geoJSON
  */
-export async function fetchVehicles(apiPath, routeId, serviceTypeId = 0) {
-  if (!apiPath || !routeId) {
+export async function fetchVehicles(
+  apiPath,
+  routeIdentifier,
+  serviceTypeId = 0,
+) {
+  if (!apiPath || !routeIdentifier) {
     return null;
   }
 
   try {
-    const url = `${getApiUrl(apiPath)}?routeid=${routeId}&servicetypeid=${serviceTypeId}`;
+    // Determine if routeIdentifier is a number (route ID) or string (route name)
+    const isRouteId = typeof routeIdentifier === 'number';
+    const paramName = isRouteId ? 'routeid' : 'routetext';
+    const paramValue = encodeURIComponent(routeIdentifier);
+
+    const url = `${getApiUrl(apiPath)}?${paramName}=${paramValue}&servicetypeid=${serviceTypeId}`;
     const response = await fetch(url);
 
     if (!response.ok) {
@@ -81,69 +39,53 @@ export async function fetchVehicles(apiPath, routeId, serviceTypeId = 0) {
 }
 
 /**
- * Extract all vehicles from the API response (both directions)
- * @param {Object} vehicleData - The API response containing up and down direction data
- * @returns {Array} Array of vehicle objects with normalized structure, deduplicated by vehicle number
+ * Reconstruct vehicle location from GeoJSON feature
+ * Location is stored in GeoJSON coordinates to reduce redundancy
+ * @param {Object} geoJSON - GeoJSON FeatureCollection
+ * @param {string} vehicleId - Vehicle ID to look up
+ * @returns {Object|null} Location object with lat and lng, or null if not found
  */
-export function extractVehicles(vehicleData) {
-  if (!vehicleData || (!vehicleData.up && !vehicleData.down)) {
-    console.log('No vehicle data to extract');
-    return [];
+export function getVehicleLocationFromGeoJSON(geoJSON, vehicleId) {
+  if (!geoJSON || !geoJSON.features || !vehicleId) {
+    return null;
   }
 
-  const vehicles = [];
-  const seenVehicleNumbers = new Set();
+  const feature = geoJSON.features.find(
+    (f) => f.id === vehicleId || f.properties?.vehicleId === vehicleId,
+  );
 
-  // Process up direction
-  if (vehicleData.up && vehicleData.up.length > 0) {
-    vehicleData.up.forEach((station) => {
-      if (station.vehicles && station.vehicles.length > 0) {
-        station.vehicles.forEach((vehicle) => {
-          // Skip duplicate vehicle numbers
-          if (seenVehicleNumbers.has(vehicle.vehicleNumber)) {
-            return;
-          }
-
-          vehicles.push({
-            ...vehicle,
-            direction: 'up',
-            stationName: station.stationName,
-            routeNo: station.routeNo,
-          });
-          seenVehicleNumbers.add(vehicle.vehicleNumber);
-        });
-      }
-    });
+  if (!feature || !feature.geometry || !feature.geometry.coordinates) {
+    return null;
   }
 
-  // Process down direction
-  if (vehicleData.down && vehicleData.down.length > 0) {
-    vehicleData.down.forEach((station) => {
-      if (station.vehicles && station.vehicles.length > 0) {
-        station.vehicles.forEach((vehicle) => {
-          // Skip duplicate vehicle numbers
-          if (seenVehicleNumbers.has(vehicle.vehicleNumber)) {
-            return;
-          }
+  // GeoJSON coordinates are [longitude, latitude]
+  const [lng, lat] = feature.geometry.coordinates;
+  return { lat, lng };
+}
 
-          vehicles.push({
-            ...vehicle,
-            direction: 'down',
-            stationName: station.stationName,
-            routeNo: station.routeNo,
-          });
-          seenVehicleNumbers.add(vehicle.vehicleNumber);
-        });
-      }
-    });
+/**
+ * Enrich vehicles array with location data from GeoJSON
+ * Useful when location is needed but was removed to reduce redundancy
+ * @param {Array} vehicles - Array of vehicle objects (without location)
+ * @param {Object} geoJSON - GeoJSON FeatureCollection with vehicle locations
+ * @returns {Array} Vehicles array with location added
+ */
+export function enrichVehiclesWithLocation(vehicles, geoJSON) {
+  if (!vehicles || !geoJSON) {
+    return vehicles || [];
   }
 
-  return vehicles;
+  return vehicles.map((vehicle) => {
+    const location = getVehicleLocationFromGeoJSON(geoJSON, vehicle.vehicleId);
+    return location ? { ...vehicle, location } : vehicle;
+  });
 }
 
 /**
  * Convert vehicles to GeoJSON features for map display
- * @param {Array} vehicles - Array of vehicle objects
+ * Only includes minimal properties needed for map rendering
+ * Full vehicle data is available in the vehicles array, linked by vehicleId
+ * @param {Array} vehicles - Array of vehicle objects with location
  * @returns {Object} GeoJSON FeatureCollection
  */
 export function vehiclesToGeoJSON(vehicles) {
@@ -162,17 +104,10 @@ export function vehiclesToGeoJSON(vehicles) {
         typeof vehicle.location.lat !== 'number' ||
         typeof vehicle.location.lng !== 'number'
       ) {
-        console.warn(
-          `Vehicle ${vehicle.vehicleNumber} has invalid location data:`,
-          vehicle.location,
-        );
         return false;
       }
       // Filter out invalid coordinates (0,0 or null island)
       if (vehicle.location.lat === 0 && vehicle.location.lng === 0) {
-        console.warn(
-          `Vehicle ${vehicle.vehicleNumber} has null island coordinates`,
-        );
         return false;
       }
       return true;
@@ -181,14 +116,9 @@ export function vehiclesToGeoJSON(vehicles) {
       type: 'Feature',
       id: vehicle.vehicleId || `vehicle-${index}`,
       properties: {
-        vehicleNumber: vehicle.vehicleNumber,
         vehicleId: vehicle.vehicleId,
-        routeNo: vehicle.routeNo,
-        direction: vehicle.direction,
-        heading: vehicle.heading,
-        serviceType: vehicle.serviceType,
-        lastRefresh: vehicle.lastRefresh,
-        lastRefreshMs: vehicle.lastRefreshMs,
+        vehicleNumber: vehicle.vehicleNumber, // Needed for text label on map
+        heading: vehicle.heading, // Needed for icon rotation
       },
       geometry: {
         type: 'Point',
@@ -203,7 +133,7 @@ export function vehiclesToGeoJSON(vehicles) {
 }
 
 /**
- * Create a vehicle tracker instance for managing live vehicle tracking
+ * Create a vehicle tracker instance for managing live vehicles
  * Supports tracking multiple services simultaneously
  * @param {Object} config - Configuration object
  * @param {Object} config.cityConfig - City configuration with API paths
@@ -220,16 +150,15 @@ export function createVehicleTracker({
 }) {
   let intervalId = null;
   const trackedServices = new Set(); // Track multiple services
-  const serviceRouteIds = new Map(); // Map service numbers to route IDs
   const currentVehicles = new Map(); // Map service number to vehicles array
-  const routeIdCache = new Map(); // Cache route IDs to avoid repeated searches
+  const routeIdCache = new Map(); // Cache route IDs: service number -> route ID
   const subscribers = new Set(); // Subscribers for vehicle updates
 
   /**
-   * Update vehicle positions for all tracked services
+   * Update vehicles for all tracked services
    */
   async function updatePositions() {
-    const vehicleTracking = cityConfig?.liveVehicleTracking;
+    const vehicleTracking = cityConfig?.liveVehicles;
 
     // Early return if vehicle tracking is disabled or no services are tracked
     if (!vehicleTracking?.enabled || trackedServices.size === 0) {
@@ -240,29 +169,28 @@ export function createVehicleTracker({
       // Fetch vehicles for all tracked services in parallel
       const fetchPromises = Array.from(trackedServices).map(
         async (serviceNumber) => {
-          const routeId = serviceRouteIds.get(serviceNumber);
-          if (!routeId) {
-            console.warn(`No route ID for service: ${serviceNumber}`);
-            return { serviceNumber, vehicles: [] };
-          }
-
           try {
-            const vehicleData = await fetchVehicles(
+            // Check cache for route ID first
+            const cachedRouteId = routeIdCache.get(serviceNumber);
+            const routeIdentifier = cachedRouteId || serviceNumber;
+
+            const response = await fetchVehicles(
               vehicleTracking.apiPath,
-              routeId,
+              routeIdentifier,
             );
 
-            if (vehicleData) {
-              const vehicles = extractVehicles(vehicleData);
-              return { serviceNumber, vehicles };
+            // Cache the route ID from the response if available
+            if (response && response.routeId) {
+              routeIdCache.set(serviceNumber, response.routeId);
             }
-            return { serviceNumber, vehicles: [] };
+
+            return { serviceNumber, response };
           } catch (error) {
             console.error(
               `Error fetching vehicles for service ${serviceNumber}:`,
               error,
             );
-            return { serviceNumber, vehicles: [] };
+            return { serviceNumber, response: null };
           }
         },
       );
@@ -271,16 +199,30 @@ export function createVehicleTracker({
 
       // Combine all vehicles from all services
       const allVehicles = [];
-      results.forEach(({ serviceNumber, vehicles }) => {
-        currentVehicles.set(serviceNumber, vehicles);
-        allVehicles.push(...vehicles);
+
+      results.forEach(({ serviceNumber, response }) => {
+        if (response) {
+          if (response.vehicles) {
+            // Check if vehicles have location data
+            const vehiclesWithLocation = response.vehicles.filter(
+              (v) =>
+                v.location &&
+                typeof v.location.lat === 'number' &&
+                typeof v.location.lng === 'number',
+            );
+
+            currentVehicles.set(serviceNumber, response.vehicles);
+            allVehicles.push(...response.vehicles);
+          }
+        }
       });
 
-      const geoJSON = vehiclesToGeoJSON(allVehicles);
+      // Generate GeoJSON from vehicles on the client side
+      const combinedGeoJSON = vehiclesToGeoJSON(allVehicles);
 
       // Update map if source exists
       if (map && map.getSource('buses-service')) {
-        map.getSource('buses-service').setData(geoJSON);
+        map.getSource('buses-service').setData(combinedGeoJSON);
       }
 
       // Notify subscribers
@@ -304,10 +246,10 @@ export function createVehicleTracker({
       return false;
     }
 
-    const vehicleTracking = cityConfig?.liveVehicleTracking;
+    const vehicleTracking = cityConfig?.liveVehicles;
 
-    if (!vehicleTracking?.enabled || !vehicleTracking.routesApiPath) {
-      console.log('Vehicle tracking not enabled or routes API not configured');
+    if (!vehicleTracking?.enabled) {
+      console.log('Vehicle tracking not enabled');
       return false;
     }
 
@@ -320,46 +262,15 @@ export function createVehicleTracker({
 
       // Clear existing tracked services
       trackedServices.clear();
-      serviceRouteIds.clear();
       currentVehicles.clear();
 
-      // Fetch route IDs for all services in parallel
-      const routeIdPromises = serviceNumbers.map(async (serviceNumber) => {
-        // Check cache first
-        let routeId = routeIdCache.get(serviceNumber);
-
-        if (!routeId) {
-          // Route ID not in cache, fetch it
-          routeId = await getRouteId(
-            vehicleTracking.routesApiPath,
-            serviceNumber,
-          );
-
-          if (routeId) {
-            // Cache the route ID for future use
-            routeIdCache.set(serviceNumber, routeId);
-          } else {
-            console.warn(`No route ID found for service: ${serviceNumber}`);
-            return { serviceNumber, routeId: null };
-          }
-        }
-
-        return { serviceNumber, routeId };
-      });
-
-      const routeIdResults = await Promise.all(routeIdPromises);
-
-      // Add services with valid route IDs to tracking
-      routeIdResults.forEach(({ serviceNumber, routeId }) => {
-        if (routeId) {
-          trackedServices.add(serviceNumber);
-          serviceRouteIds.set(serviceNumber, routeId);
-        }
+      // Add services to tracking
+      serviceNumbers.forEach((serviceNumber) => {
+        trackedServices.add(serviceNumber);
       });
 
       if (trackedServices.size === 0) {
         console.warn('No valid services to track');
-        // Ensure everything is stopped if no valid services found
         stop();
         return false;
       }
@@ -400,7 +311,6 @@ export function createVehicleTracker({
     }
 
     trackedServices.clear();
-    serviceRouteIds.clear();
     currentVehicles.clear();
 
     // Clear vehicles from map
@@ -423,7 +333,6 @@ export function createVehicleTracker({
     return {
       isTracking: intervalId !== null,
       serviceNumbers: Array.from(trackedServices),
-      routeIds: Array.from(serviceRouteIds.values()),
     };
   }
 

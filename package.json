@@ -7,9 +7,9 @@
   "scripts": {
     "gtfs": "python data/process.py",
     "prebuild": "cpy data/* dist && cpy visualization/data/* dist && rm -Rf dist/data/*/*.zip dist/data/*/schedule",
-    "build": "parcel build index.html bus-arrival/index.html bus-first-last/index.html bus-diagram/index.html visualization/index.html --no-cache --no-scope-hoist",
+    "build": "parcel build index.html arrival/index.html first-last/index.html diagram/index.html visualization/index.html --no-cache --no-scope-hoist",
     "postbuild": "cpy favicon.ico dist && cpy well-known/* dist/.well-known && cpy functions/* dist && node tasks/generateHeaders",
-    "start": "parcel serve index.html bus-arrival/index.html bus-first-last/index.html bus-diagram/index.html visualization/index.html -p 8888",
+    "start": "parcel serve index.html arrival/index.html first-last/index.html diagram/index.html visualization/index.html -p 8888",
     "prod": "npx serve dist/",
     "test:e2e": "playwright test"
   },
@@ -23,6 +23,7 @@
     "@protomaps/basemaps": "~5.4.1",
     "cheap-ruler": "~4.0.0",
     "date-fns": "~4.1.0",
+    "d3": "~7.9.0",
     "fuse.js": "~7.1.0",
     "i18next": "~25.2.1",
     "i18next-browser-languagedetector": "~8.2.0",

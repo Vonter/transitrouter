@@ -56,14 +56,215 @@ h1 b {
 .diagram-header {
   margin: 10px;
   padding-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+.diagram-controls {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-label {
+  font-size: 0.9em;
+  color: #666;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.control-select,
+.control-input {
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  background: white;
+  font-size: 0.9em;
+  font-weight: 500;
+  color: #1a1a1a;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 70px;
+  width: 80px;
+  text-align: center;
+}
+
+.control-select:hover,
+.control-input:hover {
+  border-color: rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+.control-select:focus,
+.control-input:focus {
+  outline: none;
+  border-color: #1a1a1a;
+  box-shadow: 0 0 0 3px rgba(26, 26, 26, 0.1);
+}
+
+.control-input {
+  cursor: text;
+}
+
+.control-input::-webkit-inner-spin-button,
+.control-input::-webkit-outer-spin-button {
+  opacity: 1;
+  cursor: pointer;
+}
+
+.export-button {
+  padding: 6px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  background: white;
+  font-size: 0.9em;
+  font-weight: 500;
+  color: #1a1a1a;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.export-button:hover {
+  border-color: rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+  background: #f5f5f5;
+}
+
+.export-button:focus {
+  outline: none;
+  border-color: #1a1a1a;
+  box-shadow: 0 0 0 3px rgba(26, 26, 26, 0.1);
+}
+
+/* Tablet and below */
+@media (max-width: 768px) {
+  .diagram-controls {
+    gap: 12px;
+  }
+
+  .control-group {
+    gap: 6px;
+  }
+
+  .control-label {
+    font-size: 0.85em;
+  }
+}
+
+/* Mobile - improved responsive design */
+@media (max-width: 640px) {
+  main {
+    padding: 16px;
+  }
+
+  .diagram-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .diagram-controls {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .control-group {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    width: 100%;
+    padding: 8px;
+    background: rgba(255, 255, 255, 0.5);
+    border-radius: 8px;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  .control-label {
+    font-size: 0.85em;
+    color: #555;
+    font-weight: 600;
+    width: 100%;
+  }
+
+  .control-select,
+  .control-input {
+    width: 100%;
+    min-width: 100%;
+    padding: 10px 12px;
+    font-size: 0.95em;
+    min-height: 44px; /* Better touch target */
+    text-align: left;
+  }
+
+  .export-button {
+    width: 100%;
+    padding: 12px;
+    font-size: 0.95em;
+    min-height: 44px; /* Better touch target */
+    margin-top: 4px;
+  }
+}
+
+/* Small mobile devices */
+@media (max-width: 480px) {
+  main {
+    padding: 12px;
+  }
+
+  .diagram-header {
+    margin: 8px;
+    gap: 10px;
+  }
+
+  .diagram-controls {
+    gap: 8px;
+  }
+
+  .control-group {
+    padding: 10px;
+  }
+
+  .control-label {
+    font-size: 0.8em;
+  }
+
+  .control-select,
+  .control-input {
+    padding: 12px;
+    font-size: 1em; /* Larger text for easier reading */
+  }
+
+  .export-button {
+    padding: 14px;
+    font-size: 1em;
+  }
 }
 
 .diagram-wrapper {
   position: relative;
-  display: inline-block;
+  display: block;
   min-width: 100%;
   padding-top: 65px;
   padding-bottom: 30px;
+  overflow-x: auto;
+}
+
+.diagram-wrapper svg {
+  display: block;
+  max-width: 100%;
 }
 
 .route-lines {

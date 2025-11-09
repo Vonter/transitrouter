@@ -144,21 +144,38 @@ function parseBMTCDate(dateString) {
 
 /**
  * Fetch route ID for a service number
+ * Does route search directly against BMTC API
  */
 async function getRouteIdForService(routeNo, context) {
   try {
-    const baseUrl = new URL(context.request.url);
-    const routesApiUrl = `${baseUrl.origin}/api/bmtc/routes?routetext=${encodeURIComponent(routeNo)}`;
+    // Fetch route ID from BMTC route search API directly
+    const routeSearchResponse = await fetch(
+      'https://bmtcmobileapi.karnataka.gov.in/WebAPI/SearchRoute_v2',
+      {
+        method: 'POST',
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
+          Accept: 'application/json, text/plain, */*',
+          'Content-Type': 'application/json',
+          lan: 'en',
+          deviceType: 'WEB',
+        },
+        body: JSON.stringify({
+          routetext: routeNo.toLowerCase(),
+        }),
+      },
+    );
 
-    const response = await fetch(routesApiUrl);
-    if (!response.ok) return null;
+    if (!routeSearchResponse.ok) return null;
 
-    const data = await response.json();
-    if (data.routes && data.routes.length > 0) {
-      const exactMatch = data.routes.find(
-        (r) => r.routeNo.toLowerCase() === routeNo.toLowerCase(),
+    const result = await routeSearchResponse.json();
+    if (result.Issuccess && result.data && result.data.length > 0) {
+      // Find exact match (case-insensitive)
+      const exactMatch = result.data.find(
+        (r) => r.routeno.toLowerCase() === routeNo.toLowerCase(),
       );
-      return exactMatch ? exactMatch.routeId : null;
+      return exactMatch ? exactMatch.routeparentid : null;
     }
     return null;
   } catch (error) {

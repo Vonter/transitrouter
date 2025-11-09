@@ -37,20 +37,41 @@ function areOpposite(stop1, stop2) {
 export default function StopsList(props) {
   const route = getRoute();
 
-  const { routes, stopsData, vehicles = [], onStopClick, onStopClickAgain } = props;
+  const { routes, stopsData, vehicles = [], onStopClick, onStopClickAgain, onVehicleClick } = props;
   
   if (
     !routes ||
     !routes.length ||
-    routes[0].length <= 1 ||
-    (routes[1] && routes[1].length <= 1) ||
     !stopsData
   ) {
     console.warn('Invalid arguments');
     return null;
   }
 
-  const [route1, route2] = routes;
+  // If there are more than 2 routes, select the 2 routes with the most stops
+  let selectedRoutes = routes;
+  if (routes.length > 2) {
+    // Sort routes by length (number of stops) in descending order
+    const sortedRoutes = [...routes].sort((a, b) => b.length - a.length);
+    // Take the top 2 routes with the most stops
+    selectedRoutes = sortedRoutes.slice(0, 2);
+  }
+
+  // Validate selected routes - ensure at least one route has more than 1 stop
+  if (!selectedRoutes.length || !selectedRoutes.some(route => route && route.length > 1)) {
+    console.warn('No valid routes with more than 1 stop');
+    return null;
+  }
+
+  const [route1, route2] = selectedRoutes;
+
+  // Ensure route1 exists before proceeding
+  if (!route1) {
+    console.warn('No routes available');
+    return null;
+  }
+
+  const route1Len = route1.length;
 
   if (route1 && route2) {
     if (route1[0] === route2[0]) {
@@ -72,8 +93,6 @@ export default function StopsList(props) {
       );
     }
   }
-
-  const route1Len = route1.length;
   const route1FirstStop = route1[0];
   const route1LastStop = route1[route1Len - 1];
 
@@ -144,7 +163,18 @@ export default function StopsList(props) {
 
   // Render vehicle indicator
   const VehicleIndicator = ({ vehicle }) => (
-    <div class="vehicle-inline" title={`${vehicle.vehicleNumber} - ${vehicle.serviceType}`}>
+    <div
+      class="vehicle-inline"
+      title={`${vehicle.vehicleNumber} - ${vehicle.serviceType}`}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (onVehicleClick && vehicle.vehicleId) {
+          onVehicleClick(vehicle.vehicleId);
+        }
+      }}
+      style={{ cursor: onVehicleClick ? 'pointer' : 'default' }}
+    >
       <img src={busTinyImagePath} width="14" height="14" alt="Bus" />
       <span class="vehicle-inline-number">{vehicle.vehicleNumber}</span>
     </div>

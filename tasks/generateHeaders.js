@@ -14,7 +14,7 @@ const headers = [
     files: [/^app\..+js$/, /^app\..+css$/],
   },
   {
-    path: '/bus-arrival/',
+    path: '/arrival/',
     files: [
       /^arrival\..+js$/,
       /^arrival\..+css$/,
@@ -26,11 +26,11 @@ const headers = [
     ],
   },
   {
-    path: '/bus-first-last/',
+    path: '/first-last/',
     files: [/^firstlast\..+js$/, /^firstlast\..+css$/],
   },
   {
-    path: '/bus-diagram/',
+    path: '/diagram/',
     files: [/^diagram\..+js$/, /^diagram\..+css$/],
   },
   {

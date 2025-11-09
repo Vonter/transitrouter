@@ -32,11 +32,10 @@ Refer to [DATA.md](DATA.md) for more details on the data sources and processing 
 
 ## TODO
 
-- Base Functionality:
-    - `bus-diagram/` page for visualizing major stops of major routes passing through the selected stop
 - User Experience
     - Navigation flow
     - Typography/styling of elements
+    - Enhance design and rendering of stop diagrams on `diagram/` page
 - Extend Support:
     - Add OSM to rail.json script
     - CI Pipeline to process all GTFS

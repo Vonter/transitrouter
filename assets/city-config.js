@@ -27,10 +27,9 @@ export const CITY_CONFIGS = {
       enabled: true,
       apiPath: '/api/bmtc/arrivals',
     },
-    liveVehicleTracking: {
+    liveVehicles: {
       enabled: true,
       apiPath: '/api/bmtc/vehicles',
-      routesApiPath: '/api/bmtc/routes',
     },
   },
   goa: {
