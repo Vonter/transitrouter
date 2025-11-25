@@ -1,126 +1,151 @@
 #!/usr/bin/env python3
 """
-Script to run routes.py, schedule.py, firstlast.py, and ranking.py for each city.
-Logs the status of each city to parse.log.
+Script to generate the required JSON files using the GTFS data for each city.
+Logs during processing are saved to parse.log.
 """
 
-import os
+import argparse
+import hashlib
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-# List of cities to process (based on available directories)
-CITIES = ['blr', 'chennai', 'delhi', 'goa', 'kochi', 'pune', 'railways', 'greyhound']
-
-# Scripts to run in order
 SCRIPTS = [
     ('routes.py', ['--city']),
-    ('schedule.py', ['--city', '--gtfs-path']),  # Needs explicit gtfs-path
+    ('schedule.py', ['--city']),
     ('firstlast.py', ['--city']),
     ('ranking.py', ['--city']),
 ]
 
 LOG_FILE = 'parse.log'
+HASH_FILE = 'gtfs-hashes.txt'
+TIMEOUT = 3600  # 1 hour
+SCRIPT_DIR = Path(__file__).parent
+
+
+def get_available_cities() -> list[str]:
+    """Return sorted list of city directories that contain GTFS files."""
+    return sorted(
+        item.name for item in SCRIPT_DIR.iterdir()
+        if item.is_dir() and not item.name.startswith('.') and list(item.glob('*.zip'))
+    )
+
+
+def calculate_file_hash(file_path: Path) -> str:
+    """Calculate SHA256 hash of a file."""
+    sha256 = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
+def load_hashes() -> dict[str, dict[str, str]]:
+    """Load GTFS file hashes from gtfs-hashes.txt."""
+    hash_file = SCRIPT_DIR / HASH_FILE
+    if not hash_file.exists():
+        return {}
+    
+    hashes = {}
+    current_city = None
+    
+    with open(hash_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            
+            if line.endswith(':'):
+                current_city = line[:-1]
+                hashes[current_city] = {}
+            elif current_city and ':' in line:
+                filename, hash_value = line.split(':', 1)
+                hashes[current_city][filename.strip()] = hash_value.strip()
+    
+    return hashes
+
+
+def save_hashes(hashes: dict[str, dict[str, str]]):
+    """Save GTFS file hashes to gtfs-hashes.txt."""
+    with open(SCRIPT_DIR / HASH_FILE, 'w', encoding='utf-8') as f:
+        for city in sorted(hashes.keys()):
+            f.write(f"{city}:\n")
+            for filename in sorted(hashes[city].keys()):
+                f.write(f"  {filename}: {hashes[city][filename]}\n")
+
+
+def get_city_gtfs_hashes(city: str) -> dict[str, str]:
+    """Calculate SHA256 hashes for all GTFS files in a city directory."""
+    city_dir = Path(city)
+    if not city_dir.exists():
+        return {}
+    
+    return {
+        zip_file.name: calculate_file_hash(zip_file)
+        for zip_file in sorted(city_dir.glob('*.zip'))
+    }
+
+
+def needs_reprocessing(city: str, saved_hashes: dict[str, dict[str, str]]) -> bool:
+    """Check if a city needs reprocessing based on GTFS file hashes."""
+    current_hashes = get_city_gtfs_hashes(city)
+    city_saved = saved_hashes.get(city, {})
+    
+    return (len(current_hashes) != len(city_saved) or
+            any(filename not in city_saved or city_saved[filename] != hash_val
+                for filename, hash_val in current_hashes.items()))
 
 
 def log_message(message: str, log_file: str = LOG_FILE):
-    """Write a message to the log file with timestamp."""
+    """Write a timestamped message to log file and console."""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     log_entry = f"[{timestamp}] {message}\n"
-    
     with open(log_file, 'a', encoding='utf-8') as f:
         f.write(log_entry)
-    
-    # Also print to console
     print(log_entry.strip())
 
 
 def run_script(script_name: str, city: str, args: list) -> tuple[bool, str]:
-    """
-    Run a script for a given city.
-    
-    Returns:
-        (success: bool, error_message: str)
-    """
-    script_path = Path(__file__).parent / script_name
-    
+    """Run a script for a given city. Returns (success, error_message)."""
+    script_path = SCRIPT_DIR / script_name
     if not script_path.exists():
         return False, f"Script {script_name} not found"
     
-    # Build command arguments
     cmd = [sys.executable, str(script_path)]
-    
-    # Add arguments based on script requirements
-    for arg in args:
-        if arg == '--city':
-            cmd.extend(['--city', city])
-        elif arg == '--gtfs-path':
-            # For schedule.py, we need to provide the gtfs.zip path
-            gtfs_path = os.path.join(city, 'gtfs.zip')
-            cmd.extend(['--gtfs-path', gtfs_path])
+    cmd.extend(['--city', city] if '--city' in args else [])
     
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=3600  # 1 hour timeout per script
-        )
-        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
         if result.returncode == 0:
             return True, ""
-        else:
-            error_msg = result.stderr.strip() or result.stdout.strip()
-            return False, error_msg
-            
+        error = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+        return False, error
     except subprocess.TimeoutExpired:
-        return False, f"Script timed out after 1 hour"
+        return False, f"Script timed out after {TIMEOUT // 3600} hour"
     except Exception as e:
-        return False, f"Error running script: {str(e)}"
+        return False, f"Error running script: {e}"
 
 
 def process_city(city: str) -> dict:
-    """
-    Process all scripts for a single city.
-    
-    Returns:
-        Dictionary with status for each script
-    """
+    """Process all scripts for a single city. Returns status dictionary."""
     city_dir = Path(city)
     
-    # Check if city directory exists
     if not city_dir.exists():
-        return {
-            'status': 'error',
-            'message': f"City directory '{city}' does not exist",
-            'scripts': {}
-        }
+        return {'status': 'error', 'message': f"City directory '{city}' does not exist", 'scripts': {}}
     
-    # Check if gtfs.zip exists (required for most scripts)
-    gtfs_path = city_dir / 'gtfs.zip'
-    if not gtfs_path.exists():
-        return {
-            'status': 'error',
-            'message': f"gtfs.zip not found in '{city}' directory",
-            'scripts': {}
-        }
+    zip_files = list(city_dir.glob('*.zip'))
+    if not zip_files:
+        return {'status': 'error', 'message': f"No GTFS files found in '{city}' directory", 'scripts': {}}
     
-    results = {
-        'status': 'success',
-        'scripts': {}
-    }
+    results = {'status': 'success', 'scripts': {}}
     
-    # Run each script
     for script_name, script_args in SCRIPTS:
         log_message(f"Running {script_name} for {city}...")
         success, error_msg = run_script(script_name, city, script_args)
         
-        script_result = {
-            'success': success,
-            'error': error_msg if not success else None
-        }
-        results['scripts'][script_name] = script_result
+        results['scripts'][script_name] = {'success': success, 'error': error_msg if not success else None}
         
         if success:
             log_message(f"✓ {script_name} completed successfully for {city}")
@@ -128,56 +153,45 @@ def process_city(city: str) -> dict:
             log_message(f"✗ {script_name} failed for {city}: {error_msg}")
             results['status'] = 'partial' if results['status'] == 'success' else 'error'
     
+    # Save GTFS file hashes after successful processing
+    if results['status'] == 'success':
+        log_message(f"Calculating GTFS file hashes for {city}...")
+        saved_hashes = load_hashes()
+        saved_hashes[city] = get_city_gtfs_hashes(city)
+        save_hashes(saved_hashes)
+        log_message(f"✓ Saved GTFS file hashes for {city}")
+    
     return results
 
 
-def main():
-    """Main function to process all cities."""
-    # Clear or create log file
-    log_file = Path(LOG_FILE)
-    if log_file.exists():
-        log_file.unlink()
-    
-    log_message("=" * 80)
-    log_message("Starting batch processing of cities")
-    log_message("=" * 80)
-    
-    # Process each city
-    city_results = {}
-    for city in CITIES:
-        log_message(f"\n{'='*80}")
-        log_message(f"Processing city: {city}")
-        log_message(f"{'='*80}")
-        
-        results = process_city(city)
-        city_results[city] = results
-        
-        # Log summary for this city
-        if results['status'] == 'success':
-            log_message(f"✓ {city}: All scripts completed successfully")
-        elif results['status'] == 'partial':
-            log_message(f"⚠ {city}: Some scripts failed")
-            failed_scripts = [name for name, result in results['scripts'].items() 
-                            if not result['success']]
-            log_message(f"  Failed scripts: {', '.join(failed_scripts)}")
-        else:
-            log_message(f"✗ {city}: {results.get('message', 'Processing failed')}")
-    
-    # Final summary
+def log_city_summary(city: str, results: dict):
+    """Log summary for a single city."""
+    status = results['status']
+    if status == 'success':
+        log_message(f"✓ {city}: All scripts completed successfully")
+    elif status == 'partial':
+        failed = [name for name, r in results['scripts'].items() if not r['success']]
+        log_message(f"⚠ {city}: Some scripts failed")
+        log_message(f"  Failed scripts: {', '.join(failed)}")
+    else:
+        log_message(f"✗ {city}: {results.get('message', 'Processing failed')}")
+
+
+def get_status_counts(city_results: dict) -> dict:
+    """Calculate status counts from city results."""
+    return Counter(r['status'] for r in city_results.values())
+
+
+def log_final_summary(city_results: dict, cities_to_process: list, status_counts: dict):
+    """Log final processing summary."""
     log_message(f"\n{'='*80}")
     log_message("Processing Summary")
     log_message(f"{'='*80}")
+    log_message(f"Total cities: {len(cities_to_process)}")
+    log_message(f"Successful: {status_counts.get('success', 0)}")
+    log_message(f"Partial: {status_counts.get('partial', 0)}")
+    log_message(f"Failed: {status_counts.get('error', 0)}")
     
-    successful = sum(1 for r in city_results.values() if r['status'] == 'success')
-    partial = sum(1 for r in city_results.values() if r['status'] == 'partial')
-    failed = sum(1 for r in city_results.values() if r['status'] == 'error')
-    
-    log_message(f"Total cities: {len(CITIES)}")
-    log_message(f"Successful: {successful}")
-    log_message(f"Partial: {partial}")
-    log_message(f"Failed: {failed}")
-    
-    # Detailed breakdown
     log_message(f"\nDetailed Results:")
     for city, results in city_results.items():
         log_message(f"\n{city}:")
@@ -186,24 +200,100 @@ def main():
         else:
             log_message(f"  Status: {results['status'].upper()}")
             for script_name, script_result in results['scripts'].items():
-                status_icon = "✓" if script_result['success'] else "✗"
-                log_message(f"    {status_icon} {script_name}")
+                icon = "✓" if script_result['success'] else "✗"
+                log_message(f"    {icon} {script_name}")
                 if not script_result['success']:
                     log_message(f"      Error: {script_result['error']}")
+
+
+def main():
+    """Main function to process all cities."""
+    parser = argparse.ArgumentParser(
+        description='Process GTFS data for one or more cities',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s                    # Process all available cities
+  %(prog)s blr chennai        # Process only blr and chennai
+  %(prog)s --force-reprocess  # Reprocess all cities regardless of hashes
+        """
+    )
+    parser.add_argument('cities', nargs='*', help='List of cities to process (default: all available cities)')
+    parser.add_argument('--force-reprocess', action='store_true',
+                       help='Force reprocessing of all cities, ignoring saved hashes')
+    args = parser.parse_args()
+    
+    # Determine cities to process
+    cities_to_process = args.cities or get_available_cities()
+    if not cities_to_process:
+        print("Error: No city directories with GTFS files found")
+        return 1
+    
+    # Validate cities
+    available_cities = set(get_available_cities())
+    invalid_cities = [c for c in cities_to_process if c not in available_cities]
+    if invalid_cities:
+        print(f"Error: The following cities are not available: {', '.join(invalid_cities)}")
+        print(f"Available cities: {', '.join(sorted(available_cities))}")
+        return 1
+    
+    # Initialize log file
+    if (log_file := Path(LOG_FILE)).exists():
+        log_file.unlink()
+    
+    log_message("=" * 80)
+    log_message("Starting batch processing of cities")
+    log_message("=" * 80)
+    log_message(f"Cities to process: {', '.join(cities_to_process)}")
+    
+    # Load saved hashes if not forcing reprocess
+    saved_hashes = load_hashes() if not args.force_reprocess else {}
+    if saved_hashes:
+        log_message(f"Loaded hashes from {HASH_FILE}")
+    
+    # Check which cities need processing
+    cities_to_process_list = []
+    cities_skipped = []
+    
+    for city in cities_to_process:
+        if args.force_reprocess or needs_reprocessing(city, saved_hashes):
+            cities_to_process_list.append(city)
+        else:
+            cities_skipped.append(city)
+            log_message(f"⏭ {city}: All GTFS files already processed (hashes match), skipping")
+    
+    if cities_skipped:
+        log_message(f"\nSkipped {len(cities_skipped)} city/cities: {', '.join(cities_skipped)}")
+    
+    if not cities_to_process_list:
+        log_message("\nAll cities are already processed. Use --force-reprocess to reprocess.")
+        return 0
+    
+    # Process each city that needs processing
+    city_results = {}
+    for city in cities_to_process_list:
+        log_message(f"\n{'='*80}")
+        log_message(f"Processing city: {city}")
+        log_message(f"{'='*80}")
+        
+        city_results[city] = process_city(city)
+        log_city_summary(city, city_results[city])
+    
+    # Final summary
+    status_counts = get_status_counts(city_results)
+    log_final_summary(city_results, cities_to_process_list, status_counts)
     
     log_message(f"\n{'='*80}")
     log_message("Batch processing completed")
     log_message(f"{'='*80}\n")
     
-    # Return exit code based on results
-    if failed > 0:
+    # Return exit code
+    if status_counts.get('error', 0) > 0:
         return 1
-    elif partial > 0:
+    elif status_counts.get('partial', 0) > 0:
         return 2
-    else:
-        return 0
+    return 0
 
 
 if __name__ == '__main__':
     sys.exit(main())
-

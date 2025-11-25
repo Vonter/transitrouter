@@ -1,51 +1,21 @@
 #!/usr/bin/env python3
 import json
-import zipfile
 import polars as pl
 import polyline
 import argparse
 import os
+from pathlib import Path
 from typing import Dict, List, Tuple, Set
 from collections import defaultdict
 
+from utils import (
+    read_gtfs_file,
+    find_gtfs_files,
+    load_gtfs_data_from_multiple_files
+)
+
 # Default minimum number of trips per day for a route to be included
 DEFAULT_MIN_TRIPS = 2
-
-def read_gtfs_file(zip_path: str, filename: str) -> pl.DataFrame:
-    """Read a GTFS file from the zip archive into a polars DataFrame."""
-    # Common GTFS ID columns that should always be strings (not integers)
-    # Polars will ignore columns that don't exist in the file
-    id_columns = [
-        'route_id', 'trip_id', 'stop_id', 'shape_id', 'service_id',
-        'agency_id', 'block_id', 'fare_id', 'zone_id', 'parent_station'
-    ]
-    schema_overrides = {col: pl.Utf8 for col in id_columns}
-    
-    # Common GTFS float columns that may contain decimal values
-    float_columns = [
-        'shape_dist_traveled', 'stop_lat', 'stop_lon',
-        'shape_pt_lat', 'shape_pt_lon'
-    ]
-    schema_overrides.update({col: pl.Float64 for col in float_columns})
-    
-    with zipfile.ZipFile(zip_path) as z:
-        return pl.read_csv(z.open(filename), schema_overrides=schema_overrides)
-
-def load_gtfs_data(gtfs_path: str) -> Dict[str, pl.DataFrame]:
-    """Load all necessary GTFS files into memory once."""
-    data = {
-        'routes': read_gtfs_file(gtfs_path, 'routes.txt'),
-        'trips': read_gtfs_file(gtfs_path, 'trips.txt'),
-        'stop_times': read_gtfs_file(gtfs_path, 'stop_times.txt'),
-        'stops': read_gtfs_file(gtfs_path, 'stops.txt'),
-    }
-    
-    # Check for shapes file
-    with zipfile.ZipFile(gtfs_path) as z:
-        if 'shapes.txt' in z.namelist():
-            data['shapes'] = read_gtfs_file(gtfs_path, 'shapes.txt').sort(['shape_id', 'shape_pt_sequence'])
-    
-    return data
 
 def get_valid_routes(gtfs_data: Dict[str, pl.DataFrame], min_trips: int) -> Set[str]:
     """Get routes that have at least min_trips in at least one direction."""
@@ -54,7 +24,6 @@ def get_valid_routes(gtfs_data: Dict[str, pl.DataFrame], min_trips: int) -> Set[
     has_direction = 'direction_id' in trips_df.columns
     
     # Normalize direction_id
-    trips_df = trips_df.clone()
     if has_direction:
         trips_df = trips_df.with_columns(
             pl.col('direction_id').fill_null(0).cast(pl.Utf8).alias('direction')
@@ -65,18 +34,15 @@ def get_valid_routes(gtfs_data: Dict[str, pl.DataFrame], min_trips: int) -> Set[
             routes_df.select(['route_id', 'route_long_name']), 
             on='route_id', 
             how='left'
-        )
-        trips_df = trips_df.with_columns(
-            pl.col('route_long_name').str.to_uppercase().alias('route_upper')
-        )
-        trips_df = trips_df.with_columns(
-            pl.when(pl.col('route_upper').str.contains('UP'))
+        ).with_columns([
+            pl.col('route_long_name').str.to_uppercase().alias('route_upper'),
+            pl.when(pl.col('route_long_name').str.to_uppercase().str.contains('UP'))
             .then(pl.lit("0"))
-            .when(pl.col('route_upper').str.contains('DOWN'))
+            .when(pl.col('route_long_name').str.to_uppercase().str.contains('DOWN'))
             .then(pl.lit("1"))
             .otherwise(pl.lit("0"))
             .alias('direction')
-        )
+        ])
     
     # Count trips per route and direction
     trip_counts = trips_df.group_by(['route_id', 'direction']).agg(
@@ -90,11 +56,17 @@ def get_valid_routes(gtfs_data: Dict[str, pl.DataFrame], min_trips: int) -> Set[
     
     # Return routes with at least min_trips in any direction
     def compute_valid(min_required: int) -> Set[str]:
+        # Get all direction columns (excluding route_id)
+        direction_cols = [col for col in trip_counts.columns if col != 'route_id']
+        if not direction_cols:
+            return set()
+        
+        # Use to_dicts for faster iteration than iter_rows
         valid = set()
-        for row in trip_counts.iter_rows(named=True):
+        for row in trip_counts.to_dicts():
             route_id = row['route_id']
             # Check all direction columns (excluding route_id)
-            counts = [v for k, v in row.items() if k != 'route_id']
+            counts = [row.get(col, 0) for col in direction_cols]
             if any(c >= min_required for c in counts):
                 valid.add(route_id)
         return valid
@@ -113,103 +85,158 @@ def process_stops(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str]) ->
     stop_times_df = gtfs_data['stop_times']
     
     # Get stops served by valid routes
-    valid_trip_ids = trips_df['trip_id'].to_list()
-    valid_stop_ids = set(
-        stop_times_df.filter(pl.col('trip_id').is_in(valid_trip_ids))['stop_id'].unique().to_list()
-    )
+    valid_trip_ids = trips_df.select('trip_id')
+    valid_stop_ids = stop_times_df.join(
+        valid_trip_ids, on='trip_id', how='inner'
+    ).select('stop_id').unique()
     
     # Filter and convert to dictionary
-    valid_stops = stops_df.filter(pl.col('stop_id').is_in(list(valid_stop_ids)))
+    valid_stops = stops_df.join(
+        valid_stop_ids, on='stop_id', how='inner'
+    ).select(['stop_id', 'stop_lon', 'stop_lat', 'stop_name'])
+    
+    # Convert to dict using to_dicts for better performance
     return {
         row['stop_id']: [float(row['stop_lon']), float(row['stop_lat']), row['stop_name'], ""]
-        for row in valid_stops.iter_rows(named=True)
+        for row in valid_stops.to_dicts()
     }
 
 def encode_polyline(coordinates: List[Tuple[float, float]]) -> str:
     """Encode a list of coordinates into a polyline string."""
     return polyline.encode([(lat, lon) for lat, lon in coordinates])
 
-def generate_mock_shape(gtfs_data: Dict[str, pl.DataFrame], route_id: str, direction: str) -> List[Tuple[float, float]]:
-    """Generate mock shapes by connecting stops with straight lines."""
-    trips_df = gtfs_data['trips']
+def generate_mock_shapes_batch(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str]) -> Dict[str, List[str]]:
+    """Generate mock shapes for all routes in batch - much more efficient than per-route."""
+    trips_df = gtfs_data['trips'].filter(pl.col('route_id').is_in(list(valid_routes)))
     stop_times_df = gtfs_data['stop_times']
     stops_df = gtfs_data['stops']
+    routes_df = gtfs_data['routes']
     has_direction = 'direction_id' in trips_df.columns
     
-    # Filter trips for route and direction
-    route_trips = trips_df.filter(pl.col('route_id') == route_id).clone()
+    # Pre-compute direction mapping for all trips
     if has_direction:
-        route_trips = route_trips.filter(
-            pl.col('direction_id').fill_null(0).cast(pl.Utf8) == direction
+        trips_with_dir = trips_df.with_columns(
+            pl.col('direction_id').fill_null(0).cast(pl.Utf8).alias('direction')
         )
     else:
-        routes_df = gtfs_data['routes']
-        route_trips = route_trips.join(
+        trips_with_dir = trips_df.join(
             routes_df.select(['route_id', 'route_long_name']), 
             on='route_id', 
             how='left'
+        ).with_columns(
+            pl.when(pl.col('route_long_name').str.to_uppercase().str.contains('UP'))
+            .then(pl.lit("0"))
+            .when(pl.col('route_long_name').str.to_uppercase().str.contains('DOWN'))
+            .then(pl.lit("1"))
+            .otherwise(pl.lit("0"))
+            .alias('direction')
         )
-        route_trips = route_trips.with_columns(
-            pl.col('route_long_name').str.to_uppercase().alias('route_upper')
-        )
-        if direction == "0":
-            route_trips = route_trips.filter(
-                pl.col('route_upper').str.contains('UP') | 
-                ~pl.col('route_upper').str.contains('DOWN')
-            )
-        else:
-            route_trips = route_trips.filter(
-                pl.col('route_upper').str.contains('DOWN')
-            )
     
-    if len(route_trips) == 0:
-        return []
-    
-    # Get stops for first trip
-    trip_id = route_trips.row(0, named=True)['trip_id']
-    trip_stops = stop_times_df.filter(pl.col('trip_id') == trip_id).sort('stop_sequence')
-    
-    # Join with stops to get coordinates
-    trip_stops = trip_stops.join(
-        stops_df.select(['stop_id', 'stop_lat', 'stop_lon']), 
-        on='stop_id', 
-        how='left'
+    # Get first trip per route-direction combination
+    first_trips = trips_with_dir.group_by(['route_id', 'direction']).agg(
+        pl.first('trip_id').alias('trip_id')
     )
-    return [(float(row['stop_lat']), float(row['stop_lon'])) for row in trip_stops.iter_rows(named=True)]
+    
+    # Join with stop_times and stops to get coordinates
+    trip_stops_coords = first_trips.join(
+        stop_times_df.select(['trip_id', 'stop_id', 'stop_sequence']),
+        on='trip_id',
+        how='inner'
+    ).join(
+        stops_df.select(['stop_id', 'stop_lat', 'stop_lon']),
+        on='stop_id',
+        how='left'
+    ).sort(['route_id', 'direction', 'stop_sequence'])
+    
+    # Group by route_id and direction, then encode polylines
+    routes_dict = defaultdict(list)
+    
+    # Use group_by with aggregation to get coordinates per route-direction
+    grouped = trip_stops_coords.group_by(['route_id', 'direction'], maintain_order=True).agg([
+        pl.col('stop_lat').alias('lats'),
+        pl.col('stop_lon').alias('lons')
+    ])
+    
+    for row in grouped.to_dicts():
+        route_id = row['route_id']
+        lats = row['lats']
+        lons = row['lons']
+        if lats and lons:
+            coordinates = [(float(lat), float(lon)) for lat, lon in zip(lats, lons)]
+            if coordinates:
+                routes_dict[route_id].append(encode_polyline(coordinates))
+    
+    return dict(routes_dict)
 
 def process_routes(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str]) -> Dict:
     """Process shapes.txt (or generate mock shapes) and routes.txt to generate routes.min.json format."""
-    trips_df = gtfs_data['trips'].filter(pl.col('route_id').is_in(list(valid_routes)))
+    # Check for shape_id in original unfiltered trips_df before filtering
+    original_trips_df = gtfs_data['trips']
+    has_shape_id = (len(original_trips_df) > 0 and 
+                   len(original_trips_df.columns) > 0 and 
+                   'shape_id' in original_trips_df.columns)
+    
+    trips_df = original_trips_df.filter(pl.col('route_id').is_in(list(valid_routes)))
     routes_dict = defaultdict(list)
     
-    # Check if both shapes.txt exists AND trips have shape_id column
-    if 'shapes' in gtfs_data and 'shape_id' in trips_df.columns:
+    # Check if both shapes.txt exists AND trips have shape_id column AND filtered trips_df has rows and columns
+    # Also verify all required columns exist before trying to select them
+    # First check if trips_df has any columns at all (handles empty DataFrame case)
+    required_cols = ['route_id', 'shape_id']
+    has_all_cols = (len(trips_df) > 0 and 
+                   len(trips_df.columns) > 0 and 
+                   all(col in trips_df.columns for col in required_cols))
+    
+    # Try to use shapes if available, otherwise fall back to mock shapes
+    use_shapes = 'shapes' in gtfs_data and has_shape_id and has_all_cols
+    
+    if use_shapes:
         shapes_df = gtfs_data['shapes']
         has_direction = 'direction_id' in trips_df.columns
         
-        # Get unique route-shape mappings
+        # Get unique route-shape mappings - batch process all shapes
         cols = ['route_id', 'shape_id'] + (['direction_id'] if has_direction else [])
-        route_shapes = trips_df.select(cols).unique()
-        
-        # Process each unique shape
-        for shape_id in shapes_df['shape_id'].unique().to_list():
-            shape_points = shapes_df.filter(pl.col('shape_id') == shape_id)
-            coordinates = list(zip(
-                shape_points['shape_pt_lat'].to_list(),
-                shape_points['shape_pt_lon'].to_list()
-            ))
-            encoded = encode_polyline(coordinates)
-            
-            # Add to all routes using this shape
-            for route_id in route_shapes.filter(pl.col('shape_id') == shape_id)['route_id'].unique().to_list():
-                routes_dict[route_id].append(encoded)
-    else:
-        # Generate mock shapes
-        for route_id in valid_routes:
-            for direction in ["0", "1"]:
-                coordinates = generate_mock_shape(gtfs_data, route_id, direction)
-                if coordinates:
-                    routes_dict[route_id].append(encode_polyline(coordinates))
+        # Double-check all columns exist before selecting
+        if all(col in trips_df.columns for col in cols):
+            try:
+                route_shapes = trips_df.select(cols).unique()
+                
+                # Batch process all shapes at once
+                print(f"Processing shapes...")
+                
+                # Group shapes by shape_id and aggregate coordinates
+                shapes_grouped = shapes_df.group_by('shape_id', maintain_order=True).agg([
+                    pl.col('shape_pt_lat').alias('lats'),
+                    pl.col('shape_pt_lon').alias('lons')
+                ])
+                
+                # Create shape_id -> encoded polyline mapping
+                shape_encoded = {}
+                for row in shapes_grouped.to_dicts():
+                    shape_id = row['shape_id']
+                    lats = row['lats']
+                    lons = row['lons']
+                    if lats and lons:
+                        coordinates = [(float(lat), float(lon)) for lat, lon in zip(lats, lons)]
+                        shape_encoded[shape_id] = encode_polyline(coordinates)
+                
+                # Map routes to their shapes
+                for row in route_shapes.to_dicts():
+                    route_id = row['route_id']
+                    shape_id = row['shape_id']
+                    if shape_id in shape_encoded:
+                        routes_dict[route_id].append(shape_encoded[shape_id])
+                
+                print(f"  Processed {len(shape_encoded):,} unique shapes...")
+            except (pl.exceptions.ColumnNotFoundError, KeyError):
+                # If selection fails, fall back to mock shapes
+                use_shapes = False
+    
+    if not use_shapes:
+        # Generate mock shapes using batch processing
+        print(f"Generating mock shapes for {len(valid_routes):,} routes...")
+        routes_dict = generate_mock_shapes_batch(gtfs_data, valid_routes)
+        print(f"  Generated shapes for {len(routes_dict):,} routes...")
     
     return dict(routes_dict)
 
@@ -217,41 +244,70 @@ def process_services(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str])
     """Process trips.txt and stop_times.txt to generate services.min.json format with destination grouping."""
     routes_df = gtfs_data['routes'].filter(pl.col('route_id').is_in(list(valid_routes)))
     trips_df = gtfs_data['trips'].filter(pl.col('route_id').is_in(list(valid_routes)))
-    stop_times_df = gtfs_data['stop_times'].sort(['trip_id', 'stop_sequence'])
+    stop_times_df = gtfs_data['stop_times']
     has_direction = 'direction_id' in trips_df.columns
+    
+    # Pre-compute direction for all trips
+    if has_direction:
+        trips_with_dir = trips_df.with_columns(
+            pl.col('direction_id').fill_null(0).cast(pl.Utf8).alias('direction')
+        )
+    else:
+        trips_with_dir = trips_df.join(
+            routes_df.select(['route_id', 'route_long_name']),
+            on='route_id',
+            how='left'
+        ).with_columns(
+            pl.when(pl.col('route_long_name').str.to_uppercase().str.contains('UP'))
+            .then(pl.lit("0"))
+            .when(pl.col('route_long_name').str.to_uppercase().str.contains('DOWN'))
+            .then(pl.lit("1"))
+            .otherwise(pl.lit("0"))
+            .alias('direction')
+        )
+    
+    # Pre-join stop_times with trips to avoid filtering per trip
+    trips_stop_times = stop_times_df.join(
+        trips_with_dir.select(['trip_id', 'route_id', 'direction']),
+        on='trip_id',
+        how='inner'
+    ).sort(['trip_id', 'stop_sequence'])
+    
+    # Get last stop per trip (destination)
+    trip_destinations = trips_stop_times.group_by('trip_id', maintain_order=True).agg([
+        pl.last('stop_id').alias('destination'),
+        pl.col('stop_id').alias('stops_list'),
+        pl.first('route_id').alias('route_id'),
+        pl.first('direction').alias('direction')
+    ])
     
     services_dict = {}
     
-    for route in routes_df.iter_rows(named=True):
+    total_routes = len(routes_df)
+    print(f"Processing {total_routes:,} routes for services...")
+    
+    # Process each route
+    for route_idx, route in enumerate(routes_df.to_dicts(), 1):
         route_id = route['route_id']
-        route_trips = trips_df.filter(pl.col('route_id') == route_id)
+        route_name = route['route_long_name']
         
-        # Dictionary to group by destination: {destination_stop_id: {'routes': [route_arrays], 'trip_ids': set()}}
+        # Filter trips for this route
+        route_trip_dests = trip_destinations.filter(pl.col('route_id') == route_id)
+        
+        # Dictionary to group by destination
         destination_groups = defaultdict(lambda: {'routes_map': {}, 'trip_ids': set()})
         
         # Process each direction
         for direction in ["0", "1"]:
-            if has_direction:
-                dir_trips = route_trips.filter(
-                    pl.col('direction_id').fill_null(0).cast(pl.Utf8) == direction
-                )
-            else:
-                route_upper = str(route['route_long_name']).upper()
-                if direction == "0":
-                    dir_trips = route_trips if 'UP' in route_upper or 'DOWN' not in route_upper else route_trips.head(0)
-                else:
-                    dir_trips = route_trips if 'DOWN' in route_upper else route_trips.head(0)
+            dir_trip_dests = route_trip_dests.filter(pl.col('direction') == direction)
             
-            # Group trips by destination (last stop)
-            for trip in dir_trips.iter_rows(named=True):
-                trip_id = trip['trip_id']
-                trip_stops = stop_times_df.filter(pl.col('trip_id') == trip_id).sort('stop_sequence')
+            # Group trips by destination and route pattern
+            for row in dir_trip_dests.to_dicts():
+                trip_id = row['trip_id']
+                destination = row['destination']
+                stops_list = row['stops_list']
                 
-                if len(trip_stops) > 0:
-                    stops_list = trip_stops['stop_id'].to_list()
-                    destination = stops_list[-1]  # Last stop is destination
-                    
-                    # Convert stops_list to tuple for use as dict key
+                if stops_list:
                     route_tuple = tuple(stops_list)
                     
                     # Track unique routes and their trip counts
@@ -281,11 +337,14 @@ def process_services(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str])
 
         # Create final format without nested "routes" key and without trip_count
         services_dict[route_id] = {
-            "name": route['route_long_name']
+            "name": route_name
         }
         # Add destinations directly (not nested under "routes" key)
         for dest, data in sorted_destinations:
             services_dict[route_id][dest] = data['routes']
+        
+        if route_idx % 50 == 0:
+            print(f"  Processed {route_idx:,}/{total_routes:,} routes ({100*route_idx/total_routes:.1f}%)...")
     
     return services_dict
 
@@ -297,40 +356,82 @@ def main():
     parser.add_argument('--output-dir', type=str, default='.',
                       help='Output directory for JSON files (default: current directory)')
     parser.add_argument('--city', type=str,
-                      help='City name (if provided, output will go to $city/)')
+                      help='City name (if provided, uses all .zip GTFS files in $city/ and output goes to $city/)')
+    parser.add_argument('--gtfs-path', type=str,
+                      help='Path to a single GTFS zip file (if not using --city)')
     args = parser.parse_args()
     
-    # Determine output directory
+    # Determine GTFS files and output directory
     if args.city:
+        city_dir = args.city
         output_dir = args.city
-        gtfs_path = os.path.join(args.city, 'gtfs.zip') 
+        gtfs_paths = find_gtfs_files(city_dir)
+        if not gtfs_paths:
+            print(f"Error: No .zip GTFS files found in '{city_dir}' directory")
+            return 1
+        print(f"Found {len(gtfs_paths)} GTFS file(s) in {city_dir}: {', '.join(Path(p).name for p in gtfs_paths)}")
     else:
         output_dir = args.output_dir
-        gtfs_path = os.path.join(args.output_dir, 'gtfs.zip')
+        if args.gtfs_path:
+            gtfs_paths = [args.gtfs_path]
+        else:
+            gtfs_paths = find_gtfs_files(output_dir)
+            if not gtfs_paths:
+                print(f"Error: No .zip GTFS files found in '{output_dir}' directory and --gtfs-path not provided")
+                return 1
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
     # Load all GTFS data once
-    gtfs_data = load_gtfs_data(gtfs_path)
+    print("Loading GTFS data...")
+    if len(gtfs_paths) > 1:
+        print(f"Merging data from {len(gtfs_paths)} GTFS files...")
+    gtfs_data = load_gtfs_data_from_multiple_files(gtfs_paths, include_shapes=True)
     
     # Calculate valid routes once
+    print("Filtering valid routes...")
     valid_routes = get_valid_routes(gtfs_data, args.min_trips)
+    print(f"Found {len(valid_routes):,} valid routes")
     
     # Process and save stops
+    print("Processing stops...")
     stops_dict = process_stops(gtfs_data, valid_routes)
+    print(f"Found {len(stops_dict):,} stops")
+    # Sort keys to ensure consistent output order
+    stops_dict_sorted = dict(sorted(stops_dict.items()))
     with open(os.path.join(output_dir, 'stops.min.json'), 'w') as f:
-        json.dump(stops_dict, f, separators=(',', ':'))
+        json.dump(stops_dict_sorted, f, separators=(',', ':'))
     
     # Process and save routes
+    print("Processing routes...")
     routes_dict = process_routes(gtfs_data, valid_routes)
+    print(f"Generated routes for {len(routes_dict):,} route IDs")
+    # Sort keys to ensure consistent output order
+    routes_dict_sorted = dict(sorted(routes_dict.items()))
     with open(os.path.join(output_dir, 'routes.min.json'), 'w') as f:
-        json.dump(routes_dict, f, separators=(',', ':'))
+        json.dump(routes_dict_sorted, f, separators=(',', ':'))
     
     # Process and save services
+    print("Processing services...")
     services_dict = process_services(gtfs_data, valid_routes)
+    print(f"Generated services for {len(services_dict):,} routes")
+    # Sort keys to ensure consistent output order (both outer and inner keys)
+    services_dict_sorted = {}
+    for route_id in sorted(services_dict.keys()):
+        route_data = services_dict[route_id]
+        # Sort inner keys (name should come first, then destinations)
+        sorted_route_data = {}
+        if 'name' in route_data:
+            sorted_route_data['name'] = route_data['name']
+        # Add destination keys in sorted order
+        for dest_key in sorted([k for k in route_data.keys() if k != 'name']):
+            sorted_route_data[dest_key] = route_data[dest_key]
+        services_dict_sorted[route_id] = sorted_route_data
     with open(os.path.join(output_dir, 'services.min.json'), 'w') as f:
-        json.dump(services_dict, f, separators=(',', ':'))
+        json.dump(services_dict_sorted, f, separators=(',', ':'))
+    
+    print("\n✓ Completed! Generated all JSON files")
 
 if __name__ == '__main__':
     main()

@@ -11,11 +11,11 @@ import getRoute from './utils/getRoute';
 // Constants
 const DEFAULT_TARGET_MAJOR_STOPS = 5;
 const DEFAULT_COUNT_MAJOR_ROUTES = 8;
-const MIN_SPACING_PERCENT = 15;
+const MIN_SPACING_PERCENT = 10;
 const MIN_SPACING_INDEPENDENT = 5;
 const MIN_POSITION_DIFF = 2;
 const LEFT_PADDING = 5;
-const RIGHT_PADDING = 10;
+const RIGHT_PADDING = 5;
 const ROUTE_LABEL_WIDTH = 80;
 const ROUTE_HEIGHT = 96;
 const ROUTE_START_Y = 100;
@@ -37,7 +37,8 @@ const matchesStop = (stopId, normalized) =>
 const findStopIndex = (sequence, stopId, norm) =>
   sequence.findIndex((id) => matchesStop(id, norm));
 
-const getStopName = (stopId, stopsData) => stopsData[stopId]?.[2] || String(stopId);
+const getStopName = (stopId, stopsData) =>
+  stopsData[stopId]?.[2] || String(stopId);
 
 const calculateRouteTripCount = (routeId, servicesData, scheduleData) => {
   if (scheduleData?.services) {
@@ -59,7 +60,11 @@ const findRoutesForStop = (stopId, servicesData) => {
   for (const [routeId, routeData] of Object.entries(servicesData)) {
     for (const [destId, sequences] of Object.entries(routeData)) {
       if (destId === 'name') continue;
-      if (sequences.some((seq) => seq.includes(norm.num) || seq.includes(norm.str))) {
+      if (
+        sequences.some(
+          (seq) => seq.includes(norm.num) || seq.includes(norm.str),
+        )
+      ) {
         routes.push({
           routeId,
           routeName: routeData.name,
@@ -83,7 +88,8 @@ const getAllStopsFromRoutes = (routes, currentStopId) => {
 
     route.stopSequence.slice(currentIndex).forEach((stopId, idx) => {
       const stopIdStr = String(stopId);
-      if (!stopPositions.has(stopIdStr)) stopPositions.set(stopIdStr, new Set());
+      if (!stopPositions.has(stopIdStr))
+        stopPositions.set(stopIdStr, new Set());
       stopPositions.get(stopIdStr).add(idx);
     });
   });
@@ -91,13 +97,20 @@ const getAllStopsFromRoutes = (routes, currentStopId) => {
   return Array.from(stopPositions.entries())
     .map(([stopId, positions]) => ({
       stopId,
-      avgPosition: Array.from(positions).reduce((a, b) => a + b, 0) / positions.size,
+      avgPosition:
+        Array.from(positions).reduce((a, b) => a + b, 0) / positions.size,
     }))
     .sort((a, b) => a.avgPosition - b.avgPosition)
     .map((s) => s.stopId);
 };
 
-const selectMajorStops = (stops, rankingData, terminalStops, currentStopId, targetMajorStops) => {
+const selectMajorStops = (
+  stops,
+  rankingData,
+  terminalStops,
+  currentStopId,
+  targetMajorStops,
+) => {
   const stopsWithRankings = stops.map((stopId) => ({
     stopId,
     ranking: rankingData[stopId] || 0,
@@ -111,11 +124,16 @@ const selectMajorStops = (stops, rankingData, terminalStops, currentStopId, targ
 
   if (currentStopId) selectedStops.add(currentStopId);
   stopsWithRankings.forEach((stop) => {
-    if (stop.isTerminal || stop.ranking >= significanceThreshold) selectedStops.add(stop.stopId);
+    if (stop.isTerminal || stop.ranking >= significanceThreshold)
+      selectedStops.add(stop.stopId);
   });
 
   for (const stop of stopsWithRankings) {
-    if (selectedStops.size >= targetMajorStops && stop.ranking < maxRanking * 0.5) break;
+    if (
+      selectedStops.size >= targetMajorStops &&
+      stop.ranking < maxRanking * 0.5
+    )
+      break;
     selectedStops.add(stop.stopId);
   }
 
@@ -130,7 +148,12 @@ const selectMajorStops = (stops, rankingData, terminalStops, currentStopId, targ
   return selectedStops;
 };
 
-const isLastMajorStopInRoute = (route, selectedStopId, rankingData, targetMajorStops) => {
+const isLastMajorStopInRoute = (
+  route,
+  selectedStopId,
+  rankingData,
+  targetMajorStops,
+) => {
   const norm = normalizeStopId(selectedStopId);
   const currentIndex = findStopIndex(route.stopSequence, selectedStopId, norm);
   if (currentIndex === -1) return false;
@@ -138,7 +161,9 @@ const isLastMajorStopInRoute = (route, selectedStopId, rankingData, targetMajorS
   const forwardStops = route.stopSequence.slice(currentIndex + 1);
   if (forwardStops.length === 0) return true;
 
-  const lastStopInRoute = String(route.stopSequence[route.stopSequence.length - 1]);
+  const lastStopInRoute = String(
+    route.stopSequence[route.stopSequence.length - 1],
+  );
   const forwardStopsWithRankings = forwardStops.map((stopId) => ({
     stopId: String(stopId),
     ranking: rankingData[String(stopId)] || 0,
@@ -149,8 +174,12 @@ const isLastMajorStopInRoute = (route, selectedStopId, rankingData, targetMajorS
   const maxRanking = forwardStopsWithRankings[0]?.ranking || 0;
   const majorStopsAfter = selectMajorStops(
     forwardStopsWithRankings.map((s) => s.stopId),
-    Object.fromEntries(forwardStopsWithRankings.map((s) => [s.stopId, s.ranking])),
-    new Set(forwardStopsWithRankings.filter((s) => s.isTerminal).map((s) => s.stopId)),
+    Object.fromEntries(
+      forwardStopsWithRankings.map((s) => [s.stopId, s.ranking]),
+    ),
+    new Set(
+      forwardStopsWithRankings.filter((s) => s.isTerminal).map((s) => s.stopId),
+    ),
     null,
     targetMajorStops,
   );
@@ -158,12 +187,20 @@ const isLastMajorStopInRoute = (route, selectedStopId, rankingData, targetMajorS
   return majorStopsAfter.size === 0;
 };
 
-const filterMajorStops = (allStops, currentStopId, rankingData, routes, targetMajorStops) => {
+const filterMajorStops = (
+  allStops,
+  currentStopId,
+  rankingData,
+  routes,
+  targetMajorStops,
+) => {
   const terminalStops = new Set();
   routes.forEach((route) => {
     if (route.stopSequence.length > 0) {
       terminalStops.add(String(route.stopSequence[0]));
-      terminalStops.add(String(route.stopSequence[route.stopSequence.length - 1]));
+      terminalStops.add(
+        String(route.stopSequence[route.stopSequence.length - 1]),
+      );
     }
   });
 
@@ -192,7 +229,12 @@ const findAvailablePosition = (desiredPos, usedPositions) => {
   return pos;
 };
 
-const createStopPositionMap = (routes, orderedStops, currentStopId, stopsData) => {
+const createStopPositionMap = (
+  routes,
+  orderedStops,
+  currentStopId,
+  stopsData,
+) => {
   const stopPositionMap = {};
   const stopIdToName = {};
   const nameToRoutes = {};
@@ -225,7 +267,10 @@ const createStopPositionMap = (routes, orderedStops, currentStopId, stopsData) =
       const routeIndices = Array.from(routeSet);
       const groupsToMerge = [];
       groups.forEach((group, groupIdx) => {
-        if (group !== null && routeIndices.some((routeIdx) => group.has(routeIdx))) {
+        if (
+          group !== null &&
+          routeIndices.some((routeIdx) => group.has(routeIdx))
+        ) {
           groupsToMerge.push(groupIdx);
         }
       });
@@ -280,7 +325,9 @@ const createStopPositionMap = (routes, orderedStops, currentStopId, stopsData) =
       const desiredPos =
         requiredWidth <= usableWidth
           ? LEFT_PADDING + idx * MIN_SPACING_PERCENT
-          : LEFT_PADDING + (idx / Math.max(orderedCrossGroupNames.length - 1, 1)) * usableWidth;
+          : LEFT_PADDING +
+            (idx / Math.max(orderedCrossGroupNames.length - 1, 1)) *
+              usableWidth;
       const pos = findAvailablePosition(desiredPos, usedPositions);
       crossGroupNameToPosition[name] = pos;
       globalPositionMap.set(name, pos);
@@ -295,8 +342,9 @@ const createStopPositionMap = (routes, orderedStops, currentStopId, stopsData) =
   const crossGroupPositions = new Set(Array.from(globalPositionMap.values()));
   const lastCrossGroupPosition =
     orderedCrossGroupNames.length > 0
-      ? crossGroupNameToPosition[orderedCrossGroupNames[orderedCrossGroupNames.length - 1]] ||
-        LEFT_PADDING
+      ? crossGroupNameToPosition[
+          orderedCrossGroupNames[orderedCrossGroupNames.length - 1]
+        ] || LEFT_PADDING
       : LEFT_PADDING;
   const independentGroupStartPos = Math.min(
     lastCrossGroupPosition + MIN_SPACING_PERCENT,
@@ -313,7 +361,10 @@ const createStopPositionMap = (routes, orderedStops, currentStopId, stopsData) =
       const routeSet = nameToRoutes[name];
       if (routeSet && routeSet.size >= 2 && !crossGroupStops.has(name)) {
         const routeIndices = Array.from(routeSet);
-        if (routeIndices.every((idx) => group.has(idx)) && !groupCommonNames.includes(name)) {
+        if (
+          routeIndices.every((idx) => group.has(idx)) &&
+          !groupCommonNames.includes(name)
+        ) {
           groupCommonNames.push(name);
         }
       }
@@ -324,12 +375,13 @@ const createStopPositionMap = (routes, orderedStops, currentStopId, stopsData) =
         const desiredPos = positionByRelativeIndex.has(idx)
           ? positionByRelativeIndex.get(idx)
           : (() => {
-              const requiredWidth = groupCommonNames.length * MIN_SPACING_PERCENT;
+              const requiredWidth =
+                groupCommonNames.length * MIN_SPACING_PERCENT;
               return requiredWidth <= usableWidth
                 ? independentGroupStartPos + idx * MIN_SPACING_PERCENT
                 : independentGroupStartPos +
-                  (idx / Math.max(groupCommonNames.length - 1, 1)) *
-                    (100 - RIGHT_PADDING - independentGroupStartPos);
+                    (idx / Math.max(groupCommonNames.length - 1, 1)) *
+                      (100 - RIGHT_PADDING - independentGroupStartPos);
             })();
         const pos = findAvailablePosition(desiredPos, crossGroupPositions);
         nameToPosition[name] = pos;
@@ -351,7 +403,9 @@ const createStopPositionMap = (routes, orderedStops, currentStopId, stopsData) =
     });
 
     const routeGroup = routeGroups.find((group) => group.has(routeIndex));
-    const groupPositions = routeGroup ? groupNameToPosition.get(routeGroup) : {};
+    const groupPositions = routeGroup
+      ? groupNameToPosition.get(routeGroup)
+      : {};
 
     routeStops.forEach((stopId, stopIndex) => {
       const name = stopIdToName[stopId];
@@ -377,7 +431,10 @@ const createStopPositionMap = (routes, orderedStops, currentStopId, stopsData) =
         const step = dir === 'back' ? -1 : 1;
         for (let i = start; i !== end; i += step) {
           const n = stopIdToName[routeStops[i]];
-          if (groupPositions[n] !== undefined || crossGroupNameToPosition[n] !== undefined) {
+          if (
+            groupPositions[n] !== undefined ||
+            crossGroupNameToPosition[n] !== undefined
+          ) {
             return i;
           }
         }
@@ -388,7 +445,9 @@ const createStopPositionMap = (routes, orderedStops, currentStopId, stopsData) =
       const fwdIdx = findAnchor('forward');
       const getPosition = (stopId) => {
         const n = stopIdToName[stopId];
-        return groupPositions[n] !== undefined ? groupPositions[n] : crossGroupNameToPosition[n];
+        return groupPositions[n] !== undefined
+          ? groupPositions[n]
+          : crossGroupNameToPosition[n];
       };
 
       let desiredPosition;
@@ -414,13 +473,15 @@ const createStopPositionMap = (routes, orderedStops, currentStopId, stopsData) =
         desiredPosition =
           requiredWidth <= usableWidth
             ? LEFT_PADDING + stopIndex * MIN_SPACING_INDEPENDENT
-            : LEFT_PADDING + (stopIndex / Math.max(routeStops.length - 1, 1)) * usableWidth;
+            : LEFT_PADDING +
+              (stopIndex / Math.max(routeStops.length - 1, 1)) * usableWidth;
       }
 
       const allUsedPositions = Array.from(globalPositionMap.values());
       position = findAvailablePosition(desiredPosition, allUsedPositions);
       globalPositionMap.set(name, position);
-      if (!positionToNames.has(position)) positionToNames.set(position, new Set());
+      if (!positionToNames.has(position))
+        positionToNames.set(position, new Set());
       positionToNames.get(position).add(name);
       stopPositionMap[stopId] = { position, isCommon: false };
     });
@@ -440,10 +501,12 @@ const createStopPositionMap = (routes, orderedStops, currentStopId, stopsData) =
     const maxPosition = Math.max(...allPositions);
     const availableWidth = 100 - RIGHT_PADDING;
     if (maxPosition < availableWidth && maxPosition > LEFT_PADDING) {
-      const scaleFactor = (availableWidth - LEFT_PADDING) / (maxPosition - LEFT_PADDING);
+      const scaleFactor =
+        (availableWidth - LEFT_PADDING) / (maxPosition - LEFT_PADDING);
       Object.keys(stopPositionMap).forEach((stopId) => {
         const currentPos = stopPositionMap[stopId].position;
-        stopPositionMap[stopId].position = LEFT_PADDING + (currentPos - LEFT_PADDING) * scaleFactor;
+        stopPositionMap[stopId].position =
+          LEFT_PADDING + (currentPos - LEFT_PADDING) * scaleFactor;
       });
     }
   }
@@ -479,8 +542,10 @@ const clusterRoutesByStops = (routes, minSimilarity = 0.2) => {
         if (processed.has(otherIndex)) return;
         for (const clusterRoute of cluster) {
           if (
-            calculateRouteSimilarity(getSequence(clusterRoute), getSequence(otherRoute)) >=
-            minSimilarity
+            calculateRouteSimilarity(
+              getSequence(clusterRoute),
+              getSequence(otherRoute),
+            ) >= minSimilarity
           ) {
             cluster.push(otherRoute);
             processed.add(otherIndex);
@@ -526,7 +591,11 @@ const orderClusterBySimilarity = (cluster) => {
     for (let j = 0; j < seqs.length; j++) {
       if (used.has(j)) continue;
       const s = sim[current][j];
-      if (s > best || (s === best && sortServices(cluster[j]?.routeId, cluster[next]?.routeId) < 0)) {
+      if (
+        s > best ||
+        (s === best &&
+          sortServices(cluster[j]?.routeId, cluster[next]?.routeId) < 0)
+      ) {
         best = s;
         next = j;
       }
@@ -588,8 +657,10 @@ const createGroupSizeComparator = (stats, stopsData) => {
     const sa = getSequence(a).map(String);
     const sb = getSequence(b).map(String);
     for (let i = 1, max = Math.max(sa.length, sb.length); i < max; i++) {
-      const na = sa[i] === undefined ? undefined : getStopName(sa[i], stopsData);
-      const nb = sb[i] === undefined ? undefined : getStopName(sb[i], stopsData);
+      const na =
+        sa[i] === undefined ? undefined : getStopName(sa[i], stopsData);
+      const nb =
+        sb[i] === undefined ? undefined : getStopName(sb[i], stopsData);
       if (na === nb) continue;
       const map = stats[i] || new Map();
       const ca = na === undefined ? -1 : map.get(na) || 0;
@@ -616,8 +687,12 @@ function BusDiagram() {
   const [stopRouteCounts, setStopRouteCounts] = useState({});
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [targetMajorStops, setTargetMajorStops] = useState(DEFAULT_TARGET_MAJOR_STOPS);
-  const [countMajorRoutes, setCountMajorRoutes] = useState(DEFAULT_COUNT_MAJOR_ROUTES);
+  const [targetMajorStops, setTargetMajorStops] = useState(
+    DEFAULT_TARGET_MAJOR_STOPS,
+  );
+  const [countMajorRoutes, setCountMajorRoutes] = useState(
+    DEFAULT_COUNT_MAJOR_ROUTES,
+  );
   const [servicesData, setServicesData] = useState(null);
   const [scheduleData, setScheduleData] = useState(null);
   const targetMajorStopsRef = useRef(targetMajorStops);
@@ -647,7 +722,12 @@ function BusDiagram() {
   ) => {
     const filteredRoutes = routesWithTripCounts.filter(
       (route) =>
-        !isLastMajorStopInRoute(route, stopId, rankingDataLoaded, targetMajorStopsRef.current),
+        !isLastMajorStopInRoute(
+          route,
+          stopId,
+          rankingDataLoaded,
+          targetMajorStopsRef.current,
+        ),
     );
 
     const topRoutes = filteredRoutes.slice(0, countMajorRoutesRef.current);
@@ -681,10 +761,11 @@ function BusDiagram() {
         .map((s) => ({ stopId: s, ranking: rankingDataLoaded[s] || 0 }))
         .sort((a, b) => b.ranking - a.ranking);
 
-      if (forwardStops.length > 0) allMajorStops.add(forwardStops[forwardStops.length - 1]);
-      forwardStopsRanked.slice(0, targetMajorStopsRef.current).forEach((s) =>
-        allMajorStops.add(s.stopId),
-      );
+      if (forwardStops.length > 0)
+        allMajorStops.add(forwardStops[forwardStops.length - 1]);
+      forwardStopsRanked
+        .slice(0, targetMajorStopsRef.current)
+        .forEach((s) => allMajorStops.add(s.stopId));
     });
 
     const allStops = getAllStopsFromRoutes(routesToUse, stopId);
@@ -756,8 +837,13 @@ function BusDiagram() {
 
             const routesWithTripCounts = routesFound.map((route) => ({
               ...route,
-              tripCount: calculateRouteTripCount(route.routeId, servicesDataLoaded, scheduleDataLoaded),
-              destinationRanking: rankingDataLoaded[route.destinationStopId] || 0,
+              tripCount: calculateRouteTripCount(
+                route.routeId,
+                servicesDataLoaded,
+                scheduleDataLoaded,
+              ),
+              destinationRanking:
+                rankingDataLoaded[route.destinationStopId] || 0,
             }));
 
             routesWithTripCounts.sort((a, b) => {
@@ -800,7 +886,8 @@ function BusDiagram() {
   }, [targetMajorStops, countMajorRoutes, servicesData, currentStopId]);
 
   useEffect(() => {
-    if (!svgContainerRef.current || !routes.length || !orderedStops.length) return;
+    if (!svgContainerRef.current || !routes.length || !orderedStops.length)
+      return;
 
     const container = svgContainerRef.current;
     const containerWidth = diagramContainerRef.current?.clientWidth || 1200;
@@ -810,7 +897,9 @@ function BusDiagram() {
     const diagramHeight = Math.max(500, routes.length * ROUTE_HEIGHT + 100);
 
     const clipRouteName = (routeId, maxLength = 8) =>
-      !routeId || routeId.length <= maxLength ? routeId : routeId.substring(0, maxLength) + '…';
+      !routeId || routeId.length <= maxLength
+        ? routeId
+        : routeId.substring(0, maxLength) + '…';
 
     const svg = d3
       .select(container)
@@ -831,8 +920,14 @@ function BusDiagram() {
       .attr('gradientUnits', 'userSpaceOnUse')
       .attr('x1', ROUTE_LABEL_WIDTH)
       .attr('x2', containerWidth);
-    routeGradient.append('stop').attr('offset', '0%').attr('stop-color', '#1a1a1a');
-    routeGradient.append('stop').attr('offset', '100%').attr('stop-color', '#666666');
+    routeGradient
+      .append('stop')
+      .attr('offset', '0%')
+      .attr('stop-color', '#1a1a1a');
+    routeGradient
+      .append('stop')
+      .attr('offset', '100%')
+      .attr('stop-color', '#666666');
 
     const filter = defs
       .append('filter')
@@ -841,9 +936,20 @@ function BusDiagram() {
       .attr('y', '-50%')
       .attr('width', '200%')
       .attr('height', '200%');
-    filter.append('feGaussianBlur').attr('in', 'SourceAlpha').attr('stdDeviation', 2);
-    filter.append('feOffset').attr('dx', 1).attr('dy', 1).attr('result', 'offsetblur');
-    filter.append('feComponentTransfer').append('feFuncA').attr('type', 'linear').attr('slope', 0.3);
+    filter
+      .append('feGaussianBlur')
+      .attr('in', 'SourceAlpha')
+      .attr('stdDeviation', 2);
+    filter
+      .append('feOffset')
+      .attr('dx', 1)
+      .attr('dy', 1)
+      .attr('result', 'offsetblur');
+    filter
+      .append('feComponentTransfer')
+      .append('feFuncA')
+      .attr('type', 'linear')
+      .attr('slope', 0.3);
     const feMerge = filter.append('feMerge');
     feMerge.append('feMergeNode');
     feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
@@ -853,7 +959,12 @@ function BusDiagram() {
     const mergedMarkersGroup = svg.append('g').attr('class', 'merged-markers');
     const labelsGroup = svg.append('g').attr('class', 'stop-labels');
 
-    const stopPosMap = createStopPositionMap(routes, orderedStops, currentStopId, stopsData);
+    const stopPosMap = createStopPositionMap(
+      routes,
+      orderedStops,
+      currentStopId,
+      stopsData,
+    );
 
     // Build stop positions map
     const stopPositions = {};
@@ -875,8 +986,11 @@ function BusDiagram() {
       });
     });
 
-    const commonNames = Object.keys(namePositions).filter((name) => namePositions[name].length > 1);
-    const xScale = (percent) => ROUTE_LABEL_WIDTH + (percent / 100) * diagramWidth;
+    const commonNames = Object.keys(namePositions).filter(
+      (name) => namePositions[name].length > 1,
+    );
+    const xScale = (percent) =>
+      ROUTE_LABEL_WIDTH + (percent / 100) * diagramWidth;
 
     // Draw route labels
     routes.forEach((route, routeIndex) => {
@@ -955,7 +1069,8 @@ function BusDiagram() {
       for (let i = routeStopsInOrder.length - 1; i >= 0; i--) {
         const stopId = routeStopsInOrder[i];
         const stopName = getStopName(stopId, stopsData);
-        const isCommon = namePositions[stopName] && namePositions[stopName].length > 1;
+        const isCommon =
+          namePositions[stopName] && namePositions[stopName].length > 1;
 
         if (!isCommon) {
           lastStopPos = (stopPosMap[stopId] || { position: 50 }).position;
@@ -972,11 +1087,14 @@ function BusDiagram() {
       if (!lastStopPos) {
         const lastStopId = routeStopsInOrder[routeStopsInOrder.length - 1];
         const lastStopName = getStopName(lastStopId, stopsData);
-        const lastStopIsCommon = namePositions[lastStopName] && namePositions[lastStopName].length > 1;
+        const lastStopIsCommon =
+          namePositions[lastStopName] && namePositions[lastStopName].length > 1;
         if (lastStopIsCommon) {
           const mergedPos = findMergedStopPosition(lastStopName, routeIndex);
           lastStopPos =
-            mergedPos !== null ? mergedPos : (stopPosMap[lastStopId] || { position: 50 }).position;
+            mergedPos !== null
+              ? mergedPos
+              : (stopPosMap[lastStopId] || { position: 50 }).position;
         } else {
           lastStopPos = (stopPosMap[lastStopId] || { position: 50 }).position;
         }
@@ -1006,7 +1124,8 @@ function BusDiagram() {
       routeStopsInOrder.forEach((stopId) => {
         const posData = stopPosMap[stopId] || { position: 50 };
         const stopName = getStopName(stopId, stopsData);
-        const isCommon = namePositions[stopName] && namePositions[stopName].length > 1;
+        const isCommon =
+          namePositions[stopName] && namePositions[stopName].length > 1;
 
         if (isCommon) return;
 
@@ -1034,8 +1153,10 @@ function BusDiagram() {
       const x = xScale(sorted[0].position);
 
       segments.forEach(([start, end]) => {
-        const y1 = ROUTE_START_Y + start.routeIndex * ROUTE_HEIGHT - MARKER_RADIUS;
-        const y2 = ROUTE_START_Y + end.routeIndex * ROUTE_HEIGHT + MARKER_RADIUS;
+        const y1 =
+          ROUTE_START_Y + start.routeIndex * ROUTE_HEIGHT - MARKER_RADIUS;
+        const y2 =
+          ROUTE_START_Y + end.routeIndex * ROUTE_HEIGHT + MARKER_RADIUS;
         const height = y2 - y1;
 
         mergedMarkersGroup
@@ -1064,9 +1185,13 @@ function BusDiagram() {
         const { segments } = buildSegments(positions);
         segments.forEach(([start, end]) => {
           const topRouteIndex = start.routeIndex;
-          const markerTopY = ROUTE_START_Y + topRouteIndex * ROUTE_HEIGHT - MARKER_RADIUS;
+          const markerTopY =
+            ROUTE_START_Y + topRouteIndex * ROUTE_HEIGHT - MARKER_RADIUS;
           const verticalOffset =
-            BASE_VERTICAL_OFFSET + name.length * VERTICAL_SCALE_FACTOR * Math.abs(Math.sin(ROTATION_RAD));
+            BASE_VERTICAL_OFFSET +
+            name.length *
+              VERTICAL_SCALE_FACTOR *
+              Math.abs(Math.sin(ROTATION_RAD));
           const labelY = markerTopY - verticalOffset;
 
           labelData.push({
@@ -1087,11 +1212,16 @@ function BusDiagram() {
           ? stopPosMap[stopIdForName] || { position: 50 }
           : { position: 50 };
         const xPosition = posData.position;
-        const useIdx = positions.reduce((s, p) => s + p.routeIndex, 0) / positions.length;
+        const useIdx =
+          positions.reduce((s, p) => s + p.routeIndex, 0) / positions.length;
         const topRouteIndex = Math.floor(useIdx);
-        const markerTopY = ROUTE_START_Y + topRouteIndex * ROUTE_HEIGHT - MARKER_RADIUS;
+        const markerTopY =
+          ROUTE_START_Y + topRouteIndex * ROUTE_HEIGHT - MARKER_RADIUS;
         const verticalOffset =
-          BASE_VERTICAL_OFFSET + name.length * VERTICAL_SCALE_FACTOR * Math.abs(Math.sin(ROTATION_RAD));
+          BASE_VERTICAL_OFFSET +
+          name.length *
+            VERTICAL_SCALE_FACTOR *
+            Math.abs(Math.sin(ROTATION_RAD));
         const labelY = markerTopY - verticalOffset;
 
         labelData.push({
@@ -1116,8 +1246,10 @@ function BusDiagram() {
       const current = labelData[i];
       const next = labelData[i + 1];
 
-      if (!labelWidths.has(current.text)) labelWidths.set(current.text, estimateWidth(current.text));
-      if (!labelWidths.has(next.text)) labelWidths.set(next.text, estimateWidth(next.text));
+      if (!labelWidths.has(current.text))
+        labelWidths.set(current.text, estimateWidth(current.text));
+      if (!labelWidths.has(next.text))
+        labelWidths.set(next.text, estimateWidth(next.text));
 
       const currentOriginalWidth = labelWidths.get(current.text);
       const nextOriginalWidth = labelWidths.get(next.text);
@@ -1146,7 +1278,10 @@ function BusDiagram() {
     for (let i = 0; i < labelData.length - 1; i++) {
       const current = labelData[i];
       const next = labelData[i + 1];
-      if (Math.abs(current.x - next.x) < 5 && Math.abs(current.y - next.y) < verticalSpacing) {
+      if (
+        Math.abs(current.x - next.x) < 5 &&
+        Math.abs(current.y - next.y) < verticalSpacing
+      ) {
         next.y = Math.max(next.y, current.y + verticalSpacing);
       }
     }
@@ -1165,7 +1300,8 @@ function BusDiagram() {
       routeStopsInOrder.forEach((stopId) => {
         const posData = stopPosMap[stopId] || { position: 50 };
         const stopName = getStopName(stopId, stopsData);
-        const isCommon = namePositions[stopName] && namePositions[stopName].length > 1;
+        const isCommon =
+          namePositions[stopName] && namePositions[stopName].length > 1;
 
         if (!isCommon) {
           const markerX = xScale(posData.position);
@@ -1187,7 +1323,8 @@ function BusDiagram() {
       const { segments } = buildSegments(positions);
       segments.forEach(([start, end]) => {
         const markerX = xScale(start.position);
-        const markerY = ROUTE_START_Y + start.routeIndex * ROUTE_HEIGHT - MARKER_RADIUS;
+        const markerY =
+          ROUTE_START_Y + start.routeIndex * ROUTE_HEIGHT - MARKER_RADIUS;
         const segmentKey = `${stopName}-${start.routeIndex}`;
         markerPositionsMap.set(segmentKey, {
           x: markerX,
@@ -1210,7 +1347,10 @@ function BusDiagram() {
 
       const labelGroup = labelsGroup
         .append('g')
-        .attr('transform', `translate(${labelX}, ${labelY}) rotate(${LABEL_ROTATION})`);
+        .attr(
+          'transform',
+          `translate(${labelX}, ${labelY}) rotate(${LABEL_ROTATION})`,
+        );
 
       labelGroup
         .append('text')
@@ -1253,7 +1393,9 @@ function BusDiagram() {
     );
   }
 
-  const stopCount = orderedStops.filter((stopId) => stopId !== currentStopId).length;
+  const stopCount = orderedStops.filter(
+    (stopId) => stopId !== currentStopId,
+  ).length;
   const requiredHeight = Math.max(500, stopCount * 70 + 100);
 
   return (
@@ -1316,10 +1458,14 @@ function BusDiagram() {
           <button
             class="export-button"
             onClick={() => {
-              const svg = svgNodeRef.current || svgContainerRef.current?.querySelector('svg');
+              const svg =
+                svgNodeRef.current ||
+                svgContainerRef.current?.querySelector('svg');
               if (!svg) return;
               const svgData = new XMLSerializer().serializeToString(svg);
-              const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+              const svgBlob = new Blob([svgData], {
+                type: 'image/svg+xml;charset=utf-8',
+              });
               const svgUrl = URL.createObjectURL(svgBlob);
               const downloadLink = document.createElement('a');
               downloadLink.href = svgUrl;

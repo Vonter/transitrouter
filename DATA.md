@@ -8,8 +8,10 @@
 - Goa: [KTCL Goa](https://ktclgoa.com/gtfs/)
 - Kochi: [Jungle Bus](https://jungle-bus.github.io/KochiTransport/)
 - Pune: [pmpml-gtfs](https://github.com/croyla/pmpml-gtfs)
+- Telangana: [Open Data Telangana](https://drive.google.com/file/d/1vmjLCHzWButGuQUK0RLjy3a1_norIHyq)
 - Indian Railways: [Neo2308/indianrailways-gtfs](https://github.com/Neo2308/indianrailways-gtfs/)
 - Greyhound: [Greyhound, Flixbus](http://gtfs.gis.flix.tech/gtfs_generic_us.zip)
+- NYC: [MTA](https://www.mta.info/developers)
 
 ### Processing GTFS Data
 
@@ -67,3 +69,13 @@ node build-routes.mjs --city blr
 cd visualization
 node build-stops.mjs --city blr
 ```
+
+### Processing Rail Data
+
+To process the rail data, run the following command:
+```bash
+cd data
+./rail.py --city blr --bbox 15.5,77.0,20.5,82.0
+```
+
+This will fetch the rail network from OpenStreetMap and generate the `rail.json` used to render the rail network on the map.

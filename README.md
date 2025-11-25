@@ -37,7 +37,6 @@ Refer to [DATA.md](DATA.md) for more details on the data sources and processing 
     - Typography/styling of elements
     - Enhance design and rendering of stop diagrams on `diagram/` page
 - Extend Support:
-    - Add OSM to rail.json script
     - CI Pipeline to process all GTFS
     - More cities
     - Cleanup unused dependencies and components

@@ -1,34 +1,23 @@
 #!/usr/bin/env python3
 import json
-import zipfile
 import polars as pl
 import argparse
 import os
+import math
+from pathlib import Path
 from typing import Dict, List, Set, Tuple
 from collections import defaultdict
 
+from utils import (
+    read_gtfs_file,
+    find_gtfs_files,
+    load_gtfs_data_from_multiple_files
+)
+
 # Default minimum number of trips per day for a route to be included
 DEFAULT_MIN_TRIPS = 2
-
-def read_gtfs_file(zip_path: str, filename: str) -> pl.DataFrame:
-    """Read a GTFS file from the zip archive into a polars DataFrame."""
-    # Ensure stable types across GTFS files: IDs as strings; decimals as Float64.
-    id_columns = [
-        'route_id', 'trip_id', 'stop_id', 'shape_id', 'service_id',
-        'agency_id', 'block_id', 'fare_id', 'zone_id', 'parent_station'
-    ]
-    float_columns = [
-        'shape_dist_traveled', 'stop_lat', 'stop_lon', 'shape_pt_lat', 'shape_pt_lon'
-    ]
-    schema_overrides = {col: pl.Utf8 for col in id_columns}
-    schema_overrides.update({col: pl.Float64 for col in float_columns})
-
-    with zipfile.ZipFile(zip_path) as z:
-        return pl.read_csv(
-            z.open(filename),
-            schema_overrides=schema_overrides,
-            infer_schema_length=10000
-        )
+# Default radius in meters for finding neighboring stops
+DEFAULT_NEIGHBOR_RADIUS = 250
 
 
 def get_valid_routes(trips_df: pl.DataFrame, routes_df: pl.DataFrame, min_trips: int) -> Set[str]:
@@ -36,7 +25,6 @@ def get_valid_routes(trips_df: pl.DataFrame, routes_df: pl.DataFrame, min_trips:
     has_direction = 'direction_id' in trips_df.columns
     
     # Normalize direction_id
-    trips_df = trips_df.clone()
     if has_direction:
         trips_df = trips_df.with_columns(
             pl.col('direction_id').fill_null(0).cast(pl.Utf8).alias('direction')
@@ -49,37 +37,23 @@ def get_valid_routes(trips_df: pl.DataFrame, routes_df: pl.DataFrame, min_trips:
             how='left'
         )
         trips_df = trips_df.with_columns(
-            pl.col('route_long_name').str.to_uppercase().alias('route_upper')
-        )
-        trips_df = trips_df.with_columns(
-            pl.when(pl.col('route_upper').str.contains('UP'))
+            pl.when(pl.col('route_long_name').str.to_uppercase().str.contains('UP'))
             .then(pl.lit("0"))
-            .when(pl.col('route_upper').str.contains('DOWN'))
+            .when(pl.col('route_long_name').str.to_uppercase().str.contains('DOWN'))
             .then(pl.lit("1"))
             .otherwise(pl.lit("0"))
             .alias('direction')
         )
     
-    # Count trips per route and direction
+    # Count trips per route and direction, then check if any direction meets threshold
     trip_counts = trips_df.group_by(['route_id', 'direction']).agg(
         pl.count().alias('count')
-    ).pivot(
-        values='count',
-        index='route_id',
-        columns='direction',
-        aggregate_function='first'
-    ).fill_null(0)
+    )
     
-    # Return routes with at least min_trips in any direction
+    # Find routes with at least min_trips in any direction using vectorized operations
     def compute_valid(min_required: int) -> Set[str]:
-        valid = set()
-        for row in trip_counts.iter_rows(named=True):
-            route_id = row['route_id']
-            # Check all direction columns (excluding route_id)
-            counts = [v for k, v in row.items() if k != 'route_id']
-            if any(c >= min_required for c in counts):
-                valid.add(route_id)
-        return valid
+        valid_routes_df = trip_counts.filter(pl.col('count') >= min_required).select('route_id').unique()
+        return set(valid_routes_df['route_id'].to_list())
 
     valid_routes = compute_valid(min_trips)
     # Fallback for sparse datasets: if nothing qualifies, relax to 1
@@ -99,75 +73,147 @@ def calculate_destinations_per_stop(trips_df: pl.DataFrame, stop_times_df: pl.Da
     # Sort stop_times by trip_id and stop_sequence
     stop_times_df = stop_times_df.sort(['trip_id', 'stop_sequence'])
     
-    # Get valid trip_ids
-    valid_trip_ids = set(trips_df['trip_id'].to_list())
-    stop_times_df = stop_times_df.filter(pl.col('trip_id').is_in(list(valid_trip_ids)))
+    # Filter to valid trip_ids using Polars operations
+    valid_trip_ids = trips_df.select('trip_id').unique()
+    stop_times_df = stop_times_df.join(valid_trip_ids, on='trip_id', how='inner')
     
-    # Dictionary to store destinations for each stop
-    destinations_per_stop = defaultdict(set)
+    # Use Polars to create all origin-destination pairs within each trip
+    # For each trip, create pairs where origin stop_sequence < destination stop_sequence
+    # Create a self-join to find all pairs where same trip_id and origin sequence < dest sequence
+    origin_df = stop_times_df.select([
+        pl.col('trip_id').alias('trip_id'),
+        pl.col('stop_id').alias('origin_stop_id'),
+        pl.col('stop_sequence').alias('origin_sequence')
+    ])
     
-    # Group by trip_id to process each trip
-    total_trips = stop_times_df['trip_id'].n_unique()
-    processed = 0
+    dest_df = stop_times_df.select([
+        pl.col('trip_id').alias('trip_id'),
+        pl.col('stop_id').alias('dest_stop_id'),
+        pl.col('stop_sequence').alias('dest_sequence')
+    ])
     
-    for trip_id, trip_stops in stop_times_df.group_by('trip_id'):
-        trip_stops = trip_stops.sort('stop_sequence')
-        stops_list = trip_stops['stop_id'].to_list()
-        
-        # For each stop in the trip, all subsequent stops are destinations
-        for i, stop in enumerate(stops_list):
-            stop_id = str(stop)
-            # Add all subsequent stops as destinations
-            for j in range(i + 1, len(stops_list)):
-                destinations_per_stop[stop_id].add(str(stops_list[j]))
-        
-        processed += 1
-        if processed % 1000 == 0:
-            print(f"  Processed {processed:,}/{total_trips:,} trips ({100*processed/total_trips:.1f}%)...")
+    # Join to create all valid origin-destination pairs
+    pairs_df = origin_df.join(
+        dest_df,
+        on='trip_id',
+        how='inner'
+    ).filter(
+        pl.col('origin_sequence') < pl.col('dest_sequence')
+    ).select([
+        pl.col('origin_stop_id').cast(pl.Utf8).alias('stop_id'),
+        pl.col('dest_stop_id').cast(pl.Utf8).alias('destination_id')
+    ]).unique()
+    
+    # Group by origin stop and collect all unique destinations
+    destinations_df = pairs_df.group_by('stop_id').agg(
+        pl.col('destination_id').unique().alias('destinations')
+    )
+    
+    # Convert to dictionary format
+    destinations_per_stop = {}
+    for row in destinations_df.iter_rows(named=True):
+        stop_id = str(row['stop_id'])
+        destinations = set(str(d) for d in row['destinations'])
+        destinations_per_stop[stop_id] = destinations
     
     print(f"  Completed! Found destinations for {len(destinations_per_stop):,} stops")
-    return dict(destinations_per_stop)
+    return destinations_per_stop
 
 
-def find_neighbors(stop_times_df: pl.DataFrame) -> Dict[str, List[str]]:
-    """Find neighboring stops based on adjacent stops in trip sequences."""
-    print("Finding neighboring stops from trip sequences...")
+def haversine_distance_vectorized(
+    lat1: pl.Expr, lon1: pl.Expr, lat2: pl.Expr, lon2: pl.Expr
+) -> pl.Expr:
+    """
+    Calculate haversine distance using Polars expressions (vectorized).
+    Returns distance in meters.
+    """
+    # Earth's radius in meters
+    R = 6371000
     
-    # Sort stop_times by trip_id and stop_sequence
-    stop_times_df = stop_times_df.sort(['trip_id', 'stop_sequence'])
+    # Convert to radians
+    phi1 = lat1 * (math.pi / 180.0)
+    phi2 = lat2 * (math.pi / 180.0)
+    delta_phi = (lat2 - lat1) * (math.pi / 180.0)
+    delta_lambda = (lon2 - lon1) * (math.pi / 180.0)
     
-    neighbors = defaultdict(set)
+    # Haversine formula
+    a = (delta_phi / 2).sin().pow(2) + phi1.cos() * phi2.cos() * (delta_lambda / 2).sin().pow(2)
+    # Use atan2 for numerical stability: atan2(sqrt(a), sqrt(1-a))
+    sqrt_a = a.sqrt()
+    sqrt_one_minus_a = (1 - a).sqrt()
+    # Use pl.arctan2 as a function with two expressions
+    c = 2 * pl.arctan2(sqrt_a, sqrt_one_minus_a)
     
-    # Group by trip_id to process each trip
-    total_trips = stop_times_df['trip_id'].n_unique()
-    processed = 0
+    return R * c
+
+
+def find_neighbors(stops_df: pl.DataFrame, radius_meters: float = DEFAULT_NEIGHBOR_RADIUS) -> Dict[str, List[str]]:
+    """
+    Find neighboring stops based on geographic distance.
     
-    for trip_id, trip_stops in stop_times_df.group_by('trip_id'):
-        trip_stops = trip_stops.sort('stop_sequence')
-        stops_list = trip_stops['stop_id'].to_list()
-        
-        # For each stop in the trip, find adjacent stops (previous and next)
-        for i, stop in enumerate(stops_list):
-            stop_id = str(stop)
-            
-            # Add previous stop as neighbor (if exists)
-            if i > 0:
-                prev_stop_id = str(stops_list[i - 1])
-                if prev_stop_id != stop_id:
-                    neighbors[stop_id].add(prev_stop_id)
-            
-            # Add next stop as neighbor (if exists)
-            if i < len(stops_list) - 1:
-                next_stop_id = str(stops_list[i + 1])
-                if next_stop_id != stop_id:
-                    neighbors[stop_id].add(next_stop_id)
-        
-        processed += 1
-        if processed % 1000 == 0:
-            print(f"  Processed {processed:,}/{total_trips:,} trips ({100*processed/total_trips:.1f}%)...")
+    For each stop, finds all other stops within the specified radius (in meters).
+    Uses vectorized Polars operations for performance.
+    """
+    print(f"Finding neighboring stops within {radius_meters}m radius...")
     
-    # Convert sets to lists for consistency with previous interface
-    neighbors_dict = {stop_id: list(neighbor_set) for stop_id, neighbor_set in neighbors.items()}
+    # Ensure we have the required columns
+    required_cols = ['stop_id', 'stop_lat', 'stop_lon']
+    if not all(col in stops_df.columns for col in required_cols):
+        raise ValueError(f"stops_df must contain columns: {required_cols}")
+    
+    # Prepare stops data with string IDs
+    stops_prep = stops_df.select([
+        pl.col('stop_id').cast(pl.Utf8).alias('stop_id'),
+        pl.col('stop_lat').alias('lat'),
+        pl.col('stop_lon').alias('lon')
+    ])
+    
+    # Create cross join to compare all pairs of stops
+    # Use suffix to distinguish origin and destination
+    origin_df = stops_prep.select([
+        pl.col('stop_id').alias('origin_id'),
+        pl.col('lat').alias('lat1'),
+        pl.col('lon').alias('lon1')
+    ])
+    
+    dest_df = stops_prep.select([
+        pl.col('stop_id').alias('dest_id'),
+        pl.col('lat').alias('lat2'),
+        pl.col('lon').alias('lon2')
+    ])
+    
+    # Cross join and calculate distances
+    pairs_df = origin_df.join(dest_df, how='cross').filter(
+        pl.col('origin_id') != pl.col('dest_id')  # Exclude self
+    ).with_columns([
+        haversine_distance_vectorized(
+            pl.col('lat1'), pl.col('lon1'),
+            pl.col('lat2'), pl.col('lon2')
+        ).alias('distance')
+    ]).filter(
+        pl.col('distance') <= radius_meters
+    ).select([
+        pl.col('origin_id').alias('stop_id'),
+        pl.col('dest_id').alias('neighbor_id')
+    ])
+    
+    # Group by origin stop and collect neighbors
+    neighbors_df = pairs_df.group_by('stop_id').agg(
+        pl.col('neighbor_id').unique().alias('neighbors')
+    )
+    
+    # Convert to dictionary format
+    neighbors_dict = {}
+    for row in neighbors_df.iter_rows(named=True):
+        stop_id = str(row['stop_id'])
+        neighbors = [str(n) for n in row['neighbors']]
+        neighbors_dict[stop_id] = neighbors
+    
+    # Ensure all stops are in the dictionary (even if they have no neighbors)
+    all_stop_ids = set(stops_prep['stop_id'].to_list())
+    for stop_id in all_stop_ids:
+        if stop_id not in neighbors_dict:
+            neighbors_dict[stop_id] = []
     
     print(f"  Completed! Found neighbors for {len(neighbors_dict):,} stops")
     return neighbors_dict
@@ -189,6 +235,9 @@ def calculate_importance_scores(
     """
     print("Calculating importance scores...")
     
+    # Pre-compute neighbor sets for faster lookup
+    neighbor_sets = {stop_id: set(neighbor_list) for stop_id, neighbor_list in neighbors.items()}
+    
     scores = []
     total_stops = len(destinations_per_stop)
     processed = 0
@@ -196,23 +245,26 @@ def calculate_importance_scores(
     for stop_id, destinations in destinations_per_stop.items():
         num_destinations = len(destinations)
         
-        # Get neighboring stops
-        neighbor_ids = neighbors.get(stop_id, [])
+        # Get neighboring stops (use pre-computed set for faster access)
+        neighbor_ids = neighbor_sets.get(stop_id, set())
         
         if len(neighbor_ids) == 0:
             # No neighbors - use absolute destination count as score
             importance = num_destinations
         else:
-            # Calculate average destinations from neighbors
+            # Calculate average destinations from neighbors and union
             neighbor_destinations_counts = []
             neighbor_destinations_union = set()
             
+            # Use list comprehension for faster iteration
             for neighbor_id in neighbor_ids:
                 neighbor_dests = destinations_per_stop.get(neighbor_id, set())
-                neighbor_destinations_counts.append(len(neighbor_dests))
-                neighbor_destinations_union.update(neighbor_dests)
+                if neighbor_dests:  # Only process non-empty sets
+                    neighbor_destinations_counts.append(len(neighbor_dests))
+                    neighbor_destinations_union.update(neighbor_dests)
             
-            avg_neighbor_destinations = sum(neighbor_destinations_counts) / len(neighbor_destinations_counts) if neighbor_destinations_counts else 0
+            num_neighbors = len(neighbor_destinations_counts)
+            avg_neighbor_destinations = sum(neighbor_destinations_counts) / num_neighbors if num_neighbors > 0 else 0
             
             # Calculate unique destinations (destinations available from this stop but not from neighbors)
             unique_destinations = destinations - neighbor_destinations_union
@@ -288,28 +340,53 @@ def main():
     parser.add_argument(
         '--city', 
         type=str,
-        help='City name (if provided, output will go to $city/ and read gtfs from $city/gtfs.zip)'
+        help='City name (if provided, uses all .zip GTFS files in $city/ and output goes to $city/)'
+    )
+    parser.add_argument(
+        '--gtfs-path', 
+        type=str,
+        help='Path to a single GTFS zip file (if not using --city)'
+    )
+    parser.add_argument(
+        '--neighbor-radius',
+        type=float,
+        default=DEFAULT_NEIGHBOR_RADIUS,
+        help=f'Radius in meters for finding neighboring stops (default: {DEFAULT_NEIGHBOR_RADIUS})'
     )
     
     args = parser.parse_args()
     
-    # Determine paths
+    # Determine GTFS files and output directory
     if args.city:
+        city_dir = args.city
         output_dir = args.city
-        gtfs_path = os.path.join(args.city, 'gtfs.zip')
+        gtfs_paths = find_gtfs_files(city_dir)
+        if not gtfs_paths:
+            print(f"Error: No .zip GTFS files found in '{city_dir}' directory")
+            return 1
+        print(f"Found {len(gtfs_paths)} GTFS file(s) in {city_dir}: {', '.join(Path(p).name for p in gtfs_paths)}")
     else:
         output_dir = args.output_dir
-        gtfs_path = os.path.join(args.output_dir, 'gtfs.zip')
+        if args.gtfs_path:
+            gtfs_paths = [args.gtfs_path]
+        else:
+            gtfs_paths = find_gtfs_files(output_dir)
+            if not gtfs_paths:
+                print(f"Error: No .zip GTFS files found in '{output_dir}' directory and --gtfs-path not provided")
+                return 1
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
     # Load GTFS data
     print("Loading GTFS data...")
-    routes_df = read_gtfs_file(gtfs_path, 'routes.txt')
-    trips_df = read_gtfs_file(gtfs_path, 'trips.txt')
-    stop_times_df = read_gtfs_file(gtfs_path, 'stop_times.txt')
-    stops_df = read_gtfs_file(gtfs_path, 'stops.txt')
+    if len(gtfs_paths) > 1:
+        print(f"Merging data from {len(gtfs_paths)} GTFS files...")
+    gtfs_data = load_gtfs_data_from_multiple_files(gtfs_paths, include_shapes=False)
+    routes_df = gtfs_data['routes']
+    trips_df = gtfs_data['trips']
+    stop_times_df = gtfs_data['stop_times']
+    stops_df = gtfs_data['stops']
     
     # Filter to valid routes
     print("Filtering valid routes...")
@@ -318,19 +395,19 @@ def main():
     
     trips_df = trips_df.filter(pl.col('route_id').is_in(list(valid_routes)))
     
-    # Filter stops to only those served by valid routes
-    valid_trip_ids = set(trips_df['trip_id'].to_list())
-    stop_times_df = stop_times_df.filter(pl.col('trip_id').is_in(list(valid_trip_ids)))
-    valid_stop_ids = set(stop_times_df['stop_id'].unique().to_list())
-    stops_df = stops_df.filter(pl.col('stop_id').is_in(list(valid_stop_ids)))
+    # Filter stops to only those served by valid routes using Polars operations
+    valid_trip_ids = trips_df.select('trip_id').unique()
+    stop_times_df = stop_times_df.join(valid_trip_ids, on='trip_id', how='inner')
+    valid_stop_ids = stop_times_df.select('stop_id').unique()
+    stops_df = stops_df.join(valid_stop_ids, on='stop_id', how='inner')
     
     print(f"Working with {len(stops_df)} stops")
     
     # Calculate destinations per stop
     destinations_per_stop = calculate_destinations_per_stop(trips_df, stop_times_df)
     
-    # Find neighbors based on trip sequences
-    neighbors = find_neighbors(stop_times_df)
+    # Find neighbors based on geographic distance
+    neighbors = find_neighbors(stops_df, args.neighbor_radius)
     
     # Calculate importance scores
     scores = calculate_importance_scores(destinations_per_stop, neighbors, stops_df)
@@ -356,10 +433,14 @@ def main():
     print("Top 20 Most Important Stops:")
     print("="*60)
     
-    # Get stop names for display
+    # Get stop names for display using Polars operations
+    stop_names_df = stops_df.select([
+        pl.col('stop_id').cast(pl.Utf8).alias('stop_id'),
+        pl.col('stop_name').alias('stop_name')
+    ])
     stop_names = {
         str(row['stop_id']): row['stop_name']
-        for row in stops_df.iter_rows(named=True)
+        for row in stop_names_df.iter_rows(named=True)
     }
     
     for i, (stop_id, score) in enumerate(normalized_scores[:20], 1):

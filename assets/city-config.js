@@ -1,5 +1,4 @@
 export const DEFAULT_CITY = 'blr';
-
 export const AVAILABLE_CITIES = [
   'blr',
   'chennai',
@@ -7,8 +6,10 @@ export const AVAILABLE_CITIES = [
   'goa',
   'kochi',
   'pune',
+  'telangana',
   'railways',
   'greyhound',
+  'nyc',
 ];
 
 export const CITY_CONFIGS = {
@@ -92,6 +93,18 @@ export const CITY_CONFIGS = {
       },
     },
   },
+  telangana: {
+    city: {
+      name: 'Telangana',
+      code: 'telangana',
+      bounds: {
+        lowerLat: 15.5,
+        upperLat: 20.5,
+        lowerLong: 77.0,
+        upperLong: 82.0,
+      },
+    },
+  },
   railways: {
     city: {
       name: 'Railways',
@@ -113,6 +126,18 @@ export const CITY_CONFIGS = {
         upperLat: 49.5904,
         lowerLong: -125.0011,
         upperLong: -66.9326,
+      },
+    },
+  },
+  nyc: {
+    city: {
+      name: 'New York City',
+      code: 'nyc',
+      bounds: {
+        lowerLat: 40.5,
+        upperLat: 41.0,
+        lowerLong: -74.5,
+        upperLong: -73.5,
       },
     },
   },

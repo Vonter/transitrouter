@@ -1,34 +1,20 @@
 #!/usr/bin/env python3
 import json
-import zipfile
 import polars as pl
 import argparse
 import os
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
 
+from utils import (
+    read_gtfs_file,
+    find_gtfs_files,
+    load_gtfs_data_from_multiple_files
+)
+
 # Default minimum number of trips per day for a route to be included
 DEFAULT_MIN_TRIPS = 2
-
-def read_gtfs_file(zip_path: str, filename: str) -> pl.DataFrame:
-    """Read a GTFS file from the zip archive into a polars DataFrame."""
-    # Ensure stable types across GTFS files: IDs as strings; decimals as Float64.
-    id_columns = [
-        'route_id', 'trip_id', 'stop_id', 'shape_id', 'service_id',
-        'agency_id', 'block_id', 'fare_id', 'zone_id', 'parent_station'
-    ]
-    float_columns = [
-        'shape_dist_traveled', 'stop_lat', 'stop_lon', 'shape_pt_lat', 'shape_pt_lon'
-    ]
-    schema_overrides = {col: pl.Utf8 for col in id_columns}
-    schema_overrides.update({col: pl.Float64 for col in float_columns})
-
-    with zipfile.ZipFile(zip_path) as z:
-        return pl.read_csv(
-            z.open(filename),
-            schema_overrides=schema_overrides,
-            infer_schema_length=10000
-        )
 
 
 def has_direction_id(trips_df: pl.DataFrame) -> bool:
@@ -153,14 +139,17 @@ def get_route_endpoints_batch(trips_df: pl.DataFrame, stop_times_df: pl.DataFram
     return endpoints
 
 
-def process_schedules(gtfs_path: str, output_dir: str, min_trips: int = DEFAULT_MIN_TRIPS):
+def process_schedules(gtfs_paths: list[str], output_dir: str, min_trips: int = DEFAULT_MIN_TRIPS):
     """Process GTFS data and generate schedule JSON files for each stop."""
     
-    # Read GTFS files
+    # Read and merge GTFS files
     print("Reading GTFS files...")
-    routes_df = read_gtfs_file(gtfs_path, 'routes.txt')
-    trips_df = read_gtfs_file(gtfs_path, 'trips.txt')
-    stop_times_df = read_gtfs_file(gtfs_path, 'stop_times.txt')
+    if len(gtfs_paths) > 1:
+        print(f"Found {len(gtfs_paths)} GTFS files, merging data...")
+    gtfs_data = load_gtfs_data_from_multiple_files(gtfs_paths, include_shapes=False)
+    routes_df = gtfs_data['routes']
+    trips_df = gtfs_data['trips']
+    stop_times_df = gtfs_data['stop_times']
     
     # Prepare trips with standardized directions
     print("Processing trip directions...")
@@ -309,9 +298,8 @@ def main():
     )
     parser.add_argument(
         '--gtfs-path', 
-        type=str, 
-        default='bmtc.zip',
-        help='Path to the GTFS zip file'
+        type=str,
+        help='Path to a single GTFS zip file (if not using --city)'
     )
     parser.add_argument(
         '--output-dir',
@@ -322,20 +310,31 @@ def main():
     parser.add_argument(
         '--city',
         type=str,
-        help='City name (if provided, output will go to $city/schedule/)'
+        help='City name (if provided, uses all .zip GTFS files in $city/ and output goes to $city/schedule/)'
     )
     
     args = parser.parse_args()
     
-    # Determine output directory
+    # Determine GTFS files and output directory
     if args.city:
+        city_dir = args.city
         output_dir = os.path.join(args.city, 'schedule')
+        gtfs_paths = find_gtfs_files(city_dir)
+        if not gtfs_paths:
+            print(f"Error: No .zip GTFS files found in '{city_dir}' directory")
+            return 1
+        print(f"Found {len(gtfs_paths)} GTFS file(s) in {city_dir}: {', '.join(Path(p).name for p in gtfs_paths)}")
     else:
+        if args.gtfs_path:
+            gtfs_paths = [args.gtfs_path]
+        else:
+            print("Error: Either --city or --gtfs-path must be provided")
+            return 1
         output_dir = args.output_dir
     
     # Process schedules
     try:
-        process_schedules(args.gtfs_path, output_dir, args.min_trips)
+        process_schedules(gtfs_paths, output_dir, args.min_trips)
     except FileNotFoundError as e:
         print(f"Error: Could not find file: {e}")
         return 1
