@@ -454,9 +454,8 @@ def extract_routes(osm_data: dict, nodes_dict: Dict[str, dict]) -> List[dict]:
         
         # Get line properties
         line_ref = tags.get("ref", "")
-        line_color = tags.get("colour") or tags.get("color") or DEFAULT_VALUES["line_color"]
-        if not line_color.startswith("#"):
-            line_color = f"#{line_color}" if len(line_color) == 6 else DEFAULT_VALUES["line_color"]
+        color_value = tags.get("colour") or tags.get("color")
+        line_color = normalize_color_to_hex(color_value) if color_value else DEFAULT_VALUES["line_color"]
         
         network = tags.get("network", DEFAULT_VALUES["network"])
         operator = tags.get("operator", DEFAULT_VALUES["operator"])
