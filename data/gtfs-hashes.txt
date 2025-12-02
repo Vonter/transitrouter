@@ -1,5 +1,5 @@
 blr:
-  gtfs.zip: 67cf649f0f5d83ab7f16dbcea470a11d05b173071715ab97ecb5c35f950e1763
+  gtfs.zip: a3fbe68af532a96ce0008f58546f1f747172dd9237f5c00cdd1bfa95aa495640
 chennai:
   gtfs.zip: c7ac04cbdbf0f7079383feafb74e72efd11709a950f53b6eeb41c0d4cdb6ee67
 delhi:
