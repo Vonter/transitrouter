@@ -1785,19 +1785,25 @@ const App = () => {
           'case',
           // If color is very ligh, use darker halo
           ['==', ['get', 'station_colors'], '#ffff00'], // yellow
+          '#555',
           ['==', ['get', 'station_colors'], 'yellow'], // yellow
           '#555',
           ['==', ['get', 'station_colors'], '#00ffff'], // aqua/cyan
+          '#666',
           ['==', ['get', 'station_colors'], 'aqua'], // aqua/cyan
+          '#666',
           ['==', ['get', 'station_colors'], 'cyan'], // aqua/cyan
           '#666',
           ['==', ['get', 'station_colors'], '#ffc0cb'], // pink
+          '#888',
           ['==', ['get', 'station_colors'], 'pink'], // pink
           '#888',
           ['==', ['get', 'station_colors'], '#ff8800'], // orange
+          '#999',
           ['==', ['get', 'station_colors'], 'orange'], // orange
           '#999',
           ['==', ['get', 'station_colors'], '#ee82ee'], // violet
+          '#aaa',
           ['==', ['get', 'station_colors'], 'violet'], // violet
           '#aaa',
           // Default white halo for most colors

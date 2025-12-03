@@ -20,6 +20,6 @@ nyc:
 pune:
   gtfs.zip: 1d7ac8adcfd239e6e5b4f599a57150a98481244c1293722116d0431101bab8d0
 railways:
-  gtfs.zip: 8e365751397ac6fbf85c8ab8b5ab83eced97331d0e2e37eb84cfc2416a2ccd01
+  gtfs.zip: a734bedbebb546029603c1bf03876302b986d20fd19c033150adcd5383c3adc6
 telangana:
   gtfs.zip: dcd07c2702f8d38be8b59da34901dbb30f8b7236e694cbee4b6a891a15f613a2
