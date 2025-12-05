@@ -45,7 +45,7 @@ main {
 #bus-stop-map {
   position: relative;
   width: 100%;
-  height: 200px;
+  height: 400px;
 }
 
 #bus-stop-map .maplibregl-canvas {

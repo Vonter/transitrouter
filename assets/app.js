@@ -227,7 +227,6 @@ const App = () => {
   const [stopPopoverData, setStopPopoverData] = useState(null);
   const [showStopPopover, setShowStopPopover] = useState(false);
   const [showServicePopover, setShowServicePopover] = useState(false);
-  const [showArrivalsPopover, setShowArrivalsPopover] = useState(false);
   const [intersectStops, setIntersectStops] = useState(0);
   const [routeServices, setRouteServices] = useState([]);
   const [routeVehicles, setRouteVehicles] = useState([]);
@@ -587,37 +586,19 @@ const App = () => {
     });
   };
 
-  const openBusArrival = (e, showPopup = false) => {
+  const openBusArrival = (e) => {
     if (e) e.preventDefault();
     const width = 360;
     const height = 480;
     const url = e.target.href;
     const stopNumber = url.match(/[^#]+$/)[0];
-    showPopup =
-      showPopup ||
-      (window.innerWidth > width * 2 && window.innerHeight > height) ||
-      window.innerWidth > window.innerHeight; // landscape is weird
-    if (showPopup) {
-      const top = ((screen.availHeight || screen.height) - height) / 2;
-      const left = (screen.width - width) / 2;
-      window.open(
-        url,
-        `busArrivals-${stopNumber}`,
-        `width=${width},height=${height},menubar=0,toolbar=0,top=${top},left=${left}`,
-      );
-    } else {
-      setShowArrivalsPopover({
-        webviewURL: url,
-        number: stopNumber,
-      });
-      $map.classList.add('fade-out');
-    }
-  };
-
-  const closeBusArrival = (e) => {
-    if (e) e.preventDefault();
-    setShowArrivalsPopover(false);
-    $map.classList.remove('fade-out');
+    const top = ((screen.availHeight || screen.height) - height) / 2;
+    const left = (screen.width - width) / 2;
+    window.open(
+      url,
+      `busArrivals-${stopNumber}`,
+      `width=${width},height=${height},menubar=0,toolbar=0,top=${top},left=${left}`,
+    );
   };
 
   const _showBetweenPopover = (data) => {
@@ -2817,13 +2798,11 @@ const App = () => {
     () =>
       (!!showStopPopover ||
         !!showBetweenPopover ||
-        !!showArrivalsPopover ||
         !!showServicePopover) &&
       !largerScreen,
     [
       showStopPopover,
       showBetweenPopover,
-      showArrivalsPopover,
       showServicePopover,
       largerScreen,
     ],
@@ -3478,35 +3457,6 @@ const App = () => {
                 })
               }
             />
-          </div>,
-        ]}
-      </div>
-      <div
-        id="arrivals-popover"
-        class={`popover ${showArrivalsPopover ? 'expand' : ''}`}
-      >
-        {showArrivalsPopover && [
-          <a
-            href={`#${route.cityPrefix}/`}
-            onClick={closeBusArrival}
-            class="popover-close"
-          >
-            &times;
-          </a>,
-          <a
-            href={`/arrival/#${route.cityPrefix}/${showArrivalsPopover.number}`}
-            target="_blank"
-            onClick={(e) => {
-              openBusArrival(e, true);
-              closeBusArrival(e);
-            }}
-            class="popover-popout popover-close"
-          >
-            Pop out{' '}
-            <img src={openNewWindowImagePath} width="16" height="16" alt="" />
-          </a>,
-          <div class="popover-scroll">
-            <iframe src={showArrivalsPopover.webviewURL}></iframe>
           </div>,
         ]}
       </div>

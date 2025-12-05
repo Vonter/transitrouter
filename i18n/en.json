@@ -5,7 +5,7 @@
   },
   "glossary": {
     "busArrivals": "Arrivals",
-    "passingRoutes": "Passing routes",
+    "passingRoutes": "Connectivity",
     "popOut": "Pop out",
     "seatsAvailable": "Seats available",
     "standingAvailable": "Standing available",
@@ -69,9 +69,9 @@
   },
   "arrivals": {
     "invalidBusStopCode": "Invalid stop code.",
-    "preHeading": "Arrival times",
-    "title": "Arrival times",
-    "titleStop": "Arrival times for {{stopNumber}} - {{stopName}}",
+    "preHeading": "Arrivals",
+    "title": "Arrivals",
+    "titleStop": "Arrivals for {{stopNumber}} - {{stopName}}",
     "multipleVisitsLegend": "1st or 2nd visit. Stops here twice, going in different directions. Check destination before boarding.",
     "wheelchairDisclaimer": "<0/> All public transit in revenue service are <2>wheelchair-accessible</2>. The ones that are not accesssible will be marked with this icon <4/>"
   },

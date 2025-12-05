@@ -52,12 +52,16 @@ const BUSES = {
 };
 
 const Bus = (props) => {
-  const { maxPx, index, duration_ms, type, load, feature, _ghost, _id } = props;
+  const { maxPx, index, duration_ms, type, load, feature, _ghost, _id, maxDuration_ms, isFirstFetch } = props;
 
   const busImage = BUSES[type.toLowerCase()];
 
   const prevPx = useRef();
-  const px = (duration_ms / 1000 / 60) * (duration_ms > 0 ? 10 : 2.5);
+  // Scale based on maxDuration_ms if provided, otherwise use fixed scaling
+  const scaleFactor = maxDuration_ms && maxDuration_ms > 0 
+    ? (maxPx - 30) / (maxDuration_ms / 1000 / 60) // Scale to fit within available width
+    : (duration_ms > 0 ? 10 : 2.5);
+  const px = (duration_ms / 1000 / 60) * scaleFactor;
 
   const busTooFar = px > maxPx - 30; // 30 = bus width
   const pxFar = 90 + index * 2; // index = zero-based
@@ -66,10 +70,10 @@ const Bus = (props) => {
     prevPx.current = px;
   }, [px]);
 
-  let time = 1; // 1 second
-  if (prevPx.current) {
-    const distance = Math.abs(prevPx.current - px);
-    time = distance / 10;
+  let shouldAnimate = false;
+  // Don't animate on first data fetch
+  if (!isFirstFetch && prevPx.current !== undefined) {
+    shouldAnimate = true;
   }
 
   return (
@@ -78,7 +82,7 @@ const Bus = (props) => {
       class={`bus ${_ghost ? 'ghost' : ''}`}
       style={{
         marginLeft: busTooFar ? pxFar + '%' : px.toFixed(1) + 'px',
-        transitionDuration: `${time}s`,
+        transitionDuration: shouldAnimate ? `1s` : '0s',
       }}
     >
       <span class="bus-float">
@@ -120,7 +124,7 @@ const clearMapSource = (map, sourceId) => {
 const getPinnedServiceNumbers = (pinnedServices) =>
   new Set(pinnedServices.map(getServiceNo).filter(Boolean).map(toServiceNoStr));
 
-function BusLane({ index, no, buses }) {
+function BusLane({ index, no, buses, maxDuration_ms, isFirstFetch }) {
   const prevNo = useRef();
   const prevBuses = useRef();
   const nextBuses = buses.filter((nb) => typeof nb?.duration_ms === 'number');
@@ -180,7 +184,7 @@ function BusLane({ index, no, buses }) {
   return (
     <div class="bus-lane" ref={busLaneRef}>
       {nextBuses.map((b, i) => (
-        <Bus key={b._id} index={i} {...b} maxPx={busLaneWidth} />
+        <Bus key={b._id} index={i} {...b} maxPx={busLaneWidth} maxDuration_ms={maxDuration_ms} isFirstFetch={isFirstFetch} />
       ))}
       {index && <span class="visit-number">{index}</span>}
     </div>
@@ -194,6 +198,7 @@ function ArrivalTimes() {
   const [fetchServicesStatus, setFetchServicesStatus] = useState(null); // 'loading', 'error', 'online'
   const [services, setServices] = useState(null);
   const [servicesData, setServicesData] = useState(null); // For determining direction
+  const isFirstFetchRef = useRef(true);
   // Initialize pinned services from localStorage
   const [pinnedServices, setPinnedServices] = useState(() => {
     try {
@@ -270,7 +275,7 @@ function ArrivalTimes() {
 
     const now = new Date();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const MAX_DURATION_MS = 30 * 60 * 1000;
+    const MAX_TRIPS = 50;
 
     const createTrip = (duration_ms, origin, destination) => ({
       duration_ms,
@@ -282,43 +287,76 @@ function ArrivalTimes() {
       destination_code: destination,
     });
 
-    return scheduleData.services
+    // Collect all upcoming trips from all services
+    const allUpcomingTrips = [];
+    scheduleData.services.forEach((service) => {
+      const { no, origin, destination, trips } = service;
+      trips.forEach((timeStr) => {
+        const [hours, minutes] = timeStr.split(':').map(Number);
+        const tripMinutes = hours * 60 + minutes;
+        const duration_ms = (tripMinutes - currentMinutes) * 60 * 1000;
+        if (duration_ms > 0) {
+          allUpcomingTrips.push({
+            no,
+            origin,
+            destination,
+            minutes: tripMinutes,
+            duration_ms,
+          });
+        }
+      });
+    });
+
+    // Sort by duration_ms (earliest first) and take the next 50
+    const next50Trips = allUpcomingTrips
+      .sort((a, b) => a.duration_ms - b.duration_ms)
+      .slice(0, MAX_TRIPS);
+
+    // Group trips back by service
+    const serviceMap = new Map();
+    next50Trips.forEach((trip) => {
+      const key = `${trip.no}-${trip.destination}`;
+      if (!serviceMap.has(key)) {
+        serviceMap.set(key, {
+          no: trip.no,
+          destination: trip.destination,
+          trips: [],
+        });
+      }
+      serviceMap.get(key).trips.push(trip);
+    });
+
+    // Convert to the expected format
+    return Array.from(serviceMap.values())
       .map((service) => {
-        const { no, origin, destination, trips } = service;
-        const upcomingTrips = trips
-          .map((timeStr) => {
-            const [hours, minutes] = timeStr.split(':').map(Number);
-            const tripMinutes = hours * 60 + minutes;
-            const duration_ms = (tripMinutes - currentMinutes) * 60 * 1000;
-            return { minutes: tripMinutes, duration_ms };
-          })
-          .filter((t) => t.duration_ms > 0 && t.duration_ms <= MAX_DURATION_MS)
-          .sort((a, b) => a.minutes - b.minutes);
-
-        if (upcomingTrips.length === 0) return null;
-
+        const sortedTrips = service.trips.sort(
+          (a, b) => a.minutes - b.minutes,
+        );
         const result = {
-          no,
-          destination,
-          frequency: upcomingTrips.length,
-          next: createTrip(upcomingTrips[0].duration_ms, origin, destination),
+          no: service.no,
+          destination: service.destination,
+          frequency: sortedTrips.length,
+          next: createTrip(
+            sortedTrips[0].duration_ms,
+            sortedTrips[0].origin,
+            sortedTrips[0].destination,
+          ),
         };
-        if (upcomingTrips[1])
+        if (sortedTrips[1])
           result.next2 = createTrip(
-            upcomingTrips[1].duration_ms,
-            origin,
-            destination,
+            sortedTrips[1].duration_ms,
+            sortedTrips[1].origin,
+            sortedTrips[1].destination,
           );
-        if (upcomingTrips[2])
+        if (sortedTrips[2])
           result.next3 = createTrip(
-            upcomingTrips[2].duration_ms,
-            origin,
-            destination,
+            sortedTrips[2].duration_ms,
+            sortedTrips[2].origin,
+            sortedTrips[2].destination,
           );
 
         return result;
       })
-      .filter(Boolean)
       .sort((a, b) => b.frequency - a.frequency);
   }
 
@@ -355,12 +393,14 @@ function ArrivalTimes() {
           convertedServices.length > 0 ? 'static' : 'error',
         );
         setServices(convertedServices.length > 0 ? convertedServices : []);
+        isFirstFetchRef.current = false;
         scheduleRetry(id, 30000);
       })
       .catch((error) => {
         console.error('Fallback schedule fetch failed:', error);
         setFetchServicesStatus('error');
         setServices([]);
+        isFirstFetchRef.current = false;
         scheduleRetry(id, 3000);
       });
   };
@@ -377,6 +417,7 @@ function ArrivalTimes() {
           if (liveServices?.length > 0) {
             setFetchServicesStatus('online');
             setServices(liveServices);
+            isFirstFetchRef.current = false;
             scheduleRetry(id);
           } else {
             throw new Error('No live data available');
@@ -386,11 +427,16 @@ function ArrivalTimes() {
           console.log('Falling back to static schedule');
           fetchScheduleFallback(id);
         });
+    } else {
+      fetchScheduleFallback(id);
     }
   }
 
   useEffect(() => {
-    if (busStop) fetchServices(busStop.code);
+    if (busStop) {
+      isFirstFetchRef.current = true; // Reset for new stop
+      fetchServices(busStop.code);
+    }
     return () => {
       clearTimeout(arrivalsTimeout);
       cancelAnimationFrame(arrivalsRAF);
@@ -857,9 +903,11 @@ function ArrivalTimes() {
   const { code, name } = busStop;
 
   // Group services by route number and destination
-  const groupedServices = services
+  const { groupedServices, maxDuration_ms } = services
     ? (() => {
         const groups = {};
+        let maxDuration = 0;
+        
         services.forEach((service) => {
           const key = `${service.no}-${service.destination || service.next?.destination_code || ''}`;
           if (!groups[key]) {
@@ -875,18 +923,23 @@ function ArrivalTimes() {
             .filter(Boolean)
             .forEach((bus) => {
               groups[key].buses.push(bus);
+              if (bus.duration_ms && bus.duration_ms > maxDuration) {
+                maxDuration = bus.duration_ms;
+              }
             });
           groups[key].frequency += service.frequency || 0;
         });
 
-        return Object.values(groups).sort((a, b) => {
+        const sorted = Object.values(groups).sort((a, b) => {
           const aPinned = isPinned(a.no, pinnedServices);
           const bPinned = isPinned(b.no, pinnedServices);
           if (aPinned !== bPinned) return aPinned ? -1 : 1;
           return b.frequency - a.frequency;
         });
+        
+        return { groupedServices: sorted, maxDuration_ms: maxDuration };
       })()
-    : [];
+    : { groupedServices: [], maxDuration_ms: 0 };
 
   return (
     <div>
@@ -925,11 +978,11 @@ function ArrivalTimes() {
                       >
                         {buses2.length ? (
                           <>
-                            <BusLane index={1} no={no} buses={buses1} />
-                            <BusLane index={2} no={no} buses={buses2} />
+                            <BusLane index={1} no={no} buses={buses1} maxDuration_ms={maxDuration_ms} isFirstFetch={isFirstFetchRef.current} />
+                            <BusLane index={2} no={no} buses={buses2} maxDuration_ms={maxDuration_ms} isFirstFetch={isFirstFetchRef.current} />
                           </>
                         ) : (
-                          <BusLane no={no} buses={sortedBuses} />
+                          <BusLane no={no} buses={sortedBuses} maxDuration_ms={maxDuration_ms} isFirstFetch={isFirstFetchRef.current} />
                         )}
                       </td>
                     </tr>
@@ -949,7 +1002,7 @@ function ArrivalTimes() {
           ) : (
             <tbody>
               <tr>
-                <td class="blank">No arrival times available.</td>
+                <td class="blank">No upcoming arrivals.</td>
               </tr>
             </tbody>
           )
