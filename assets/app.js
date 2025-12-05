@@ -3233,7 +3233,7 @@ const App = () => {
                 })}{' '}
                 ∙{' '}
                 <a
-                  href={`/first-last/#${stopPopoverData.number}`}
+                  href={`/first-last/#${route.cityPrefix}/${stopPopoverData.number}`}
                   target="_blank"
                 >
                   {t('stop.firstLastBus')}{' '}

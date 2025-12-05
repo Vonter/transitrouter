@@ -107,7 +107,7 @@ function FirstLastTimes() {
       fetchCache(stopsJSONPath, 24 * 60),
     ]).then(([flData, stopsData]) => {
       window.onhashchange = () => {
-        const stop = location.hash.slice(1);
+        const stop = location.hash.split('/')[2];
         const data = flData[stop];
         if (!data) {
           alert(t('firstLast.busStopCodeNotFound'));

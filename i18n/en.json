@@ -4,7 +4,7 @@
     "live": "Live"
   },
   "glossary": {
-    "busArrivals": "Bus arrivals",
+    "busArrivals": "Arrivals",
     "passingRoutes": "Passing routes",
     "popOut": "Pop out",
     "seatsAvailable": "Seats available",
@@ -27,8 +27,8 @@
     "sundaysPublicHolidaysShort": "SUN",
     "sundaysPublicHolidays": "Sunday & Public Holidays",
     "service": "Service",
-    "firstBus": "First Bus",
-    "lastBus": "Last Bus"
+    "firstBus": "First Trip",
+    "lastBus": "Last Trip"
   },
   "app": {
     "name": "TransitRouter",
@@ -40,44 +40,44 @@
     "explore": "Let's explore"
   },
   "search": {
-    "placeholder": "Search for bus route or stop"
+    "placeholder": "Search for route or stop"
   },
   "service": {
-    "title": "Bus service {{serviceNumber}}: {{serviceName}} - $t(app.name)",
-    "titleMultiple": "Bus services: {{serviceNumbersNames}} - $t(app.name)",
-    "oppositeLegend": "Bus stops with opposite direction of services"
+    "title": "Transit service {{serviceNumber}}: {{serviceName}} - $t(app.name)",
+    "titleMultiple": "Transit services: {{serviceNumbersNames}} - $t(app.name)",
+    "oppositeLegend": "Stops with opposite direction of services"
   },
   "stop": {
-    "title": "Bus stop {{stopNumber}}: {{stopName}} - $t(app.name)",
-    "titleRoutes": "Routes passing bus stop {{stopNumber}}: {{stopName}} - $t(app.name)",
-    "firstLastBus": "First/last bus",
-    "diagramBus": "Bus route diagram",
-    "multipleDirectionsWarning": "Some services serve multiple directions. Open \"Bus arrivals\" to see more details.",
-    "liveBusTrack": "{{count}} bus now on track",
-    "liveBusTrack_plural": "{{count}} buses now on track."
+    "title": "Stop {{stopNumber}}: {{stopName}} - $t(app.name)",
+    "titleRoutes": "Routes passing stop {{stopNumber}}: {{stopName}} - $t(app.name)",
+    "firstLastBus": "First/last trip",
+    "diagramBus": "Stop route diagram",
+    "multipleDirectionsWarning": "Some services serve multiple directions. Open \"Arrivals\" to see more details.",
+    "liveBusTrack": "{{count}} trips now on track",
+    "liveBusTrack_plural": "{{count}} trips now on track."
   },
   "passingRoutes": {
     "passingRoutes": "{{count}} passing route",
     "passingRoutes_plural": "{{count}} passing routes"
   },
   "multiRoute": {
-    "addRoute": "Add another bus route",
+    "addRoute": "Add another route",
     "showingServices": "Showing {{count}} service",
     "showingServices_plural": "Showing {{count}} services",
     "intersectingStops": "{{count}} intersecting stop",
     "intersectingStops_plural": "{{count}} intersecting stops"
   },
   "arrivals": {
-    "invalidBusStopCode": "Invalid bus stop code.",
-    "preHeading": "Bus arrival times",
-    "title": "Bus arrival times",
-    "titleStop": "Bus arrival times for {{stopNumber}} - {{stopName}}",
-    "multipleVisitsLegend": "1st or 2nd visit. Bus stops here twice, going in different directions. Check destination before boarding.",
-    "wheelchairDisclaimer": "<0/> All public buses in revenue service are <2>wheelchair-accessible</2>. The ones that are not accesssible will be marked with this icon <4/>"
+    "invalidBusStopCode": "Invalid stop code.",
+    "preHeading": "Arrival times",
+    "title": "Arrival times",
+    "titleStop": "Arrival times for {{stopNumber}} - {{stopName}}",
+    "multipleVisitsLegend": "1st or 2nd visit. Stops here twice, going in different directions. Check destination before boarding.",
+    "wheelchairDisclaimer": "<0/> All public transit in revenue service are <2>wheelchair-accessible</2>. The ones that are not accesssible will be marked with this icon <4/>"
   },
   "firstLast": {
-    "title": "Approximate first & last bus arrival times for {{stopNumber}}: {{stopName}}",
-    "busStopCodeNotFound": "Bus stop code not found.",
-    "preHeading": "Approximate first & last bus arrival times"
+    "title": "Approximate first & last trip arrival times for {{stopNumber}}: {{stopName}}",
+    "busStopCodeNotFound": "Stop code not found.",
+    "preHeading": "Approximate first & last trip arrival times"
   }
 }
