@@ -3,78 +3,165 @@ import './i18n';
 import { getCurrentCity } from './config';
 import { getConfigForCity, getApiUrl } from './city-config';
 import { h, render, Fragment } from 'preact';
-import { useState, useRef, useEffect, useLayoutEffect } from 'preact/hooks';
-import { useTranslation, Trans } from 'react-i18next';
+import {
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+} from 'preact/hooks';
+import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import { toGeoJSON } from '@mapbox/polyline';
 
 import { encode } from './utils/specialID';
-import { sortServicesPinned } from './utils/bus';
 import fetchCache from './utils/fetchCache';
 import setIcon from '../utils/setIcon';
 
 import ArrivalTimeText from './components/ArrivalTimeText';
 import stopImagePath from './images/stop.png';
 import stopEndImagePath from './images/stop-end.png';
-
 import busSingleImagePath from './images/bus-single.svg';
 import busDoubleImagePath from './images/bus-double.svg';
 import busBendyImagePath from './images/bus-bendy.svg';
 import busTinyImagePath from './images/bus-tiny.png';
 
+// Constants
 const city = getCurrentCity();
 const cityConfig = getConfigForCity(city);
 const dataPath = `/data/${city}`;
-const stopsJSONPath = `${dataPath}/stops.min.json`;
-const scheduleJSONPath = `https://data.transitrouter.vonter.in/${city}/schedule`;
-const routesJSONPath = `${dataPath}/routes.min.json`;
-const servicesJSONPath = `${dataPath}/services.min.json`;
-
-// Cache routes data (service -> encoded polylines per direction)
-let _routesDataCache = null;
-
-const BUSES = {
-  sd: {
-    alt: 'Single deck bus',
-    src: busSingleImagePath,
-    width: 20,
-  },
-  dd: {
-    alt: 'Double deck bus',
-    src: busDoubleImagePath,
-    width: 20,
-  },
-  bd: {
-    alt: 'Bendy bus',
-    src: busBendyImagePath,
-    width: 26,
-  },
+const DATA_PATHS = {
+  stops: `${dataPath}/stops.min.json`,
+  routes: `${dataPath}/routes.min.json`,
+  services: `${dataPath}/services.min.json`,
+  schedule: `https://data.transitrouter.vonter.in/${city}/schedule`,
 };
 
-const Bus = (props) => {
-  const { maxPx, index, duration_ms, type, load, feature, _ghost, _id, maxDuration_ms, isFirstFetch } = props;
+const BUSES = {
+  sd: { alt: 'Single deck bus', src: busSingleImagePath, width: 20 },
+  dd: { alt: 'Double deck bus', src: busDoubleImagePath, width: 20 },
+  bd: { alt: 'Bendy bus', src: busBendyImagePath, width: 26 },
+};
 
+const THRESHOLDS = {
+  polylineMatch: 0.002, // ~222m
+  stopProximity: 0.0045, // ~500m
+  busAnimation: 3, // minutes
+};
+
+let routesDataCache = null;
+let busIdCounter = 1;
+
+// Geometry helpers
+const pointDistance = (p1, p2) => {
+  const [lng1, lat1] = p1;
+  const [lng2, lat2] = p2;
+  return Math.sqrt(Math.pow(lng2 - lng1, 2) + Math.pow(lat2 - lat1, 2));
+};
+
+const closestPointOnSegment = (point, segmentStart, segmentEnd) => {
+  const [px, py] = point;
+  const [x1, y1] = segmentStart;
+  const [x2, y2] = segmentEnd;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return segmentStart;
+  const t = Math.max(
+    0,
+    Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSquared),
+  );
+  return [x1 + t * dx, y1 + t * dy];
+};
+
+const findClosestPointOnPolyline = (point, coordinates) => {
+  let minDistance = Infinity;
+  let closestPoint = null;
+  let closestSegmentIndex = -1;
+
+  for (let i = 0; i < coordinates.length - 1; i++) {
+    const closestOnSegment = closestPointOnSegment(
+      point,
+      coordinates[i],
+      coordinates[i + 1],
+    );
+    const distance = pointDistance(point, closestOnSegment);
+    if (distance < minDistance) {
+      minDistance = distance;
+      closestPoint = closestOnSegment;
+      closestSegmentIndex = i;
+    }
+  }
+
+  return {
+    point: closestPoint,
+    segmentIndex: closestSegmentIndex,
+    distance: minDistance,
+  };
+};
+
+const cropPolylineFromPoint = (coordinates, closestPoint, segmentIndex) => {
+  if (segmentIndex < 0 || segmentIndex >= coordinates.length - 1)
+    return coordinates;
+  const cropped = [closestPoint, ...coordinates.slice(segmentIndex + 1)];
+  return cropped.length > 1 ? cropped : coordinates;
+};
+
+// Service utilities
+const getServiceNo = (p) => (p && typeof p === 'object' ? p.serviceNo : p);
+const toServiceNoStr = (no) => String(no);
+const isPinned = (no, pinnedServices) => {
+  const noStr = toServiceNoStr(no);
+  return pinnedServices.some((p) => toServiceNoStr(getServiceNo(p)) === noStr);
+};
+const getPinnedServiceNumbers = (pinnedServices) =>
+  new Set(pinnedServices.map(getServiceNo).filter(Boolean).map(toServiceNoStr));
+
+// Map utilities
+const clearMapSource = (map, sourceId) => {
+  const source = map?.getSource(sourceId);
+  if (source) source.setData({ type: 'FeatureCollection', features: [] });
+};
+
+// Bus matching
+const isSameBus = (b1, b2) =>
+  b1.feature === b2.feature &&
+  b1.type === b2.type &&
+  b1.visit_number === b2.visit_number &&
+  b1.origin_code === b2.origin_code &&
+  b1.destination_code === b2.destination_code;
+
+const isSameBuses = (b1, b2) =>
+  b1.map((b) => b._id).join() === b2.map((b) => b._id).join();
+
+// Components
+const Bus = ({
+  maxPx,
+  index,
+  duration_ms,
+  type,
+  load,
+  _ghost,
+  _id,
+  maxDuration_ms,
+  isFirstFetch,
+}) => {
   const busImage = BUSES[type.toLowerCase()];
-
   const prevPx = useRef();
-  // Scale based on maxDuration_ms if provided, otherwise use fixed scaling
-  const scaleFactor = maxDuration_ms && maxDuration_ms > 0 
-    ? (maxPx - 30) / (maxDuration_ms / 1000 / 60) // Scale to fit within available width
-    : (duration_ms > 0 ? 10 : 2.5);
+  const scaleFactor =
+    maxDuration_ms && maxDuration_ms > 0
+      ? (maxPx - 30) / (maxDuration_ms / 1000 / 60)
+      : duration_ms > 0
+        ? 10
+        : 2.5;
   const px = (duration_ms / 1000 / 60) * scaleFactor;
-
-  const busTooFar = px > maxPx - 30; // 30 = bus width
-  const pxFar = 90 + index * 2; // index = zero-based
+  const busTooFar = px > maxPx - 30;
+  const pxFar = 90 + index * 2;
+  const shouldAnimate = !isFirstFetch && prevPx.current !== undefined;
 
   useEffect(() => {
     prevPx.current = px;
   }, [px]);
-
-  let shouldAnimate = false;
-  // Don't animate on first data fetch
-  if (!isFirstFetch && prevPx.current !== undefined) {
-    shouldAnimate = true;
-  }
 
   return (
     <span
@@ -82,11 +169,10 @@ const Bus = (props) => {
       class={`bus ${_ghost ? 'ghost' : ''}`}
       style={{
         marginLeft: busTooFar ? pxFar + '%' : px.toFixed(1) + 'px',
-        transitionDuration: shouldAnimate ? `1s` : '0s',
+        transitionDuration: shouldAnimate ? '1s' : '0s',
       }}
     >
       <span class="bus-float">
-        {/* <b class="debug">{_id}</b> */}
         <img {...busImage} />
         <br />
         <span class={`time time-${load.toLowerCase()}`}>
@@ -97,86 +183,42 @@ const Bus = (props) => {
   );
 };
 
-let BUSID = 1;
-const busID = () => BUSID++;
-const isSameBus = (b1, b2) =>
-  b1.feature === b2.feature &&
-  b1.type === b2.type &&
-  b1.visit_number === b2.visit_number &&
-  b1.origin_code === b2.origin_code &&
-  b1.destination_code === b2.destination_code;
-const isSameBuses = (b1, b2) =>
-  b1.map((b) => b._id).join() === b2.map((b) => b._id).join();
-
-// Helper functions
-const getServiceNo = (p) => (p && typeof p === 'object' ? p.serviceNo : p);
-const toServiceNoStr = (no) => String(no);
-const isPinned = (no, pinnedServices) => {
-  const noStr = toServiceNoStr(no);
-  return pinnedServices.some((p) => toServiceNoStr(getServiceNo(p)) === noStr);
-};
-const clearMapSource = (map, sourceId) => {
-  const source = map?.getSource(sourceId);
-  if (source) {
-    source.setData({ type: 'FeatureCollection', features: [] });
-  }
-};
-const getPinnedServiceNumbers = (pinnedServices) =>
-  new Set(pinnedServices.map(getServiceNo).filter(Boolean).map(toServiceNoStr));
-
-function BusLane({ index, no, buses, maxDuration_ms, isFirstFetch }) {
+const BusLane = ({ index, no, buses, maxDuration_ms, isFirstFetch }) => {
   const prevNo = useRef();
   const prevBuses = useRef();
+  const busLaneRef = useRef();
+  const [busLaneWidth, setBusLaneWidth] = useState(0);
   const nextBuses = buses.filter((nb) => typeof nb?.duration_ms === 'number');
 
+  // Match buses with previous state for smooth transitions
   if (prevNo.current === no && !isSameBuses(prevBuses.current, nextBuses)) {
-    nextBuses.forEach((nb) => {
-      delete nb._id;
-    });
-
-    const pBuses = prevBuses.current.filter((b) => !b._ghost); // Remove previously ghosted buses
-    pBuses.forEach((b, i) => {
-      // Next bus requirements/checks
-      // - Within range of duration_ms of current bus
-      // - Not assigned with ID (possibly from previous loop execution)
-      // - Same bus type as current bus
-      const latestNextBus = nextBuses.find((nb) => {
-        if (nb._id || !isSameBus(b, nb)) return false;
-        const d = (nb.duration_ms - b.duration_ms) / 1000 / 60;
-        return d > -5 && d < 3;
+    nextBuses.forEach((nb) => delete nb._id);
+    prevBuses.current
+      .filter((b) => !b._ghost)
+      .forEach((b, i) => {
+        const latestNextBus = nextBuses.find((nb) => {
+          if (nb._id || !isSameBus(b, nb)) return false;
+          const d = (nb.duration_ms - b.duration_ms) / 1000 / 60;
+          return d > -THRESHOLDS.busAnimation && d < THRESHOLDS.busAnimation;
+        });
+        if (latestNextBus) {
+          latestNextBus._id = b._id;
+        } else {
+          b._ghost = true;
+          nextBuses.splice(i, 0, b);
+        }
       });
-      if (latestNextBus) {
-        latestNextBus._id = b._id; // Assign ID for marking
-      } else {
-        // Insert "ghost" bus that will dissapear into thin air
-        b._ghost = true;
-        nextBuses.splice(i, 0, b);
-      }
-    });
   }
 
   nextBuses.forEach((nb) => {
-    if (!nb._id) nb._id = busID();
+    if (!nb._id) nb._id = busIdCounter++;
   });
-
-  // DEBUGGING
-  // const prevBusesClone = structuredClone(prevBuses.current);
-  // const nextBusesClone = structuredClone(nextBuses);
-  // if (no == 315) {
-  //   console.log(
-  //     no,
-  //     prevBusesClone?.map((b) => b._id)?.join(),
-  //     nextBusesClone?.map((b) => b._id)?.join(),
-  //   );
-  // }
 
   useEffect(() => {
     prevNo.current = no;
     prevBuses.current = structuredClone(nextBuses);
   }, [no, nextBuses]);
 
-  const busLaneRef = useRef();
-  const [busLaneWidth, setBusLaneWidth] = useState(0);
   useLayoutEffect(() => {
     setBusLaneWidth(busLaneRef.current?.offsetWidth);
   }, []);
@@ -184,22 +226,468 @@ function BusLane({ index, no, buses, maxDuration_ms, isFirstFetch }) {
   return (
     <div class="bus-lane" ref={busLaneRef}>
       {nextBuses.map((b, i) => (
-        <Bus key={b._id} index={i} {...b} maxPx={busLaneWidth} maxDuration_ms={maxDuration_ms} isFirstFetch={isFirstFetch} />
+        <Bus
+          key={b._id}
+          index={i}
+          {...b}
+          maxPx={busLaneWidth}
+          maxDuration_ms={maxDuration_ms}
+          isFirstFetch={isFirstFetch}
+        />
       ))}
       {index && <span class="visit-number">{index}</span>}
     </div>
   );
-}
+};
 
+// Data conversion
+const convertScheduleToArrival = (scheduleData) => {
+  if (!scheduleData?.services) return [];
+
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const createTrip = (duration_ms, origin, destination) => ({
+    duration_ms,
+    type: 'SD',
+    load: 'SEA',
+    feature: 'WAB',
+    visit_number: 1,
+    origin_code: origin,
+    destination_code: destination,
+  });
+
+  const allUpcomingTrips = [];
+  scheduleData.services.forEach((service) => {
+    const { no, origin, destination, trips } = service;
+    trips.forEach((timeStr) => {
+      const [hours, minutes] = timeStr.split(':').map(Number);
+      const tripMinutes = hours * 60 + minutes;
+      const duration_ms = (tripMinutes - currentMinutes) * 60 * 1000;
+      if (duration_ms > 0) {
+        allUpcomingTrips.push({
+          no,
+          origin,
+          destination,
+          minutes: tripMinutes,
+          duration_ms,
+        });
+      }
+    });
+  });
+
+  const next50Trips = allUpcomingTrips
+    .sort((a, b) => a.duration_ms - b.duration_ms)
+    .slice(0, 50);
+  const serviceMap = new Map();
+
+  next50Trips.forEach((trip) => {
+    const key = `${trip.no}-${trip.destination}`;
+    if (!serviceMap.has(key)) {
+      serviceMap.set(key, {
+        no: trip.no,
+        destination: trip.destination,
+        trips: [],
+      });
+    }
+    serviceMap.get(key).trips.push(trip);
+  });
+
+  return Array.from(serviceMap.values())
+    .map((service) => {
+      const sortedTrips = service.trips.sort((a, b) => a.minutes - b.minutes);
+      const result = {
+        no: service.no,
+        destination: service.destination,
+        frequency: sortedTrips.length,
+        next: createTrip(
+          sortedTrips[0].duration_ms,
+          sortedTrips[0].origin,
+          sortedTrips[0].destination,
+        ),
+      };
+      if (sortedTrips[1])
+        result.next2 = createTrip(
+          sortedTrips[1].duration_ms,
+          sortedTrips[1].origin,
+          sortedTrips[1].destination,
+        );
+      if (sortedTrips[2])
+        result.next3 = createTrip(
+          sortedTrips[2].duration_ms,
+          sortedTrips[2].origin,
+          sortedTrips[2].destination,
+        );
+      return result;
+    })
+    .sort((a, b) => b.frequency - a.frequency);
+};
+
+// API functions
+const fetchLiveArrivalData = async (stationId) => {
+  try {
+    const response = await fetch(
+      `${getApiUrl(cityConfig?.liveArrivals?.apiPath)}?stationid=${stationId}`,
+    );
+    if (!response.ok) {
+      console.error(`Live arrival API error for ${city}:`, response.status);
+      return null;
+    }
+    const result = await response.json();
+    return result.services?.length > 0 ? result.services : null;
+  } catch (error) {
+    console.error(`Live arrival API error for ${city}:`, error);
+    return null;
+  }
+};
+
+// Route matching and rendering
+// Find polylines passing through a stop and match by route name
+const findMatchingPolyline = (
+  serviceRoutes,
+  stopCoords,
+  routeName,
+  servicesData,
+  serviceNo,
+) => {
+  if (!stopCoords || !routeName || !servicesData || !serviceNo) {
+    return { bestPolyline: null, bestMatchIndex: -1 };
+  }
+
+  // Verify route name matches
+  const serviceData = servicesData[serviceNo];
+  if (!serviceData || serviceData.name !== routeName) {
+    return { bestPolyline: null, bestMatchIndex: -1 };
+  }
+
+  const candidates = [];
+
+  for (let index = 0; index < serviceRoutes.length; index++) {
+    try {
+      const geometry = toGeoJSON(serviceRoutes[index]);
+      if (geometry.type !== 'LineString' || !geometry.coordinates?.length)
+        continue;
+
+      const coords = geometry.coordinates;
+
+      // Check if polyline passes through the current stop
+      const closest = findClosestPointOnPolyline(stopCoords, coords);
+      if (closest.distance < THRESHOLDS.stopProximity) {
+        candidates.push({
+          index,
+          geometry,
+          distance: closest.distance,
+        });
+      }
+    } catch (e) {
+      // Skip invalid polyline
+    }
+  }
+
+  if (!candidates.length) {
+    return { bestPolyline: null, bestMatchIndex: -1 };
+  }
+
+  // Choose the polyline closest to the current stop
+  const best = candidates.reduce((best, current) =>
+    current.distance < best.distance ? current : best,
+  );
+
+  return {
+    bestPolyline: best.geometry,
+    bestMatchIndex: best.index,
+  };
+};
+
+const createRouteFeature = (serviceNo, destination, geometry, index) => ({
+  type: 'Feature',
+  id: encode(`${serviceNo}-${destination || ''}-${index}`),
+  properties: { service: serviceNo, ...(destination && { destination }) },
+  geometry,
+});
+
+const renderPinnedRoutes = async (
+  activePinnedServices,
+  busStop,
+  servicesData,
+  stopsData,
+) => {
+  if (!routesDataCache) {
+    routesDataCache = await fetchCache(DATA_PATHS.routes, 24 * 60);
+  }
+
+  const features = [];
+  const currentStopCode = busStop?.code;
+  const stopCoords = busStop ? [busStop.lng, busStop.lat] : null;
+
+  for (const pinned of activePinnedServices) {
+    const serviceNo = getServiceNo(pinned);
+    const destination = pinned.destination;
+    const serviceRoutes = routesDataCache?.[serviceNo];
+
+    if (!Array.isArray(serviceRoutes) || serviceRoutes.length === 0) continue;
+
+    // If destination and stop available, find matching polyline
+    if (
+      destination &&
+      currentStopCode &&
+      servicesData &&
+      stopsData &&
+      stopCoords
+    ) {
+      const serviceData = servicesData[serviceNo];
+      if (!serviceData) {
+        // Fallback: render all routes if service not found
+        serviceRoutes.forEach((enc, index) => {
+          features.push(
+            createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
+          );
+        });
+        continue;
+      }
+
+      // Try to find destination by ID first, then by name
+      let destinationCode = destination;
+      let destinationData = serviceData[destination];
+
+      // If not found by ID, try to find by name
+      if (!destinationData) {
+        for (const [code, stopData] of Object.entries(stopsData)) {
+          if (stopData?.[2] === destination) {
+            destinationCode = code;
+            destinationData = serviceData[code];
+            break;
+          }
+        }
+      }
+
+      const routeVariations =
+        destinationData?.routes ||
+        (Array.isArray(destinationData) ? destinationData : null);
+
+      if (routeVariations) {
+        // Static schedule: destination found in servicesData
+        // Use route name matching to find polyline passing through stop
+        if (serviceData.name) {
+          const { bestPolyline, bestMatchIndex } = findMatchingPolyline(
+            serviceRoutes,
+            stopCoords,
+            serviceData.name,
+            servicesData,
+            serviceNo,
+          );
+
+          if (bestPolyline?.coordinates && bestMatchIndex >= 0) {
+            const closest = findClosestPointOnPolyline(
+              stopCoords,
+              bestPolyline.coordinates,
+            );
+
+            if (closest.distance < THRESHOLDS.stopProximity) {
+              const croppedCoordinates = cropPolylineFromPoint(
+                bestPolyline.coordinates,
+                closest.point,
+                closest.segmentIndex,
+              );
+
+              if (croppedCoordinates.length >= 2) {
+                features.push(
+                  createRouteFeature(
+                    serviceNo,
+                    destination,
+                    {
+                      type: 'LineString',
+                      coordinates: croppedCoordinates,
+                    },
+                    bestMatchIndex,
+                  ),
+                );
+              }
+            } else {
+              // Stop is too far from polyline, but still render the full polyline
+              // since it matches the destination
+              features.push(
+                createRouteFeature(
+                  serviceNo,
+                  destination,
+                  bestPolyline,
+                  bestMatchIndex,
+                ),
+              );
+            }
+          } else {
+            // No polyline found passing through stop - render all routes
+            serviceRoutes.forEach((enc, index) => {
+              features.push(
+                createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
+              );
+            });
+          }
+        } else {
+          // No route name - render all routes
+          serviceRoutes.forEach((enc, index) => {
+            features.push(
+              createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
+            );
+          });
+        }
+      } else if (serviceData.name) {
+        // Live API: destination not found in servicesData, use route name matching
+        const { bestPolyline, bestMatchIndex } = findMatchingPolyline(
+          serviceRoutes,
+          stopCoords,
+          serviceData.name,
+          servicesData,
+          serviceNo,
+        );
+
+        if (bestPolyline?.coordinates && bestMatchIndex >= 0) {
+          const closest = findClosestPointOnPolyline(
+            stopCoords,
+            bestPolyline.coordinates,
+          );
+
+          if (closest.distance < THRESHOLDS.stopProximity) {
+            const croppedCoordinates = cropPolylineFromPoint(
+              bestPolyline.coordinates,
+              closest.point,
+              closest.segmentIndex,
+            );
+
+            if (croppedCoordinates.length >= 2) {
+              features.push(
+                createRouteFeature(
+                  serviceNo,
+                  destination,
+                  {
+                    type: 'LineString',
+                    coordinates: croppedCoordinates,
+                  },
+                  bestMatchIndex,
+                ),
+              );
+            }
+          } else {
+            // Stop is too far from polyline, but still render the full polyline
+            features.push(
+              createRouteFeature(
+                serviceNo,
+                destination,
+                bestPolyline,
+                bestMatchIndex,
+              ),
+            );
+          }
+        } else {
+          // No polyline found passing through stop - render all routes
+          serviceRoutes.forEach((enc, index) => {
+            features.push(
+              createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
+            );
+          });
+        }
+      } else {
+        // Fallback: render all routes if destination not found and no route name
+        serviceRoutes.forEach((enc, index) => {
+          features.push(
+            createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
+          );
+        });
+      }
+    } else {
+      // No destination/stop - render all routes
+      serviceRoutes.forEach((enc, index) => {
+        features.push(
+          createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
+        );
+      });
+    }
+  }
+
+  return features;
+};
+
+// Vehicle extraction
+const extractVehicleLocation = (trip) => {
+  let location =
+    trip.location ||
+    (trip.lat !== undefined && trip.lng !== undefined
+      ? { lat: trip.lat, lng: trip.lng }
+      : null);
+  if (!location) return null;
+
+  let lat, lng;
+  if (Array.isArray(location)) {
+    [lng, lat] = location;
+  } else if (typeof location === 'object' && location !== null) {
+    ({ lat, lng } = location);
+  } else {
+    return null;
+  }
+
+  if (
+    typeof lat !== 'number' ||
+    typeof lng !== 'number' ||
+    isNaN(lat) ||
+    isNaN(lng) ||
+    Math.abs(lat) > 90 ||
+    Math.abs(lng) > 180 ||
+    (lat === 0 && lng === 0)
+  ) {
+    return null;
+  }
+  return { lat, lng };
+};
+
+const extractVehicles = (services, pinnedServiceNumbers) => {
+  const vehicles = [];
+
+  services.forEach((service) => {
+    const serviceNoStr = toServiceNoStr(service.no);
+    if (!pinnedServiceNumbers.has(serviceNoStr)) return;
+
+    [service.next, service.next2, service.next3].forEach((trip) => {
+      if (!trip) return;
+      const location = extractVehicleLocation(trip);
+      if (!location) return;
+
+      vehicles.push({
+        vehicleId:
+          trip.vehicle_id ||
+          trip.vehicleId ||
+          `vehicle-${serviceNoStr}-${trip.duration_ms}`,
+        vehicleNumber:
+          trip.bus_no || trip.busNo || trip.vehicleNumber || serviceNoStr,
+        routeNo: serviceNoStr,
+        location,
+        heading: trip.heading || null,
+      });
+    });
+  });
+
+  return vehicles.map((vehicle, index) => ({
+    type: 'Feature',
+    id: vehicle.vehicleId || `vehicle-${index}`,
+    properties: {
+      vehicleNumber: vehicle.vehicleNumber,
+      vehicleId: vehicle.vehicleId,
+      routeNo: vehicle.routeNo,
+      heading: vehicle.heading,
+    },
+    geometry: {
+      type: 'Point',
+      coordinates: [vehicle.location.lng, vehicle.location.lat],
+    },
+  }));
+};
+
+// Main component
 function ArrivalTimes() {
   const { t, i18n } = useTranslation();
   const [busStop, setBusStop] = useState(null);
   const [stopsData, setStopsData] = useState(null);
-  const [fetchServicesStatus, setFetchServicesStatus] = useState(null); // 'loading', 'error', 'online'
+  const [fetchServicesStatus, setFetchServicesStatus] = useState(null);
   const [services, setServices] = useState(null);
-  const [servicesData, setServicesData] = useState(null); // For determining direction
-  const isFirstFetchRef = useRef(true);
-  // Initialize pinned services from localStorage
+  const [servicesData, setServicesData] = useState(null);
   const [pinnedServices, setPinnedServices] = useState(() => {
     try {
       const stored = localStorage.getItem(
@@ -208,7 +696,6 @@ function ArrivalTimes() {
       if (!stored) return [];
       const parsed = JSON.parse(stored);
       if (!Array.isArray(parsed)) return [];
-      // Convert old format (strings) to new format (objects)
       return parsed
         .map((item) => (typeof item === 'string' ? { serviceNo: item } : item))
         .filter(
@@ -219,16 +706,22 @@ function ArrivalTimes() {
       return [];
     }
   });
+  const [followedVehicleId, setFollowedVehicleId] = useState(null);
+
   const mapContainer = useRef(null);
   const mapRef = useRef(null);
-  const [followedVehicleId, setFollowedVehicleId] = useState(null);
-  // Cache vehicle locations from previous API responses
-  const vehicleLocationCache = useRef(new Map()); // vehicleId -> { lat, lng, heading }
+  const isFirstFetchRef = useRef(true);
+  const vehicleLocationCache = useRef(new Map());
+  const arrivalsTimeoutRef = useRef(null);
+  const arrivalsRAFRef = useRef(null);
 
+  // Load initial data
   useEffect(() => {
     (async () => {
-      const stops = await fetchCache(stopsJSONPath, 24 * 60);
-      const services = await fetchCache(servicesJSONPath, 24 * 60);
+      const [stops, services] = await Promise.all([
+        fetchCache(DATA_PATHS.stops, 24 * 60),
+        fetchCache(DATA_PATHS.services, 24 * 60),
+      ]);
       setServicesData(services);
       setStopsData(stops);
 
@@ -251,142 +744,29 @@ function ArrivalTimes() {
     })();
   }, [t]);
 
+  // Update document title
   useEffect(() => {
-    if (busStop?.code) {
-      const { code, name } = busStop;
-      document.title = t('arrivals.titleStop', {
-        stopNumber: code,
-        stopName: name,
-      });
-      document
-        .querySelector('[name="apple-mobile-web-app-title"]')
-        .setAttribute('content', document.title);
-    } else {
-      document.title = t('arrivals.title');
-      document
-        .querySelector('[name="apple-mobile-web-app-title"]')
-        .setAttribute('content', document.title);
-    }
-  }, [busStop, i18n.resolvedLanguage]);
+    const title = busStop?.code
+      ? t('arrivals.titleStop', {
+          stopNumber: busStop.code,
+          stopName: busStop.name,
+        })
+      : t('arrivals.title');
+    document.title = title;
+    document
+      .querySelector('[name="apple-mobile-web-app-title"]')
+      ?.setAttribute('content', title);
+  }, [busStop, i18n.resolvedLanguage, t]);
 
-  // Convert schedule data to arrival format
-  function convertScheduleToArrival(scheduleData) {
-    if (!scheduleData?.services) return [];
-
-    const now = new Date();
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const MAX_TRIPS = 50;
-
-    const createTrip = (duration_ms, origin, destination) => ({
-      duration_ms,
-      type: 'SD',
-      load: 'SEA',
-      feature: 'WAB',
-      visit_number: 1,
-      origin_code: origin,
-      destination_code: destination,
-    });
-
-    // Collect all upcoming trips from all services
-    const allUpcomingTrips = [];
-    scheduleData.services.forEach((service) => {
-      const { no, origin, destination, trips } = service;
-      trips.forEach((timeStr) => {
-        const [hours, minutes] = timeStr.split(':').map(Number);
-        const tripMinutes = hours * 60 + minutes;
-        const duration_ms = (tripMinutes - currentMinutes) * 60 * 1000;
-        if (duration_ms > 0) {
-          allUpcomingTrips.push({
-            no,
-            origin,
-            destination,
-            minutes: tripMinutes,
-            duration_ms,
-          });
-        }
-      });
-    });
-
-    // Sort by duration_ms (earliest first) and take the next 50
-    const next50Trips = allUpcomingTrips
-      .sort((a, b) => a.duration_ms - b.duration_ms)
-      .slice(0, MAX_TRIPS);
-
-    // Group trips back by service
-    const serviceMap = new Map();
-    next50Trips.forEach((trip) => {
-      const key = `${trip.no}-${trip.destination}`;
-      if (!serviceMap.has(key)) {
-        serviceMap.set(key, {
-          no: trip.no,
-          destination: trip.destination,
-          trips: [],
-        });
-      }
-      serviceMap.get(key).trips.push(trip);
-    });
-
-    // Convert to the expected format
-    return Array.from(serviceMap.values())
-      .map((service) => {
-        const sortedTrips = service.trips.sort(
-          (a, b) => a.minutes - b.minutes,
-        );
-        const result = {
-          no: service.no,
-          destination: service.destination,
-          frequency: sortedTrips.length,
-          next: createTrip(
-            sortedTrips[0].duration_ms,
-            sortedTrips[0].origin,
-            sortedTrips[0].destination,
-          ),
-        };
-        if (sortedTrips[1])
-          result.next2 = createTrip(
-            sortedTrips[1].duration_ms,
-            sortedTrips[1].origin,
-            sortedTrips[1].destination,
-          );
-        if (sortedTrips[2])
-          result.next3 = createTrip(
-            sortedTrips[2].duration_ms,
-            sortedTrips[2].origin,
-            sortedTrips[2].destination,
-          );
-
-        return result;
-      })
-      .sort((a, b) => b.frequency - a.frequency);
-  }
-
-  // Fetch live arrival data from city-specific API via Cloudflare Function
-  async function fetchLiveArrivalData(stationId) {
-    try {
-      const response = await fetch(
-        `${getApiUrl(cityConfig?.liveArrivals?.apiPath)}?stationid=${stationId}`,
-      );
-      if (!response.ok) {
-        console.error(`Live arrival API error for ${city}:`, response.status);
-        return null;
-      }
-      const result = await response.json();
-      return result.services?.length > 0 ? result.services : null;
-    } catch (error) {
-      console.error(`Live arrival API error for ${city}:`, error);
-      return null;
-    }
-  }
-
-  let arrivalsTimeout, arrivalsRAF;
+  // Fetch services with timeout fallback
   const scheduleRetry = (id, delay = 30000) => {
-    arrivalsTimeout = setTimeout(() => {
-      arrivalsRAF = requestAnimationFrame(() => fetchServices(id));
+    arrivalsTimeoutRef.current = setTimeout(() => {
+      arrivalsRAFRef.current = requestAnimationFrame(() => fetchServices(id));
     }, delay);
   };
 
   const fetchScheduleFallback = (id) => {
-    return fetchCache(`${scheduleJSONPath}/${id}.json`, 60)
+    return fetchCache(`${DATA_PATHS.schedule}/${id}.json`, 60)
       .then((scheduleData) => {
         const convertedServices = convertScheduleToArrival(scheduleData);
         setFetchServicesStatus(
@@ -405,50 +785,76 @@ function ArrivalTimes() {
       });
   };
 
-  function fetchServices(id) {
+  const fetchServices = (id) => {
     if (!id || window._PAUSED) return;
     setFetchServicesStatus('loading');
 
-    const hasLiveArrivals = cityConfig?.liveArrivals?.enabled;
-
-    if (hasLiveArrivals) {
-      fetchLiveArrivalData(id)
-        .then((liveServices) => {
-          if (liveServices?.length > 0) {
-            setFetchServicesStatus('online');
-            setServices(liveServices);
-            isFirstFetchRef.current = false;
-            scheduleRetry(id);
-          } else {
-            throw new Error('No live data available');
-          }
-        })
-        .catch(() => {
-          console.log('Falling back to static schedule');
-          fetchScheduleFallback(id);
-        });
-    } else {
+    if (!cityConfig?.liveArrivals?.enabled) {
       fetchScheduleFallback(id);
+      return;
     }
-  }
+
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('TIMEOUT')), 10000);
+    });
+
+    const liveApiPromise = fetchLiveArrivalData(id);
+
+    Promise.race([liveApiPromise, timeoutPromise])
+      .then((liveServices) => {
+        if (liveServices?.length > 0) {
+          setFetchServicesStatus('online');
+          setServices(liveServices);
+          isFirstFetchRef.current = false;
+          scheduleRetry(id);
+        } else {
+          console.log(
+            'Live API returned no data, falling back to static schedule',
+          );
+          fetchScheduleFallback(id);
+        }
+      })
+      .catch((error) => {
+        if (error.message === 'TIMEOUT') {
+          console.log('Live API timeout (1s), falling back to static schedule');
+        } else {
+          console.log('Live API error, falling back to static schedule');
+        }
+        fetchScheduleFallback(id);
+
+        // Continue waiting for live API in background
+        liveApiPromise
+          .then((liveServices) => {
+            if (liveServices?.length > 0) {
+              console.log(
+                'Live API response received, updating with live data',
+              );
+              setFetchServicesStatus('online');
+              setServices(liveServices);
+              isFirstFetchRef.current = false;
+              scheduleRetry(id);
+            }
+          })
+          .catch(() => {});
+      });
+  };
 
   useEffect(() => {
     if (busStop) {
-      isFirstFetchRef.current = true; // Reset for new stop
+      isFirstFetchRef.current = true;
       fetchServices(busStop.code);
     }
     return () => {
-      clearTimeout(arrivalsTimeout);
-      cancelAnimationFrame(arrivalsRAF);
+      if (arrivalsTimeoutRef.current) clearTimeout(arrivalsTimeoutRef.current);
+      if (arrivalsRAFRef.current) cancelAnimationFrame(arrivalsRAFRef.current);
     };
   }, [busStop]);
 
-  // Initialize map when busStop is set
+  // Initialize map
   useEffect(() => {
     if (!busStop || !mapContainer.current || mapRef.current) return;
 
     const { lat, lng, code } = busStop;
-
     const map = new maplibregl.Map({
       container: mapContainer.current,
       style: '/data/style.json',
@@ -463,31 +869,25 @@ function ArrivalTimes() {
     });
 
     mapRef.current = map;
-
     map.addControl(
-      new maplibregl.AttributionControl({
-        compact: true,
-      }),
+      new maplibregl.AttributionControl({ compact: true }),
       'bottom-left',
     );
 
     map.on('load', () => {
-      // Load stop images
       Promise.all([
-        map.loadImage(stopImagePath).then((img) => {
-          map.addImage('stop', img.data);
-        }),
-        map.loadImage(stopEndImagePath).then((img) => {
-          map.addImage('stop-end', img.data);
-        }),
+        map
+          .loadImage(stopImagePath)
+          .then((img) => map.addImage('stop', img.data)),
+        map
+          .loadImage(stopEndImagePath)
+          .then((img) => map.addImage('stop-end', img.data)),
         map
           .loadImage(busTinyImagePath)
-          .then((img) => {
-            map.addImage('bus-tiny', img.data);
-          })
+          .then((img) => map.addImage('bus-tiny', img.data))
           .catch(() => {}),
       ]).then(() => {
-        // Add stop source and layer
+        // Stop highlight
         map.addSource('stop-highlight', {
           type: 'geojson',
           data: {
@@ -496,20 +896,13 @@ function ArrivalTimes() {
               {
                 type: 'Feature',
                 id: encode(code),
-                properties: {
-                  number: code,
-                  name: busStop.name,
-                },
-                geometry: {
-                  type: 'Point',
-                  coordinates: [lng, lat],
-                },
+                properties: { number: code, name: busStop.name },
+                geometry: { type: 'Point', coordinates: [lng, lat] },
               },
             ],
           },
         });
 
-        // Add icon layer for the stop
         map.addLayer({
           id: 'stop-highlight-icon',
           type: 'symbol',
@@ -533,12 +926,13 @@ function ArrivalTimes() {
           },
         });
 
-        // Source/layers for pinned routes
+        // Pinned routes
         map.addSource('routes-pinned', {
           type: 'geojson',
           lineMetrics: true,
           data: { type: 'FeatureCollection', features: [] },
         });
+
         map.addLayer(
           {
             id: 'routes-pinned',
@@ -583,11 +977,12 @@ function ArrivalTimes() {
           'stop-highlight-icon',
         );
 
-        // Source/layer for live buses of pinned service
+        // Vehicles
         map.addSource('buses-service', {
           type: 'geojson',
           data: { type: 'FeatureCollection', features: [] },
         });
+
         map.addLayer({
           id: 'buses-service',
           type: 'symbol',
@@ -624,7 +1019,6 @@ function ArrivalTimes() {
           },
         });
 
-        // Click to follow a vehicle
         map.on('click', 'buses-service', (e) => {
           const feat = e.features?.[0];
           const vid = feat?.id || feat?.properties?.vehicleId;
@@ -634,10 +1028,6 @@ function ArrivalTimes() {
             map.easeTo({ center: [lng, lat], duration: 600 });
           }
         });
-
-        // Note: Initial pinned services will be rendered by the useEffect that watches
-        // pinnedServices and services. We don't render them here immediately because
-        // we need to wait for services to load first to filter out inactive services.
       });
     });
 
@@ -649,156 +1039,52 @@ function ArrivalTimes() {
     };
   }, [busStop]);
 
-  // Render pinned routes and control vehicle tracking when pinnedServices change
+  // Render pinned routes
   useEffect(() => {
     const map = mapRef.current;
     const routesSource = map?.getSource('routes-pinned');
-    if (!map || !routesSource) {
-      const timeoutId = setTimeout(() => {}, 100);
-      return () => clearTimeout(timeoutId);
-    }
+    if (!map || !routesSource) return;
 
     (async () => {
       try {
-        const isEmpty =
-          !pinnedServices?.length || !Array.isArray(pinnedServices);
-
-        // Filter to only active pinned services that exist in current services
-        const activePinnedServices = isEmpty
-          ? []
-          : pinnedServices.filter((pinned) => {
-              const serviceNoStr = toServiceNoStr(getServiceNo(pinned));
-              return services?.some(
-                (s) => toServiceNoStr(s.no) === serviceNoStr,
-              );
-            });
+        const activePinnedServices = (pinnedServices || []).filter((pinned) => {
+          const serviceNoStr = toServiceNoStr(getServiceNo(pinned));
+          return services?.some((s) => toServiceNoStr(s.no) === serviceNoStr);
+        });
 
         if (!activePinnedServices.length) {
           clearMapSource(map, 'routes-pinned');
           return;
         }
 
-        if (!_routesDataCache) {
-          _routesDataCache = await fetchCache(routesJSONPath, 24 * 60);
-        }
-
-        const features = [];
-        activePinnedServices.forEach((pinned) => {
-          const serviceNo = getServiceNo(pinned);
-          const serviceRoutes = _routesDataCache?.[serviceNo];
-          if (Array.isArray(serviceRoutes)) {
-            serviceRoutes.forEach((enc) => {
-              features.push({
-                type: 'Feature',
-                id: encode(serviceNo),
-                properties: { service: serviceNo },
-                geometry: toGeoJSON(enc),
-              });
-            });
-          }
-        });
-
+        const features = await renderPinnedRoutes(
+          activePinnedServices,
+          busStop,
+          servicesData,
+          stopsData,
+        );
         routesSource.setData({ type: 'FeatureCollection', features });
       } catch (e) {
         console.error('Failed to render pinned routes', e);
         clearMapSource(map, 'routes-pinned');
       }
     })();
-  }, [pinnedServices, services]);
+  }, [pinnedServices, services, busStop, servicesData, stopsData]);
 
-  // Extract and display vehicles from services data for pinned routes
+  // Render vehicles
   useEffect(() => {
     const map = mapRef.current;
     const vehiclesSource = map?.getSource('buses-service');
-    if (!map || !vehiclesSource) {
-      const timeoutId = setTimeout(() => {}, 100);
-      return () => clearTimeout(timeoutId);
-    }
-
-    const isEmpty =
-      !services || !pinnedServices?.length || !Array.isArray(pinnedServices);
-    if (isEmpty) {
-      clearMapSource(map, 'buses-service');
+    if (!map || !vehiclesSource || !services || !pinnedServices?.length) {
+      if (map && vehiclesSource) clearMapSource(map, 'buses-service');
       return;
     }
 
     const pinnedServiceNumbers = getPinnedServiceNumbers(pinnedServices);
-    const extractLocation = (trip) => {
-      let location =
-        trip.location ||
-        (trip.lat !== undefined && trip.lng !== undefined
-          ? { lat: trip.lat, lng: trip.lng }
-          : null);
-      if (!location) return null;
+    const features = extractVehicles(services, pinnedServiceNumbers);
+    vehiclesSource.setData({ type: 'FeatureCollection', features });
 
-      let lat, lng;
-      if (Array.isArray(location)) {
-        [lng, lat] = location;
-      } else if (typeof location === 'object' && location !== null) {
-        ({ lat, lng } = location);
-      } else {
-        return null;
-      }
-
-      if (
-        typeof lat !== 'number' ||
-        typeof lng !== 'number' ||
-        isNaN(lat) ||
-        isNaN(lng) ||
-        Math.abs(lat) > 90 ||
-        Math.abs(lng) > 180 ||
-        (lat === 0 && lng === 0)
-      ) {
-        return null;
-      }
-      return { lat, lng };
-    };
-
-    const vehicles = [];
-    services.forEach((service) => {
-      const serviceNoStr = toServiceNoStr(service.no);
-      if (!pinnedServiceNumbers.has(serviceNoStr)) return;
-
-      [service.next, service.next2, service.next3].forEach((trip) => {
-        if (!trip) return;
-        const location = extractLocation(trip);
-        if (!location) return;
-
-        vehicles.push({
-          vehicleId:
-            trip.vehicle_id ||
-            trip.vehicleId ||
-            `vehicle-${serviceNoStr}-${trip.duration_ms}`,
-          vehicleNumber:
-            trip.bus_no || trip.busNo || trip.vehicleNumber || serviceNoStr,
-          routeNo: serviceNoStr,
-          location,
-          heading: trip.heading || null,
-        });
-      });
-    });
-
-    const geoJSON = {
-      type: 'FeatureCollection',
-      features: vehicles.map((vehicle, index) => ({
-        type: 'Feature',
-        id: vehicle.vehicleId || `vehicle-${index}`,
-        properties: {
-          vehicleNumber: vehicle.vehicleNumber,
-          vehicleId: vehicle.vehicleId,
-          routeNo: vehicle.routeNo,
-          heading: vehicle.heading,
-        },
-        geometry: {
-          type: 'Point',
-          coordinates: [vehicle.location.lng, vehicle.location.lat],
-        },
-      })),
-    };
-
-    vehiclesSource.setData(geoJSON);
-
-    // Clean up vehicle location cache
+    // Clean up vehicle cache
     for (const [vehicleId] of vehicleLocationCache.current.entries()) {
       const belongsToPinned = Array.from(pinnedServiceNumbers).some(
         (serviceNo) =>
@@ -811,7 +1097,7 @@ function ArrivalTimes() {
     }
   }, [pinnedServices, services]);
 
-  // Follow selected vehicle as positions update
+  // Follow vehicle
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !followedVehicleId || !services) return;
@@ -847,7 +1133,8 @@ function ArrivalTimes() {
     }
   }, [followedVehicleId, services]);
 
-  function togglePin(no, destination = null) {
+  // Toggle pin
+  const togglePin = (no, destination = null) => {
     if (!destination && services) {
       const service = services.find((s) => s.no === no);
       destination =
@@ -858,13 +1145,11 @@ function ArrivalTimes() {
     const pinnedIndex = pinnedServices.findIndex(
       (p) => toServiceNoStr(getServiceNo(p)) === serviceNoStr,
     );
-
     const updatedPinned =
       pinnedIndex >= 0
         ? pinnedServices.filter((_, i) => i !== pinnedIndex)
         : [...pinnedServices, { serviceNo: no, destination }];
 
-    // Clean up vehicle cache when unpinning
     if (pinnedIndex >= 0) {
       for (const [vehicleId] of vehicleLocationCache.current.entries()) {
         if (
@@ -883,63 +1168,62 @@ function ArrivalTimes() {
         JSON.stringify(updatedPinned),
       );
     } catch (e) {}
-  }
+  };
+
+  // Group services
+  const { groupedServices, maxDuration_ms } = useMemo(() => {
+    if (!services) return { groupedServices: [], maxDuration_ms: 0 };
+
+    const groups = {};
+    let maxDuration = 0;
+
+    services.forEach((service) => {
+      const key = `${service.no}-${service.destination || service.next?.destination_code || ''}`;
+      if (!groups[key]) {
+        groups[key] = {
+          no: service.no,
+          destination: service.destination || service.next?.destination_code,
+          frequency: 0,
+          buses: [],
+        };
+      }
+      [service.next, service.next2, service.next3]
+        .filter(Boolean)
+        .forEach((bus) => {
+          groups[key].buses.push(bus);
+          if (bus.duration_ms && bus.duration_ms > maxDuration) {
+            maxDuration = bus.duration_ms;
+          }
+        });
+      groups[key].frequency += service.frequency || 0;
+    });
+
+    const sorted = Object.values(groups).sort((a, b) => {
+      const aPinned = isPinned(a.no, pinnedServices);
+      const bPinned = isPinned(b.no, pinnedServices);
+      if (aPinned !== bPinned) return aPinned ? -1 : 1;
+      return b.frequency - a.frequency;
+    });
+
+    return { groupedServices: sorted, maxDuration_ms: maxDuration };
+  }, [services, pinnedServices]);
 
   if (!busStop) {
     if (stopsData) {
       return (
         <ul class="stops-list">
           {Object.keys(stopsData).map((stop) => (
-            <li>
+            <li key={stop}>
               <a href={`#${stop}`}>{stopsData[stop][2]}</a>
             </li>
           ))}
         </ul>
       );
     }
-    return;
+    return null;
   }
 
   const { code, name } = busStop;
-
-  // Group services by route number and destination
-  const { groupedServices, maxDuration_ms } = services
-    ? (() => {
-        const groups = {};
-        let maxDuration = 0;
-        
-        services.forEach((service) => {
-          const key = `${service.no}-${service.destination || service.next?.destination_code || ''}`;
-          if (!groups[key]) {
-            groups[key] = {
-              no: service.no,
-              destination:
-                service.destination || service.next?.destination_code,
-              frequency: 0,
-              buses: [],
-            };
-          }
-          [service.next, service.next2, service.next3]
-            .filter(Boolean)
-            .forEach((bus) => {
-              groups[key].buses.push(bus);
-              if (bus.duration_ms && bus.duration_ms > maxDuration) {
-                maxDuration = bus.duration_ms;
-              }
-            });
-          groups[key].frequency += service.frequency || 0;
-        });
-
-        const sorted = Object.values(groups).sort((a, b) => {
-          const aPinned = isPinned(a.no, pinnedServices);
-          const bPinned = isPinned(b.no, pinnedServices);
-          if (aPinned !== bPinned) return aPinned ? -1 : 1;
-          return b.frequency - a.frequency;
-        });
-        
-        return { groupedServices: sorted, maxDuration_ms: maxDuration };
-      })()
-    : { groupedServices: [], maxDuration_ms: 0 };
 
   return (
     <div>
@@ -953,7 +1237,7 @@ function ArrivalTimes() {
       <table>
         {services ? (
           groupedServices.length ? (
-            <tbody class={!groupedServices.length ? 'loading' : ''}>
+            <tbody>
               {groupedServices.map((group) => {
                 const { no, destination, buses } = group;
                 const pinned = isPinned(no, pinnedServices);
@@ -963,7 +1247,7 @@ function ArrivalTimes() {
                 const buses1 = sortedBuses.filter((b) => b?.visit_number === 1);
                 const buses2 = sortedBuses.filter((b) => b?.visit_number === 2);
                 return (
-                  <>
+                  <Fragment key={`${no}-${destination}`}>
                     <tr class={pinned ? 'pin' : ''}>
                       <th
                         onClick={(e) => {
@@ -978,11 +1262,28 @@ function ArrivalTimes() {
                       >
                         {buses2.length ? (
                           <>
-                            <BusLane index={1} no={no} buses={buses1} maxDuration_ms={maxDuration_ms} isFirstFetch={isFirstFetchRef.current} />
-                            <BusLane index={2} no={no} buses={buses2} maxDuration_ms={maxDuration_ms} isFirstFetch={isFirstFetchRef.current} />
+                            <BusLane
+                              index={1}
+                              no={no}
+                              buses={buses1}
+                              maxDuration_ms={maxDuration_ms}
+                              isFirstFetch={isFirstFetchRef.current}
+                            />
+                            <BusLane
+                              index={2}
+                              no={no}
+                              buses={buses2}
+                              maxDuration_ms={maxDuration_ms}
+                              isFirstFetch={isFirstFetchRef.current}
+                            />
                           </>
                         ) : (
-                          <BusLane no={no} buses={sortedBuses} maxDuration_ms={maxDuration_ms} isFirstFetch={isFirstFetchRef.current} />
+                          <BusLane
+                            no={no}
+                            buses={sortedBuses}
+                            maxDuration_ms={maxDuration_ms}
+                            isFirstFetch={isFirstFetchRef.current}
+                          />
                         )}
                       </td>
                     </tr>
@@ -995,7 +1296,7 @@ function ArrivalTimes() {
                         </small>
                       </th>
                     </tr>
-                  </>
+                  </Fragment>
                 );
               })}
             </tbody>

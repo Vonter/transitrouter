@@ -2796,16 +2796,9 @@ const App = () => {
 
   const popoverIsUp = useMemo(
     () =>
-      (!!showStopPopover ||
-        !!showBetweenPopover ||
-        !!showServicePopover) &&
+      (!!showStopPopover || !!showBetweenPopover || !!showServicePopover) &&
       !largerScreen,
-    [
-      showStopPopover,
-      showBetweenPopover,
-      showServicePopover,
-      largerScreen,
-    ],
+    [showStopPopover, showBetweenPopover, showServicePopover, largerScreen],
   );
 
   // Global shortcuts
