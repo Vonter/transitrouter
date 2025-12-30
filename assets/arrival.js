@@ -360,6 +360,7 @@ const findMatchingPolyline = (
   }
 
   const candidates = [];
+  const allCandidates = []; // Track all polylines, even if outside threshold
 
   for (let index = 0; index < serviceRoutes.length; index++) {
     try {
@@ -371,6 +372,12 @@ const findMatchingPolyline = (
 
       // Check if polyline passes through the current stop
       const closest = findClosestPointOnPolyline(stopCoords, coords);
+      allCandidates.push({
+        index,
+        geometry,
+        distance: closest.distance,
+      });
+
       if (closest.distance < THRESHOLDS.stopProximity) {
         candidates.push({
           index,
@@ -383,19 +390,29 @@ const findMatchingPolyline = (
     }
   }
 
-  if (!candidates.length) {
-    return { bestPolyline: null, bestMatchIndex: -1 };
+  // Prefer polylines within proximity threshold
+  if (candidates.length > 0) {
+    const best = candidates.reduce((best, current) =>
+      current.distance < best.distance ? current : best,
+    );
+    return {
+      bestPolyline: best.geometry,
+      bestMatchIndex: best.index,
+    };
   }
 
-  // Choose the polyline closest to the current stop
-  const best = candidates.reduce((best, current) =>
-    current.distance < best.distance ? current : best,
-  );
+  // Fallback: return closest polyline even if outside threshold
+  if (allCandidates.length > 0) {
+    const best = allCandidates.reduce((best, current) =>
+      current.distance < best.distance ? current : best,
+    );
+    return {
+      bestPolyline: best.geometry,
+      bestMatchIndex: best.index,
+    };
+  }
 
-  return {
-    bestPolyline: best.geometry,
-    bestMatchIndex: best.index,
-  };
+  return { bestPolyline: null, bestMatchIndex: -1 };
 };
 
 const createRouteFeature = (serviceNo, destination, geometry, index) => ({
@@ -464,74 +481,10 @@ const renderPinnedRoutes = async (
         destinationData?.routes ||
         (Array.isArray(destinationData) ? destinationData : null);
 
-      if (routeVariations) {
-        // Static schedule: destination found in servicesData
-        // Use route name matching to find polyline passing through stop
-        if (serviceData.name) {
-          const { bestPolyline, bestMatchIndex } = findMatchingPolyline(
-            serviceRoutes,
-            stopCoords,
-            serviceData.name,
-            servicesData,
-            serviceNo,
-          );
+      // Helper function to try route name matching
+      const tryRouteNameMatching = () => {
+        if (!serviceData.name) return false;
 
-          if (bestPolyline?.coordinates && bestMatchIndex >= 0) {
-            const closest = findClosestPointOnPolyline(
-              stopCoords,
-              bestPolyline.coordinates,
-            );
-
-            if (closest.distance < THRESHOLDS.stopProximity) {
-              const croppedCoordinates = cropPolylineFromPoint(
-                bestPolyline.coordinates,
-                closest.point,
-                closest.segmentIndex,
-              );
-
-              if (croppedCoordinates.length >= 2) {
-                features.push(
-                  createRouteFeature(
-                    serviceNo,
-                    destination,
-                    {
-                      type: 'LineString',
-                      coordinates: croppedCoordinates,
-                    },
-                    bestMatchIndex,
-                  ),
-                );
-              }
-            } else {
-              // Stop is too far from polyline, but still render the full polyline
-              // since it matches the destination
-              features.push(
-                createRouteFeature(
-                  serviceNo,
-                  destination,
-                  bestPolyline,
-                  bestMatchIndex,
-                ),
-              );
-            }
-          } else {
-            // No polyline found passing through stop - render all routes
-            serviceRoutes.forEach((enc, index) => {
-              features.push(
-                createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
-              );
-            });
-          }
-        } else {
-          // No route name - render all routes
-          serviceRoutes.forEach((enc, index) => {
-            features.push(
-              createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
-            );
-          });
-        }
-      } else if (serviceData.name) {
-        // Live API: destination not found in servicesData, use route name matching
         const { bestPolyline, bestMatchIndex } = findMatchingPolyline(
           serviceRoutes,
           stopCoords,
@@ -565,6 +518,7 @@ const renderPinnedRoutes = async (
                   bestMatchIndex,
                 ),
               );
+              return true;
             }
           } else {
             // Stop is too far from polyline, but still render the full polyline
@@ -576,8 +530,27 @@ const renderPinnedRoutes = async (
                 bestMatchIndex,
               ),
             );
+            return true;
           }
-        } else {
+        }
+        return false;
+      };
+
+      if (routeVariations) {
+        // Static schedule: destination found in servicesData with route variations
+        // Use route name matching to find polyline passing through stop
+        if (!tryRouteNameMatching()) {
+          // No polyline found passing through stop - render all routes
+          serviceRoutes.forEach((enc, index) => {
+            features.push(
+              createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
+            );
+          });
+        }
+      } else if (serviceData.name) {
+        // Destination found but no route variations, or destination not found in servicesData
+        // Try route name matching as fallback
+        if (!tryRouteNameMatching()) {
           // No polyline found passing through stop - render all routes
           serviceRoutes.forEach((enc, index) => {
             features.push(
