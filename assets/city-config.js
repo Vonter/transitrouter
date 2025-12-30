@@ -8,6 +8,7 @@ export const AVAILABLE_CITIES = [
   'pune',
   'telangana',
   'andhrapradesh',
+  'indore',
   'railways',
   'greyhound',
   'nyc',
@@ -115,6 +116,18 @@ export const CITY_CONFIGS = {
         upperLat: 19.7,
         lowerLong: 77.0,
         upperLong: 85.5,
+      },
+    },
+  },
+  indore: {
+    city: {
+      name: 'Indore',
+      code: 'indore',
+      bounds: {
+        lowerLat: 22.5,
+        upperLat: 22.9,
+        lowerLong: 75.6,
+        upperLong: 76.1,
       },
     },
   },
