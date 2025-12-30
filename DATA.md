@@ -9,6 +9,7 @@
 - Kochi: [Jungle Bus](https://jungle-bus.github.io/KochiTransport/)
 - Pune: [pmpml-gtfs](https://github.com/croyla/pmpml-gtfs)
 - Telangana: [Open Data Telangana](https://drive.google.com/file/d/1vmjLCHzWButGuQUK0RLjy3a1_norIHyq)
+- Andhra Pradesh: [Neo2308/apsrtc-gtfs](https://github.com/Neo2308/apsrtc-gtfs)
 - Indian Railways: [Neo2308/indianrailways-gtfs](https://github.com/Neo2308/indianrailways-gtfs/)
 - Greyhound: [Greyhound, Flixbus](http://gtfs.gis.flix.tech/gtfs_generic_us.zip)
 - NYC: [MTA](https://www.mta.info/developers)

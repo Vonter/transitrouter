@@ -7,6 +7,7 @@ export const AVAILABLE_CITIES = [
   'kochi',
   'pune',
   'telangana',
+  'andhrapradesh',
   'railways',
   'greyhound',
   'nyc',
@@ -102,6 +103,18 @@ export const CITY_CONFIGS = {
         upperLat: 20.5,
         lowerLong: 77.0,
         upperLong: 82.0,
+      },
+    },
+  },
+  andhrapradesh: {
+    city : {
+      name: 'Andhra Pradesh',
+      code: 'andhrapradesh',
+      bounds: {
+        lowerLat: 12.4,
+        upperLat: 19.7,
+        lowerLong: 77.0,
+        upperLong: 85.5,
       },
     },
   },
