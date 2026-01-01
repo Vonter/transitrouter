@@ -1,7 +1,7 @@
 andhrapradesh:
   gtfs.zip: bf585aa25d06f4623e0f6898181f92d3fb3ce2f86c00832d9975dc3019afe13f
 blr:
-  gtfs.zip: a3fbe68af532a96ce0008f58546f1f747172dd9237f5c00cdd1bfa95aa495640
+  gtfs.zip: 6151d5bd73299f7cb99755be3021590f2a49bd0e80ebbfdb308a5fc3bc8d1c8f
 chennai:
   gtfs.zip: c7ac04cbdbf0f7079383feafb74e72efd11709a950f53b6eeb41c0d4cdb6ee67
 delhi:
