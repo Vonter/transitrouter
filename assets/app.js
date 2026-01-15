@@ -64,6 +64,61 @@ const supportsTouch =
   navigator.msMaxTouchPoints > 0;
 const ruler = new CheapRuler(1.3);
 
+// Geometry helpers for cropping polylines
+const pointDistance = (p1, p2) => {
+  const [lng1, lat1] = p1;
+  const [lng2, lat2] = p2;
+  return Math.sqrt(Math.pow(lng2 - lng1, 2) + Math.pow(lat2 - lat1, 2));
+};
+
+const closestPointOnSegment = (point, segmentStart, segmentEnd) => {
+  const [px, py] = point;
+  const [x1, y1] = segmentStart;
+  const [x2, y2] = segmentEnd;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return segmentStart;
+  const t = Math.max(
+    0,
+    Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSquared),
+  );
+  return [x1 + t * dx, y1 + t * dy];
+};
+
+const findClosestPointOnPolyline = (point, coordinates) => {
+  let minDistance = Infinity;
+  let closestPoint = null;
+  let closestSegmentIndex = -1;
+
+  for (let i = 0; i < coordinates.length - 1; i++) {
+    const closestOnSegment = closestPointOnSegment(
+      point,
+      coordinates[i],
+      coordinates[i + 1],
+    );
+    const distance = pointDistance(point, closestOnSegment);
+    if (distance < minDistance) {
+      minDistance = distance;
+      closestPoint = closestOnSegment;
+      closestSegmentIndex = i;
+    }
+  }
+
+  return {
+    point: closestPoint,
+    segmentIndex: closestSegmentIndex,
+    distance: minDistance,
+  };
+};
+
+const cropPolylineFromPoint = (coordinates, closestPoint, segmentIndex) => {
+  if (segmentIndex < 0 || segmentIndex >= coordinates.length - 1)
+    return coordinates;
+  const cropped = [closestPoint, ...coordinates.slice(segmentIndex + 1)];
+  return cropped.length > 1 ? cropped : coordinates;
+};
+
 const $logo = document.getElementById('logo');
 
 // City dropdown functionality
@@ -1217,28 +1272,90 @@ const App = () => {
             ],
           });
 
-          // Show all routes
+          // Show all routes (cropped from current stop)
+          // Find the polyline that passes through the current stop for each service
+          const STOP_PROXIMITY_THRESHOLD = 0.0045; // ~500m, same as arrival.js
           requestAnimationFrame(() => {
-            const serviceGeometries = routes
-              .map((route) => {
-                const service = route.split('|')[0];
-                const variantIdx = route.split('|')[2];
-                if (!service || !variantIdx) {
-                  console.warn(`Failed to parse route key: ${route}`);
+            const stopCoords = coordinates; // Current stop coordinates [lng, lat]
+
+            // Group routes by service to find the best polyline per service
+            const serviceRouteKeys = {};
+            routes.forEach((route) => {
+              const service = route.split('|')[0];
+              if (!serviceRouteKeys[service]) {
+                serviceRouteKeys[service] = [];
+              }
+              serviceRouteKeys[service].push(route);
+            });
+
+            const serviceGeometries = Object.entries(serviceRouteKeys)
+              .map(([service, routeKeys]) => {
+                const serviceRoutes = routesData[service];
+                if (
+                  !Array.isArray(serviceRoutes) ||
+                  serviceRoutes.length === 0
+                ) {
                   return null;
                 }
-                const line =
-                  routesData[service] && routesData[service][variantIdx];
-                if (!line) {
-                  console.warn(
-                    `Route data not found for service: ${service}, variantIdx: ${variantIdx}`,
+
+                // Find the polyline that passes closest to the current stop
+                let bestPolyline = null;
+                let bestClosest = null;
+
+                for (let i = 0; i < serviceRoutes.length; i++) {
+                  try {
+                    const geometry = toGeoJSON(serviceRoutes[i]);
+                    if (
+                      geometry.type !== 'LineString' ||
+                      !geometry.coordinates?.length
+                    )
+                      continue;
+
+                    const closest = findClosestPointOnPolyline(
+                      stopCoords,
+                      geometry.coordinates,
+                    );
+
+                    // Only consider polylines that pass near the stop
+                    if (closest.distance < STOP_PROXIMITY_THRESHOLD) {
+                      if (
+                        !bestClosest ||
+                        closest.distance < bestClosest.distance
+                      ) {
+                        bestClosest = closest;
+                        bestPolyline = geometry;
+                      }
+                    }
+                  } catch (e) {
+                    // Skip invalid polyline
+                  }
+                }
+
+                if (!bestPolyline || !bestClosest) {
+                  return null;
+                }
+
+                // Crop polyline from the current stop
+                if (bestClosest.point && bestClosest.segmentIndex >= 0) {
+                  const croppedCoords = cropPolylineFromPoint(
+                    bestPolyline.coordinates,
+                    bestClosest.point,
+                    bestClosest.segmentIndex,
                   );
-                  return null;
+                  if (croppedCoords.length >= 2) {
+                    return {
+                      service,
+                      geometry: {
+                        type: 'LineString',
+                        coordinates: croppedCoords,
+                      },
+                    };
+                  }
                 }
-                const geometry = toGeoJSON(line);
+
                 return {
                   service,
-                  geometry,
+                  geometry: bestPolyline,
                 };
               })
               .filter(Boolean);
