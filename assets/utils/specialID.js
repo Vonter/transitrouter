@@ -41,7 +41,11 @@ const oldEncode = (str) => {
   let result = '';
   for (let i = 0; i < str.length; i++) {
     const code = str.charCodeAt(i);
-    if ((code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)) {
+    if (
+      (code >= 48 && code <= 57) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122)
+    ) {
       result += code;
     }
   }
@@ -54,7 +58,7 @@ const oldDecode = (numStr) => {
   // Try to decode by splitting into 2-3 digit groups
   const charCodes = [];
   let i = 0;
-  
+
   while (i < numStr.length) {
     // Try 2-digit code first (most common: 48-122)
     if (i + 2 <= numStr.length) {
@@ -77,36 +81,44 @@ const oldDecode = (numStr) => {
     // If neither works, skip one digit and try again
     i++;
   }
-  
+
   return charCodes.length > 0 ? String.fromCharCode(...charCodes) : null;
 };
 
 export const encode = (id) => {
   const str = String(id);
-  
+
   // Fast path: for short identifiers, old encoding will work and is more efficient
   // Skip hash-based encoding entirely for short strings
   if (!willOldEncodingExceedLimit(str)) {
     const oldEncoded = oldEncode(str);
     // For short strings, old encoding should always work
-    if (!isNaN(oldEncoded) && oldEncoded > 0 && oldEncoded <= VARINT_SAFE_LIMIT) {
+    if (
+      !isNaN(oldEncoded) &&
+      oldEncoded > 0 &&
+      oldEncoded <= VARINT_SAFE_LIMIT
+    ) {
       return oldEncoded;
     }
   }
-  
+
   // For longer identifiers, check if old encoding might still work
   // (some long strings with many non-alphanumeric chars might still encode small)
   if (str.length <= 15) {
     const oldEncoded = oldEncode(str);
-    if (!isNaN(oldEncoded) && oldEncoded > 0 && oldEncoded <= VARINT_SAFE_LIMIT) {
+    if (
+      !isNaN(oldEncoded) &&
+      oldEncoded > 0 &&
+      oldEncoded <= VARINT_SAFE_LIMIT
+    ) {
       return oldEncoded;
     }
   }
-  
+
   // Only use hash-based encoding when necessary (long/complex IDs)
   let hash = fnv1a32(str);
   const baseHash = hash;
-  
+
   // Handle collisions efficiently - use linear probing with a small limit
   let attempts = 0;
   const maxAttempts = 10;
@@ -122,10 +134,10 @@ export const encode = (id) => {
       return normalizedHash;
     }
     // Collision - linear probe with better distribution
-    hash = baseHash + (attempts * 2654435761); // Golden ratio multiplier for better distribution
+    hash = baseHash + attempts * 2654435761; // Golden ratio multiplier for better distribution
     attempts++;
   }
-  
+
   // If all slots are taken, use the hash anyway (rare case)
   return baseHash % VARINT_SAFE_LIMIT;
 };
@@ -136,7 +148,7 @@ export const decode = (number) => {
   if (cached !== undefined) {
     return cached;
   }
-  
+
   // Try old decoding method (optimized)
   const numStr = String(number);
   const decoded = oldDecode(numStr);
@@ -149,7 +161,7 @@ export const decode = (number) => {
       }
     }
   }
-  
+
   // Fallback: return number as string
   return String(number);
 };

@@ -2,6 +2,7 @@ import './i18n';
 
 import { getCurrentCity } from './config';
 import { getConfigForCity, getApiUrl } from './city-config';
+import { normalizeName } from './utils/normalizeNames';
 import { h, render, Fragment } from 'preact';
 import {
   useState,
@@ -703,10 +704,26 @@ function ArrivalTimes() {
         const cityMatch = code.match(/^\/[A-Za-z]+\/(.+)$/);
         if (cityMatch) code = cityMatch[1];
 
-        if (code && stops[code]) {
-          const [lng, lat, name] = stops[code];
-          setBusStop({ code, name, lat, lng });
-          setIcon(code);
+        // Find stop using normalized name comparison if enabled
+        const findStopCode = (searchCode) => {
+          if (!searchCode) return null;
+          // First try exact match
+          if (stops[searchCode]) return searchCode;
+          // Try normalized comparison
+          const normalizedSearch = normalizeName(searchCode, city);
+          for (const stopCode of Object.keys(stops)) {
+            if (normalizeName(stopCode, city) === normalizedSearch) {
+              return stopCode;
+            }
+          }
+          return null;
+        };
+
+        const actualCode = findStopCode(code);
+        if (actualCode) {
+          const [lng, lat, name] = stops[actualCode];
+          setBusStop({ code: actualCode, name, lat, lng });
+          setIcon(actualCode);
         } else if (code) {
           alert(t('arrivals.invalidBusStopCode'));
         } else {

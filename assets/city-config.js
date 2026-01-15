@@ -34,6 +34,10 @@ export const CITY_CONFIGS = {
       enabled: true,
       apiPath: '/api/bmtc/vehicles',
     },
+    normalizeNames: {
+      enabled: true,
+      removeChars: ['-', ' '],
+    },
   },
   goa: {
     city: {
@@ -108,7 +112,7 @@ export const CITY_CONFIGS = {
     },
   },
   andhrapradesh: {
-    city : {
+    city: {
       name: 'Andhra Pradesh',
       code: 'andhrapradesh',
       bounds: {

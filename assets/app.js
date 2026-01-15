@@ -9,6 +9,7 @@ import {
   AVAILABLE_CITIES,
   getConfigForCity,
 } from './config';
+import { normalizeName } from './utils/normalizeNames';
 import { h, render, Fragment } from 'preact';
 import { useState, useRef, useEffect, useMemo } from 'preact/hooks';
 import maplibregl from 'maplibre-gl';
@@ -189,6 +190,46 @@ let stopsData = {};
 let routesData;
 let fuseServices;
 let fuseStops;
+
+/**
+ * Find a service by key, using normalized name comparison if enabled for the city.
+ * First tries exact match, then falls back to normalized comparison.
+ * @param {string} key - The service key/number to find
+ * @returns {string|null} The actual service key in servicesData, or null if not found
+ */
+const findServiceKey = (key) => {
+  if (!key || !servicesData) return null;
+  // First try exact match
+  if (servicesData[key]) return key;
+  // Try normalized comparison
+  const normalizedKey = normalizeName(key, city);
+  for (const serviceKey of Object.keys(servicesData)) {
+    if (normalizeName(serviceKey, city) === normalizedKey) {
+      return serviceKey;
+    }
+  }
+  return null;
+};
+
+/**
+ * Find a stop by key, using normalized name comparison if enabled for the city.
+ * First tries exact match, then falls back to normalized comparison.
+ * @param {string} key - The stop key/number to find
+ * @returns {string|null} The actual stop key in stopsData, or null if not found
+ */
+const findStopKey = (key) => {
+  if (!key || !stopsData) return null;
+  // First try exact match
+  if (stopsData[key]) return key;
+  // Try normalized comparison
+  const normalizedKey = normalizeName(key, city);
+  for (const stopKey of Object.keys(stopsData)) {
+    if (normalizeName(stopKey, city) === normalizedKey) {
+      return stopKey;
+    }
+  }
+  return null;
+};
 
 // Helper function to ensure consistent hash navigation with city prefix
 const navigateTo = (path, currentRoute) => {
@@ -817,7 +858,8 @@ const App = () => {
         const servicesValue = route.value;
         const services = servicesValue
           .split('~')
-          .filter((s) => servicesData[s]);
+          .map((s) => findServiceKey(s))
+          .filter(Boolean);
         if (!services.length) return; // No value or none of the service codes are valid
 
         // Reset
@@ -1079,8 +1121,8 @@ const App = () => {
         break;
       }
       case 'stop': {
-        const stop = route.value;
-        if (!stopsData[stop]) return;
+        const stop = findStopKey(route.value);
+        if (!stop) return;
 
         // Reset
         setExpandSearch(false);
@@ -1229,10 +1271,10 @@ const App = () => {
       }
       case 'between': {
         const coords = route.value;
-        const [startStopNumber, endStopNumber] = coords
-          .split(/[,-]/)
-          .map(String);
-        if (!stopsData[startStopNumber] || !stopsData[endStopNumber]) {
+        const [rawStartStop, rawEndStop] = coords.split(/[,-]/).map(String);
+        const startStopNumber = findStopKey(rawStartStop);
+        const endStopNumber = findStopKey(rawEndStop);
+        if (!startStopNumber || !endStopNumber) {
           alert('One of the stop numbers are not found.');
           return;
         }
@@ -2885,7 +2927,8 @@ const App = () => {
     if (currentRoute.page === 'service' && currentRoute.value) {
       const services = currentRoute.value
         .split('~')
-        .filter((s) => servicesData[s]);
+        .map((s) => findServiceKey(s))
+        .filter(Boolean);
 
       // Only start tracking for single service routes
       if (services.length === 1) {
@@ -2921,7 +2964,7 @@ const App = () => {
     route.page === 'stop' &&
     route.subpage === 'routes' &&
     stopsData &&
-    stopsData[route.value];
+    findStopKey(route.value);
 
   return (
     <>
