@@ -10,8 +10,21 @@ import {
   getConfigForCity,
 } from './config';
 import { normalizeName } from './utils/normalizeNames';
+import {
+  pointDistance,
+  closestPointOnSegment,
+  findClosestPointOnPolyline,
+  cropPolylineFromPoint,
+  decodePolylineCached,
+} from './utils/geometry';
 import { h, render, Fragment } from 'preact';
-import { useState, useRef, useEffect, useMemo } from 'preact/hooks';
+import {
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+  useCallback,
+} from 'preact/hooks';
 import maplibregl from 'maplibre-gl';
 import { toGeoJSON } from '@mapbox/polyline';
 import Fuse from 'fuse.js';
@@ -28,6 +41,15 @@ import getWalkingMinutes from './utils/getWalkingMinutes';
 import usePrevious from './utils/usePrevious';
 import { createVehicleTracker } from './utils/fetchVehicles';
 import { setRafInterval, clearRafInterval } from './utils/rafInterval';
+import { stopMetrics, routeMetrics } from './utils/metricsPage';
+import {
+  EMPTY_FEATURE_COLLECTION,
+  batchClearSources,
+  rafThrottle,
+  replaceFeatureStates,
+  createFeaturesOptimized,
+  whenMapIdle,
+} from './utils/mapOptimizations';
 
 import BusServicesArrival from './components/BusServicesArrival';
 import GeolocateControl from './components/GeolocateControl';
@@ -64,60 +86,8 @@ const supportsTouch =
   navigator.msMaxTouchPoints > 0;
 const ruler = new CheapRuler(1.3);
 
-// Geometry helpers for cropping polylines
-const pointDistance = (p1, p2) => {
-  const [lng1, lat1] = p1;
-  const [lng2, lat2] = p2;
-  return Math.sqrt(Math.pow(lng2 - lng1, 2) + Math.pow(lat2 - lat1, 2));
-};
-
-const closestPointOnSegment = (point, segmentStart, segmentEnd) => {
-  const [px, py] = point;
-  const [x1, y1] = segmentStart;
-  const [x2, y2] = segmentEnd;
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const lengthSquared = dx * dx + dy * dy;
-  if (lengthSquared === 0) return segmentStart;
-  const t = Math.max(
-    0,
-    Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSquared),
-  );
-  return [x1 + t * dx, y1 + t * dy];
-};
-
-const findClosestPointOnPolyline = (point, coordinates) => {
-  let minDistance = Infinity;
-  let closestPoint = null;
-  let closestSegmentIndex = -1;
-
-  for (let i = 0; i < coordinates.length - 1; i++) {
-    const closestOnSegment = closestPointOnSegment(
-      point,
-      coordinates[i],
-      coordinates[i + 1],
-    );
-    const distance = pointDistance(point, closestOnSegment);
-    if (distance < minDistance) {
-      minDistance = distance;
-      closestPoint = closestOnSegment;
-      closestSegmentIndex = i;
-    }
-  }
-
-  return {
-    point: closestPoint,
-    segmentIndex: closestSegmentIndex,
-    distance: minDistance,
-  };
-};
-
-const cropPolylineFromPoint = (coordinates, closestPoint, segmentIndex) => {
-  if (segmentIndex < 0 || segmentIndex >= coordinates.length - 1)
-    return coordinates;
-  const cropped = [closestPoint, ...coordinates.slice(segmentIndex + 1)];
-  return cropped.length > 1 ? cropped : coordinates;
-};
+// Helper to decode polylines with caching
+const decodePolyline = (encoded) => decodePolylineCached(encoded, toGeoJSON);
 
 const $logo = document.getElementById('logo');
 
@@ -246,9 +216,32 @@ let routesData;
 let fuseServices;
 let fuseStops;
 
+// Pre-built lookup maps for O(1) normalized key lookups
+let normalizedServiceKeyMap = null;
+let normalizedStopKeyMap = null;
+
+/**
+ * Build normalized lookup maps for fast O(1) lookups
+ * Called once after data is loaded
+ */
+const buildNormalizedLookupMaps = () => {
+  if (servicesData && !normalizedServiceKeyMap) {
+    normalizedServiceKeyMap = new Map();
+    Object.keys(servicesData).forEach((key) => {
+      normalizedServiceKeyMap.set(normalizeName(key, city), key);
+    });
+  }
+  if (stopsData && Object.keys(stopsData).length > 0 && !normalizedStopKeyMap) {
+    normalizedStopKeyMap = new Map();
+    Object.keys(stopsData).forEach((key) => {
+      normalizedStopKeyMap.set(normalizeName(key, city), key);
+    });
+  }
+};
+
 /**
  * Find a service by key, using normalized name comparison if enabled for the city.
- * First tries exact match, then falls back to normalized comparison.
+ * Uses pre-built lookup map for O(1) performance.
  * @param {string} key - The service key/number to find
  * @returns {string|null} The actual service key in servicesData, or null if not found
  */
@@ -256,19 +249,16 @@ const findServiceKey = (key) => {
   if (!key || !servicesData) return null;
   // First try exact match
   if (servicesData[key]) return key;
-  // Try normalized comparison
-  const normalizedKey = normalizeName(key, city);
-  for (const serviceKey of Object.keys(servicesData)) {
-    if (normalizeName(serviceKey, city) === normalizedKey) {
-      return serviceKey;
-    }
+  // Use pre-built map for O(1) lookup
+  if (normalizedServiceKeyMap) {
+    return normalizedServiceKeyMap.get(normalizeName(key, city)) || null;
   }
   return null;
 };
 
 /**
  * Find a stop by key, using normalized name comparison if enabled for the city.
- * First tries exact match, then falls back to normalized comparison.
+ * Uses pre-built lookup map for O(1) performance.
  * @param {string} key - The stop key/number to find
  * @returns {string|null} The actual stop key in stopsData, or null if not found
  */
@@ -276,14 +266,42 @@ const findStopKey = (key) => {
   if (!key || !stopsData) return null;
   // First try exact match
   if (stopsData[key]) return key;
-  // Try normalized comparison
-  const normalizedKey = normalizeName(key, city);
-  for (const stopKey of Object.keys(stopsData)) {
-    if (normalizeName(stopKey, city) === normalizedKey) {
-      return stopKey;
-    }
+  // Use pre-built map for O(1) lookup
+  if (normalizedStopKeyMap) {
+    return normalizedStopKeyMap.get(normalizeName(key, city)) || null;
   }
   return null;
+};
+
+/**
+ * Simple debounce utility
+ * @param {Function} fn - Function to debounce
+ * @param {number} delay - Delay in milliseconds
+ * @returns {Function} Debounced function
+ */
+const debounce = (fn, delay) => {
+  let timeoutId;
+  return (...args) => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => fn(...args), delay);
+  };
+};
+
+/**
+ * Simple throttle utility
+ * @param {Function} fn - Function to throttle
+ * @param {number} limit - Minimum time between calls in milliseconds
+ * @returns {Function} Throttled function
+ */
+const throttle = (fn, limit) => {
+  let lastCall = 0;
+  return (...args) => {
+    const now = performance.now();
+    if (now - lastCall >= limit) {
+      lastCall = now;
+      fn(...args);
+    }
+  };
 };
 
 // Helper function to ensure consistent hash navigation with city prefix
@@ -373,27 +391,41 @@ const App = () => {
     });
   };
 
+  // Debounced search to reduce Fuse.js computation on rapid typing
+  const performSearch = useCallback(
+    debounce((value) => {
+      if (value) {
+        const services = fuseServices.search(value);
+        let stops = [];
+        if (services.length < 20) {
+          stops = fuseStops.search(value);
+        }
+        setServices(services.map((s) => s.item));
+        setStops(stops.map((s) => s.item));
+        setSearching(true);
+        // Scroll to top, with hack for momentum scrolling
+        // https://popmotion.io/blog/20170704-manually-set-scroll-while-ios-momentum-scroll-bounces/
+        if (servicesList.current) {
+          servicesList.current.style['-webkit-overflow-scrolling'] = 'auto';
+          servicesList.current.scrollTop = 0;
+          servicesList.current.style['-webkit-overflow-scrolling'] = null;
+        }
+      } else {
+        setServices(servicesDataArr);
+        setStops([]);
+        setSearching(false);
+      }
+    }, 150),
+    [],
+  );
+
   const handleSearch = (e) => {
     const { value } = (e && e.target) || searchField;
-    if (value) {
-      const services = fuseServices.search(value);
-      let stops = [];
-      if (services.length < 20) {
-        stops = fuseStops.search(value);
-      }
-      setServices(services.map((s) => s.item));
-      setStops(stops.map((s) => s.item));
+    // Immediately show searching state for better UX
+    if (value && !searching) {
       setSearching(true);
-      // Scroll to top, with hack for momentum scrolling
-      // https://popmotion.io/blog/20170704-manually-set-scroll-while-ios-momentum-scroll-bounces/
-      servicesList.current.style['-webkit-overflow-scrolling'] = 'auto';
-      servicesList.current.scrollTop = 0;
-      servicesList.current.style['-webkit-overflow-scrolling'] = null;
-    } else {
-      setServices(servicesDataArr);
-      setStops([]);
-      setSearching(false);
     }
+    performSearch(value);
   };
 
   const handleSearchClose = () => {
@@ -721,7 +753,7 @@ const App = () => {
     if (cannotPreviewRoute()) return;
     previewRAF = requestAnimationFrame(() => {
       const routes = routesData[service];
-      const geometries = routes.map((route) => toGeoJSON(route));
+      const geometries = routes.map((route) => decodePolyline(route));
       map.getSource('routes-path').setData({
         type: 'FeatureCollection',
         features: geometries.map((geometry) => ({
@@ -797,13 +829,13 @@ const App = () => {
       const routeIndex = route.lastIndexOf('-');
       const service = route.substring(0, routeIndex);
       const index = route.substring(routeIndex + 1, route.length);
-      geometries.push(toGeoJSON(routesData[service][index]));
+      geometries.push(decodePolyline(routesData[service][index]));
 
       if (result.endRoute) {
         const routeIndex = route.lastIndexOf('-');
         const service = route.substring(0, routeIndex);
         const index = route.substring(routeIndex + 1, route.length);
-        geometries.push(toGeoJSON(routesData[service][index]));
+        geometries.push(decodePolyline(routesData[service][index]));
       }
 
       if (result.startStop && result.startStop.number != startStop.number) {
@@ -892,18 +924,14 @@ const App = () => {
     // Stop vehicle tracking when changing routes
     vehicleTracker.current?.stop();
 
-    [
+    // Clear map sources - only clear sources that have data to avoid unnecessary re-renders
+    batchClearSources(map, [
       'stops-highlight',
       'routes',
       'routes-path',
       'routes-between',
       'buses-service',
-    ].forEach((source) => {
-      map.getSource(source)?.setData({
-        type: 'FeatureCollection',
-        features: [],
-      });
-    });
+    ]);
     if (prevStopNumber.current) {
       hideStopPopover();
     }
@@ -916,6 +944,10 @@ const App = () => {
           .map((s) => findServiceKey(s))
           .filter(Boolean);
         if (!services.length) return; // No value or none of the service codes are valid
+
+        services.forEach((service) =>
+          routeMetrics(route.city, service, 'main'),
+        );
 
         // Reset
         setExpandSearch(false);
@@ -1018,7 +1050,7 @@ const App = () => {
             // Show routes
             requestAnimationFrame(() => {
               const routes = routesData[service];
-              const geometries = routes.map((route) => toGeoJSON(route));
+              const geometries = routes.map((route) => decodePolyline(route));
               map.getSource('routes').setData({
                 type: 'FeatureCollection',
                 features: geometries.map((geometry) => ({
@@ -1081,7 +1113,7 @@ const App = () => {
               serviceGeometries = serviceGeometries.concat(
                 routeGeometries.map((r) => ({
                   service,
-                  geometry: toGeoJSON(r),
+                  geometry: decodePolyline(r),
                 })),
               );
             }
@@ -1179,6 +1211,8 @@ const App = () => {
         const stop = findStopKey(route.value);
         if (!stop) return;
 
+        stopMetrics(route.city, stop, 'main');
+
         // Reset
         setExpandSearch(false);
         setShrinkSearch(true);
@@ -1194,63 +1228,6 @@ const App = () => {
           // Hide all stops
           map.setLayoutProperty('stops', 'visibility', 'none');
           map.setLayoutProperty('stops-icon', 'visibility', 'none');
-
-          // Show the all stops in all routes
-          const allStopsCoords = [];
-          allStopsCoords.push(coordinates);
-          const otherStops = new Set();
-          routes.forEach((route) => {
-            const service = route.split('|')[0];
-            const destination = route.split('|')[1];
-            const variantIdx = route.split('|')[2];
-            if (!service || !destination || !variantIdx) {
-              console.warn(`Failed to parse route key: ${route}`);
-              return;
-            }
-            const stops = servicesData[service]?.[destination]?.[variantIdx];
-            if (stops) {
-              stops.forEach((stopId) => {
-                if (stopId !== stop) {
-                  otherStops.add(stopId);
-                }
-              });
-            }
-          });
-          [...otherStops].forEach((stopId) => {
-            if (stopsData[stopId] && stopsData[stopId].coordinates) {
-              allStopsCoords.push(stopsData[stopId].coordinates);
-            }
-          });
-
-          // Fit map to route bounds
-          const bounds = new maplibregl.LngLatBounds();
-          allStopsCoords.forEach((coordinates) => {
-            bounds.extend(coordinates);
-          });
-          requestAnimationFrame(() => {
-            map.fitBounds(bounds, {
-              padding: largerScreen
-                ? {
-                    top: floatPill.current.offsetHeight / 2,
-                    right: 80,
-                    bottom: 80,
-                    left: floatPill.current.offsetHeight / 2,
-                  }
-                : BREAKPOINT()
-                  ? {
-                      top: 80,
-                      right: Math.max(floatPill.current.offsetWidth / 2, 80),
-                      bottom: 60 + 20 + floatPill.current.offsetHeight / 2,
-                      left: Math.max(floatPill.current.offsetWidth / 2, 80),
-                    }
-                  : {
-                      top: 80,
-                      right: 80,
-                      bottom: 60 + 20 + floatPill.current.offsetHeight, // height of search bar + float pill
-                      left: 80,
-                    },
-            });
-          });
 
           map.getSource('stops-highlight').setData({
             type: 'FeatureCollection',
@@ -1304,7 +1281,7 @@ const App = () => {
 
                 for (let i = 0; i < serviceRoutes.length; i++) {
                   try {
-                    const geometry = toGeoJSON(serviceRoutes[i]);
+                    const geometry = decodePolyline(serviceRoutes[i]);
                     if (
                       geometry.type !== 'LineString' ||
                       !geometry.coordinates?.length
@@ -1374,6 +1351,38 @@ const App = () => {
             STORE.routesPathServices = serviceGeometries.map(
               (sg) => sg.service,
             );
+
+            // Fit map to rendered route bounds
+            const bounds = new maplibregl.LngLatBounds();
+            serviceGeometries.forEach((sg) => {
+              sg.geometry.coordinates.forEach((coord) => {
+                bounds.extend(coord);
+              });
+            });
+            if (!bounds.isEmpty()) {
+              map.fitBounds(bounds, {
+                padding: largerScreen
+                  ? {
+                      top: floatPill.current.offsetHeight / 2,
+                      right: 80,
+                      bottom: 80,
+                      left: floatPill.current.offsetHeight / 2,
+                    }
+                  : BREAKPOINT()
+                    ? {
+                        top: 80,
+                        right: Math.max(floatPill.current.offsetWidth / 2, 80),
+                        bottom: 60 + 20 + floatPill.current.offsetHeight / 2,
+                        left: Math.max(floatPill.current.offsetWidth / 2, 80),
+                      }
+                    : {
+                        top: 80,
+                        right: 80,
+                        bottom: 60 + 20 + floatPill.current.offsetHeight, // height of search bar + float pill
+                        left: 80,
+                      },
+              });
+            }
           });
         } else {
           setHead({
@@ -1683,6 +1692,9 @@ const App = () => {
 
     routesData = await fetchRoutesP;
 
+    // Build normalized lookup maps for O(1) key lookups
+    buildNormalizedLookupMaps();
+
     setServices(servicesDataArr);
 
     window._data = {
@@ -1710,6 +1722,13 @@ const App = () => {
           ? 120
           : { top: 40, bottom: window.innerHeight / 2, left: 40, right: 40 },
       },
+      // Performance optimizations
+      maxTileCacheSize: 100, // Limit tile cache for memory savings (default is unlimited)
+      fadeDuration: supportsTouch ? 0 : 300, // Disable fade animations on touch devices for smoother UX
+      collectResourceTiming: false, // Disable resource timing collection for better performance
+      trackResize: true, // Keep resize tracking but it's optimized internally
+      refreshExpiredTiles: false, // Don't auto-refresh expired tiles during session
+      crossSourceCollisions: false, // Disable cross-source collision detection for faster rendering
     });
 
     if (!supportsTouch) {
@@ -1797,41 +1816,23 @@ const App = () => {
       });
     });
 
-    map
-      .loadImage(stopImagePath)
-      .then((img) => {
-        map.addImage('stop', img.data);
-      })
-      .catch((e) => {
-        console.error('Failed to load stop image:', e);
-      });
-
-    map
-      .loadImage(stopEndImagePath)
-      .then((img) => {
-        map.addImage('stop-end', img.data);
-      })
-      .catch((e) => {
-        console.error('Failed to load stop-end image:', e);
-      });
-
-    map
-      .loadImage(mrtStationImagePath)
-      .then((img) => {
-        map.addImage('mrt-station', img.data);
-      })
-      .catch((e) => {
-        console.error('Failed to load mrt-station image:', e);
-      });
-
-    map
-      .loadImage(lrtStationImagePath)
-      .then((img) => {
-        map.addImage('lrt-station', img.data);
-      })
-      .catch((e) => {
-        console.error('Failed to load lrt-station image:', e);
-      });
+    // Load all map images in parallel for faster initialization
+    Promise.all([
+      map
+        .loadImage(stopImagePath)
+        .then((img) => map.addImage('stop', img.data)),
+      map
+        .loadImage(stopEndImagePath)
+        .then((img) => map.addImage('stop-end', img.data)),
+      map
+        .loadImage(mrtStationImagePath)
+        .then((img) => map.addImage('mrt-station', img.data)),
+      map
+        .loadImage(lrtStationImagePath)
+        .then((img) => map.addImage('lrt-station', img.data)),
+    ]).catch((e) => {
+      console.error('Failed to load map images:', e);
+    });
 
     // Add rail source
     map.addSource('rail', {
@@ -1970,7 +1971,7 @@ const App = () => {
       buffer: 0,
       data: {
         type: 'FeatureCollection',
-        features: stopsDataArr.map((stop) => ({
+        features: createFeaturesOptimized(stopsDataArr, (stop) => ({
           type: 'Feature',
           id: encode(stop.number),
           properties: {
@@ -2141,10 +2142,10 @@ const App = () => {
         mapCanvas.style.cursor = 'pointer';
       });
 
-      let lastFrame = null;
       if (supportsHover) {
         let lastFeature = null;
-        map.on('mousemove', (e) => {
+        // RAF-throttled mousemove handler for smooth 60fps updates
+        const handleMouseMove = rafThrottle((e) => {
           const { point } = e;
           const features = map.queryRenderedFeatures(point, {
             layers: ['stops', 'stops-highlight'],
@@ -2157,23 +2158,20 @@ const App = () => {
             lastFeature = features[0];
             const stopID = decode(features[0].id);
             const data = stopsData[stopID];
-            if (lastFrame) cancelAnimationFrame(lastFrame);
-            lastFrame = requestAnimationFrame(() => {
-              showStopTooltip({
-                ...data,
-                ...point,
-              });
+            showStopTooltip({
+              ...data,
+              ...point,
             });
           } else if (lastFeature) {
             lastFeature = null;
             hideStopTooltip();
           }
         });
+        map.on('mousemove', handleMouseMove);
       }
       map.on('mouseleave', 'stops', () => {
         mapCanvas.style.cursor = '';
-        if (lastFrame) cancelAnimationFrame(lastFrame);
-        requestAnimationFrame(hideStopTooltip);
+        hideStopTooltip();
       });
       map.on('mouseout', hideStopTooltip);
       map.on('movestart', hideStopTooltip);
@@ -2217,13 +2215,13 @@ const App = () => {
         ['==', ['get', 'type'], 'intersect'],
       ],
       layout: {
+        // Simplified with 'match' expression for better performance
         'icon-image': [
-          'case',
-          ['==', ['get', 'type'], 'end'],
+          'match',
+          ['get', 'type'],
+          ['end', 'intersect'],
           'stop-end',
-          ['==', ['get', 'type'], 'intersect'],
-          'stop-end',
-          'stop',
+          'stop', // default
         ],
         'icon-size': [
           'step',
@@ -2231,30 +2229,32 @@ const App = () => {
           0.3,
           10,
           [
-            'case',
-            ['==', ['get', 'type'], 'end'],
+            'match',
+            ['get', 'type'],
+            'end',
             0.3,
-            ['==', ['get', 'type'], 'intersect'],
+            'intersect',
             0.25,
-            0.45,
+            0.45, // default
           ],
           15,
           [
-            'case',
-            ['==', ['get', 'type'], 'end'],
+            'match',
+            ['get', 'type'],
+            'end',
             0.45,
-            ['==', ['get', 'type'], 'intersect'],
+            'intersect',
             0.4,
-            0.6,
+            0.6, // default
           ],
         ],
+        // Simplified: both 'end' and 'intersect' use 'bottom', others use 'center'
         'icon-anchor': [
-          'case',
-          ['==', ['get', 'type'], 'end'],
+          'match',
+          ['get', 'type'],
+          ['end', 'intersect'],
           'bottom',
-          ['==', ['get', 'type'], 'intersect'],
-          'bottom',
-          'center',
+          'center', // default
         ],
         'icon-padding': 0.5,
         'icon-allow-overlap': true,
@@ -2301,13 +2301,13 @@ const App = () => {
             10,
             4,
             15,
+            // Simplified: both 'end' and 'intersect' get 4, default 12
             [
-              'case',
-              ['==', ['get', 'type'], 'end'],
+              'match',
+              ['get', 'type'],
+              ['end', 'intersect'],
               4,
-              ['==', ['get', 'type'], 'intersect'],
-              4,
-              12,
+              12, // default
             ],
           ],
           'circle-color': '#fff',
@@ -2413,6 +2413,7 @@ const App = () => {
         id: 'routes-bg',
         type: 'line',
         source: 'routes',
+        maxzoom: 20, // Stop rendering when nearly transparent (opacity approaches 0)
         layout: {
           'line-cap': 'round',
         },
@@ -2441,7 +2442,8 @@ const App = () => {
         id: 'route-arrows',
         type: 'symbol',
         source: 'routes',
-        minzoom: 4,
+        minzoom: 10, // Only show arrows when zoomed in enough to see direction
+        maxzoom: 18, // Hide at very high zooms where direction is obvious from line
         layout: {
           'symbol-placement': 'line',
           'symbol-spacing': 100,
@@ -2597,7 +2599,8 @@ const App = () => {
         id: 'route-path-arrows',
         type: 'symbol',
         source: 'routes-path',
-        minzoom: 4,
+        minzoom: 10, // Only show arrows when zoomed in enough
+        maxzoom: 18, // Hide at very high zooms
         layout: {
           'symbol-placement': 'line',
           'symbol-spacing': 200,
@@ -2648,59 +2651,40 @@ const App = () => {
           navigateTo(`/services/${decode(id)}`, route);
         }
       });
-      map.on('mousemove', 'routes-path', (e) => {
+      // RAF-throttled mousemove for smooth route highlighting
+      const handleRoutesPathMouseMove = rafThrottle((e) => {
         if (e.features.length) {
           const currentHoveredRouteID = e.features[0].id;
           if (hoveredRouteID && hoveredRouteID === currentHoveredRouteID)
             return;
 
-          if (hoveredRouteID) {
-            map.setFeatureState(
-              {
-                source: 'routes-path',
-                id: hoveredRouteID,
-              },
-              { hover: false, fadein: false },
-            );
-          }
-
           hoveredRouteID = currentHoveredRouteID;
-          map.setFeatureState(
-            {
-              source: 'routes-path',
-              id: hoveredRouteID,
-            },
-            { hover: true, fadein: false },
-          );
+
+          // Build batch updates for all routes
+          const updates = [];
+          updates.push({
+            id: hoveredRouteID,
+            state: { hover: true, fadein: false },
+          });
 
           STORE.routesPathServices?.forEach((service) => {
             const id = encode(service);
-            if (hoveredRouteID === id) return;
-            map.setFeatureState(
-              {
-                source: 'routes-path',
-                id,
-              },
-              { hover: false, fadein: true },
-            );
+            if (hoveredRouteID !== id) {
+              updates.push({ id, state: { hover: false, fadein: true } });
+            }
           });
 
+          // Apply all feature state updates efficiently
+          replaceFeatureStates(map, 'routes-path', updates);
           highlightRouteTag(decode(hoveredRouteID));
         }
       });
+      map.on('mousemove', 'routes-path', handleRoutesPathMouseMove);
       map.on('mouseleave', 'routes-path', () => {
         mapCanvas.style.cursor = '';
         if (hoveredRouteID) {
-          STORE.routesPathServices?.forEach((service) => {
-            const id = encode(service);
-            map.setFeatureState(
-              {
-                source: 'routes-path',
-                id,
-              },
-              { fadein: false, hover: false },
-            );
-          });
+          // Clear all feature states at once instead of iterating
+          map.removeFeatureState({ source: 'routes-path' });
           hoveredRouteID = null;
           highlightRouteTag();
         }
@@ -2864,7 +2848,8 @@ const App = () => {
       id: 'route-between-arrows',
       type: 'symbol',
       source: 'routes-between',
-      minzoom: 4,
+      minzoom: 10, // Only show arrows when zoomed in enough
+      maxzoom: 18, // Hide at very high zooms
       layout: {
         'symbol-placement': 'line',
         'symbol-spacing': 100,
@@ -2996,8 +2981,15 @@ const App = () => {
         }
       }
     };
+    const keyupHandler = () => {
+      document.body.classList.remove('alt-mode');
+    };
     document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
+    document.addEventListener('keyup', keyupHandler);
+    return () => {
+      document.removeEventListener('keydown', handler);
+      document.removeEventListener('keyup', keyupHandler);
+    };
   }, [
     expandSearch,
     showStopPopover,
@@ -3005,9 +2997,6 @@ const App = () => {
     showServicePopover,
     popoverIsUp,
   ]);
-  document.addEventListener('keyup', () => {
-    document.body.classList.remove('alt-mode');
-  });
 
   // Initialize vehicle tracker when map loads
   useEffect(() => {

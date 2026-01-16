@@ -169,6 +169,9 @@ export default function BusServicesArrival({
                   let shortestDistance = Infinity;
                   let nearestCoords;
                   if (point.x && point.y) {
+                    // Query with filter to reduce post-processing
+                    // Note: We can't filter by sourceLayer directly in queryRenderedFeatures,
+                    // but we can use a more efficient filter function
                     const features = map
                       .queryRenderedFeatures(
                         [
@@ -177,13 +180,19 @@ export default function BusServicesArrival({
                         ],
                         {
                           validate: false,
+                          // Filter early to reduce iteration
+                          filter: [
+                            'all',
+                            ['==', ['geometry-type'], 'LineString'],
+                            ['!=', ['get', 'class'], 'path'],
+                          ],
                         },
                       )
                       .filter((f) => {
+                        // Additional filtering that can't be done in MapLibre filter
                         return (
                           f.sourceLayer === 'road' &&
                           f.layer.type === 'line' &&
-                          f.properties.class != 'path' &&
                           !/(pedestrian|sidewalk|steps)/.test(f.layer.id)
                         );
                       });

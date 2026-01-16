@@ -3,6 +3,13 @@ import './i18n';
 import { getCurrentCity } from './config';
 import { getConfigForCity, getApiUrl } from './city-config';
 import { normalizeName } from './utils/normalizeNames';
+import {
+  pointDistance,
+  closestPointOnSegment,
+  findClosestPointOnPolyline,
+  cropPolylineFromPoint,
+  decodePolylineCached,
+} from './utils/geometry';
 import { h, render, Fragment } from 'preact';
 import {
   useState,
@@ -10,6 +17,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useCallback,
 } from 'preact/hooks';
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
@@ -18,6 +26,7 @@ import { toGeoJSON } from '@mapbox/polyline';
 import { encode } from './utils/specialID';
 import fetchCache from './utils/fetchCache';
 import setIcon from '../utils/setIcon';
+import { stopMetrics } from './utils/metricsPage';
 
 import ArrivalTimeText from './components/ArrivalTimeText';
 import stopImagePath from './images/stop.png';
@@ -53,70 +62,25 @@ const THRESHOLDS = {
 let routesDataCache = null;
 let busIdCounter = 1;
 
-// Geometry helpers
-const pointDistance = (p1, p2) => {
-  const [lng1, lat1] = p1;
-  const [lng2, lat2] = p2;
-  return Math.sqrt(Math.pow(lng2 - lng1, 2) + Math.pow(lat2 - lat1, 2));
-};
-
-const closestPointOnSegment = (point, segmentStart, segmentEnd) => {
-  const [px, py] = point;
-  const [x1, y1] = segmentStart;
-  const [x2, y2] = segmentEnd;
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const lengthSquared = dx * dx + dy * dy;
-  if (lengthSquared === 0) return segmentStart;
-  const t = Math.max(
-    0,
-    Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSquared),
-  );
-  return [x1 + t * dx, y1 + t * dy];
-};
-
-const findClosestPointOnPolyline = (point, coordinates) => {
-  let minDistance = Infinity;
-  let closestPoint = null;
-  let closestSegmentIndex = -1;
-
-  for (let i = 0; i < coordinates.length - 1; i++) {
-    const closestOnSegment = closestPointOnSegment(
-      point,
-      coordinates[i],
-      coordinates[i + 1],
-    );
-    const distance = pointDistance(point, closestOnSegment);
-    if (distance < minDistance) {
-      minDistance = distance;
-      closestPoint = closestOnSegment;
-      closestSegmentIndex = i;
-    }
-  }
-
-  return {
-    point: closestPoint,
-    segmentIndex: closestSegmentIndex,
-    distance: minDistance,
-  };
-};
-
-const cropPolylineFromPoint = (coordinates, closestPoint, segmentIndex) => {
-  if (segmentIndex < 0 || segmentIndex >= coordinates.length - 1)
-    return coordinates;
-  const cropped = [closestPoint, ...coordinates.slice(segmentIndex + 1)];
-  return cropped.length > 1 ? cropped : coordinates;
-};
+// Helper to decode polylines with caching
+const decodePolyline = (encoded) => decodePolylineCached(encoded, toGeoJSON);
 
 // Service utilities
 const getServiceNo = (p) => (p && typeof p === 'object' ? p.serviceNo : p);
 const toServiceNoStr = (no) => String(no);
+
+// Use Set for O(1) lookup instead of O(n) array.some()
+const getPinnedServiceNumbers = (pinnedServices) =>
+  new Set(pinnedServices.map(getServiceNo).filter(Boolean).map(toServiceNoStr));
+
+// Optimized isPinned that accepts pre-computed Set for O(1) lookup
+const isPinnedSet = (no, pinnedSet) => pinnedSet.has(toServiceNoStr(no));
+
+// Legacy isPinned for backward compatibility (O(n))
 const isPinned = (no, pinnedServices) => {
   const noStr = toServiceNoStr(no);
   return pinnedServices.some((p) => toServiceNoStr(getServiceNo(p)) === noStr);
 };
-const getPinnedServiceNumbers = (pinnedServices) =>
-  new Set(pinnedServices.map(getServiceNo).filter(Boolean).map(toServiceNoStr));
 
 // Map utilities
 const clearMapSource = (map, sourceId) => {
@@ -217,7 +181,9 @@ const BusLane = ({ index, no, buses, maxDuration_ms, isFirstFetch }) => {
 
   useEffect(() => {
     prevNo.current = no;
-    prevBuses.current = structuredClone(nextBuses);
+    // Shallow copy is sufficient since we only need to compare bus properties
+    // This is more efficient than structuredClone for simple objects
+    prevBuses.current = nextBuses.map((bus) => ({ ...bus }));
   }, [no, nextBuses]);
 
   useLayoutEffect(() => {
@@ -261,7 +227,10 @@ const convertScheduleToArrival = (scheduleData) => {
   scheduleData.services.forEach((service) => {
     const { no, origin, destination, trips } = service;
     trips.forEach((timeStr) => {
-      const [hours, minutes] = timeStr.split(':').map(Number);
+      // Optimized time parsing - avoid split/map for better performance
+      const colonIdx = timeStr.indexOf(':');
+      const hours = parseInt(timeStr.substring(0, colonIdx), 10);
+      const minutes = parseInt(timeStr.substring(colonIdx + 1), 10);
       const tripMinutes = hours * 60 + minutes;
       const duration_ms = (tripMinutes - currentMinutes) * 60 * 1000;
       if (duration_ms > 0) {
@@ -365,7 +334,7 @@ const findMatchingPolyline = (
 
   for (let index = 0; index < serviceRoutes.length; index++) {
     try {
-      const geometry = toGeoJSON(serviceRoutes[index]);
+      const geometry = decodePolyline(serviceRoutes[index]);
       if (geometry.type !== 'LineString' || !geometry.coordinates?.length)
         continue;
 
@@ -457,7 +426,7 @@ const renderPinnedRoutes = async (
         // Fallback: render all routes if service not found
         serviceRoutes.forEach((enc, index) => {
           features.push(
-            createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
+            createRouteFeature(serviceNo, null, decodePolyline(enc), index),
           );
         });
         continue;
@@ -544,7 +513,7 @@ const renderPinnedRoutes = async (
           // No polyline found passing through stop - render all routes
           serviceRoutes.forEach((enc, index) => {
             features.push(
-              createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
+              createRouteFeature(serviceNo, null, decodePolyline(enc), index),
             );
           });
         }
@@ -555,7 +524,7 @@ const renderPinnedRoutes = async (
           // No polyline found passing through stop - render all routes
           serviceRoutes.forEach((enc, index) => {
             features.push(
-              createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
+              createRouteFeature(serviceNo, null, decodePolyline(enc), index),
             );
           });
         }
@@ -563,7 +532,7 @@ const renderPinnedRoutes = async (
         // Fallback: render all routes if destination not found and no route name
         serviceRoutes.forEach((enc, index) => {
           features.push(
-            createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
+            createRouteFeature(serviceNo, null, decodePolyline(enc), index),
           );
         });
       }
@@ -571,7 +540,7 @@ const renderPinnedRoutes = async (
       // No destination/stop - render all routes
       serviceRoutes.forEach((enc, index) => {
         features.push(
-          createRouteFeature(serviceNo, null, toGeoJSON(enc), index),
+          createRouteFeature(serviceNo, null, decodePolyline(enc), index),
         );
       });
     }
@@ -724,6 +693,7 @@ function ArrivalTimes() {
           const [lng, lat, name] = stops[actualCode];
           setBusStop({ code: actualCode, name, lat, lng });
           setIcon(actualCode);
+          stopMetrics(city, actualCode, 'arrival');
         } else if (code) {
           alert(t('arrivals.invalidBusStopCode'));
         } else {
@@ -751,6 +721,20 @@ function ArrivalTimes() {
   // Fetch services with timeout fallback
   const scheduleRetry = (id, delay = 30000) => {
     arrivalsTimeoutRef.current = setTimeout(() => {
+      // Skip polling when tab is hidden to save resources
+      if (document.hidden) {
+        // Reschedule for when tab becomes visible again
+        const visibilityHandler = () => {
+          if (!document.hidden) {
+            document.removeEventListener('visibilitychange', visibilityHandler);
+            arrivalsRAFRef.current = requestAnimationFrame(() =>
+              fetchServices(id),
+            );
+          }
+        };
+        document.addEventListener('visibilitychange', visibilityHandler);
+        return;
+      }
       arrivalsRAFRef.current = requestAnimationFrame(() => fetchServices(id));
     }, delay);
   };
@@ -845,6 +829,8 @@ function ArrivalTimes() {
     if (!busStop || !mapContainer.current || mapRef.current) return;
 
     const { lat, lng, code } = busStop;
+    const supportsTouch =
+      'ontouchstart' in window || navigator.maxTouchPoints > 0;
     const map = new maplibregl.Map({
       container: mapContainer.current,
       style: '/data/style.json',
@@ -856,6 +842,9 @@ function ArrivalTimes() {
       dragRotate: false,
       touchPitch: false,
       pitchWithRotate: false,
+      // Performance optimizations
+      maxTileCacheSize: 50, // Smaller cache for arrival page (less map interaction)
+      fadeDuration: supportsTouch ? 0 : 300, // Disable fade on touch devices
     });
 
     mapRef.current = map;
@@ -1160,7 +1149,13 @@ function ArrivalTimes() {
     } catch (e) {}
   };
 
-  // Group services
+  // Pre-compute pinned set for O(1) lookups during sorting
+  const pinnedSet = useMemo(
+    () => getPinnedServiceNumbers(pinnedServices),
+    [pinnedServices],
+  );
+
+  // Group services - separated grouping from sorting for better performance
   const { groupedServices, maxDuration_ms } = useMemo(() => {
     if (!services) return { groupedServices: [], maxDuration_ms: 0 };
 
@@ -1188,15 +1183,16 @@ function ArrivalTimes() {
       groups[key].frequency += service.frequency || 0;
     });
 
+    // Use pre-computed Set for O(1) isPinned checks
     const sorted = Object.values(groups).sort((a, b) => {
-      const aPinned = isPinned(a.no, pinnedServices);
-      const bPinned = isPinned(b.no, pinnedServices);
+      const aPinned = isPinnedSet(a.no, pinnedSet);
+      const bPinned = isPinnedSet(b.no, pinnedSet);
       if (aPinned !== bPinned) return aPinned ? -1 : 1;
       return b.frequency - a.frequency;
     });
 
     return { groupedServices: sorted, maxDuration_ms: maxDuration };
-  }, [services, pinnedServices]);
+  }, [services, pinnedSet]);
 
   if (!busStop) {
     if (stopsData) {
