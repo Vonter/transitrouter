@@ -40,7 +40,8 @@
     "explore": "Let's explore"
   },
   "search": {
-    "placeholder": "Search for route or stop"
+    "placeholder": "Search for route or stop",
+    "geolocate": "Use current location"
   },
   "service": {
     "title": "Transit service {{serviceNumber}}: {{serviceName}} - $t(app.name)",

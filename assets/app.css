@@ -706,6 +706,47 @@ a:active {
   opacity: 0.4;
 }
 
+/* Geolocate button in search bar (mobile only) */
+.popover-search .geolocate-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  padding: 0;
+  margin-right: 8px;
+  border-radius: 10px;
+  background-color: rgba(0, 0, 0, 0.1);
+  color: #333;
+  transition: color 0.3s;
+}
+.popover-search .geolocate-btn:active {
+  background-color: rgba(0, 0, 0, 0.2);
+  opacity: 1;
+}
+.popover-search .geolocate-btn.loading,
+.popover-search .geolocate-btn.active {
+  color: #007aff;
+}
+.popover-search .geolocate-btn.loading {
+  pointer-events: none;
+  animation: glowing infinite alternate 1s linear both;
+}
+.popover-search .geolocate-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+.popover-search .geolocate-btn.active svg .inner {
+  fill: currentColor;
+}
+@media (min-width: 641px) {
+  .popover-search .geolocate-btn {
+    display: none;
+  }
+}
+
 .popover-list {
   flex-grow: 1;
   margin: 0;

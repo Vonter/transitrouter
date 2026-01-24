@@ -52,7 +52,7 @@ import {
 } from './utils/mapOptimizations';
 
 import BusServicesArrival from './components/BusServicesArrival';
-import GeolocateControl from './components/GeolocateControl';
+import GeolocateControl, { GEOLOCATE_SVG } from './components/GeolocateControl';
 import BetweenRoutes from './components/BetweenRoutes';
 import ScrollableContainer from './components/ScrollableContainer';
 import StopsList from './components/StopsList.jsx';
@@ -359,6 +359,8 @@ const App = () => {
   const betweenPopover = useRef(null);
   const servicePopover = useRef(null);
   const vehicleTracker = useRef(null);
+  const geolocateBtn = useRef(null);
+  const geolocateControlRef = useRef(null);
 
   let previewRAF = useRef(null).current;
 
@@ -1741,59 +1743,36 @@ const App = () => {
       new maplibregl.AttributionControl({
         compact: true,
       }),
-      'bottom-left',
+      'bottom-right',
     );
-    map.addControl(
-      new GeolocateControl({
-        offset: () => {
-          if (!BREAKPOINT()) {
-            if (stopPopover.current?.classList.contains('expand')) {
-              return [0, -stopPopover.current.offsetHeight / 2];
-            } else if (servicePopover.current?.classList.contains('expand')) {
-              return [0, -servicePopover.current.offsetHeight / 2];
-            } else if (betweenPopover.current?.classList.contains('expand')) {
-              return [0, -betweenPopover.current.offsetHeight / 2];
-            }
-          }
-          return [0, 0];
-        },
-      }),
-      'top-right',
-    );
+    // GeolocateControl - map button on desktop only, search bar button on mobile
+    const geolocateControl = new GeolocateControl({
+      offset: () => {
+        if (BREAKPOINT()) return [0, 0];
+        const popover = [stopPopover, servicePopover, betweenPopover]
+          .map((p) => p.current)
+          .find((p) => p?.classList.contains('expand'));
+        return popover ? [0, -popover.offsetHeight / 2] : [0, 0];
+      },
+      showMapControl: BREAKPOINT(),
+    });
+    map.addControl(geolocateControl, 'top-left');
+    geolocateControlRef.current = geolocateControl;
+    if (geolocateBtn.current)
+      geolocateControl.registerExternalButton(geolocateBtn.current);
 
     map.addControl(
       new maplibregl.NavigationControl({
         showCompass: true,
-        showZoom: !supportsTouch,
+        showZoom: false,
       }),
-      'top-right',
+      'bottom-left',
     );
     const compassButton = document.querySelector('.maplibregl-ctrl-compass');
     map.on('rotateend', () => {
       const bearing = map.getBearing();
       compassButton.classList.toggle('show', bearing !== 0);
     });
-
-    // Handle map errors gracefully (suppress mapbox:// URL errors)
-    // map.on('error', (e) => {
-    //   // Suppress errors related to mapbox:// URLs that can't be loaded in maplibre-gl
-    //   if (e.error && e.error.message && e.error.message.includes('mapbox://')) {
-    //     console.warn('Suppressed mapbox:// URL error (expected with maplibre-gl):', e.error.message);
-    //     return;
-    //   }
-    //   // Suppress 422 errors for composite tilesets that may not be accessible
-    //   if (e.error && e.error.status === 422 && e.error.url && e.error.url.includes('api.mapbox.com/v4/')) {
-    //     console.warn('Suppressed 422 error for tileset (may not be accessible):', e.error.url);
-    //     return;
-    //   }
-    //   // Suppress InvalidStateError for sprite decoding issues
-    //   if (e.error && e.error.name === 'InvalidStateError' && e.error.message.includes('source image could not be decoded')) {
-    //     console.warn('Suppressed sprite decoding error (expected with maplibre-gl):', e.error.message);
-    //     return;
-    //   }
-    //   // Log other errors normally
-    //   console.error('Map error:', e.error);
-    // });
 
     let initialMoveStart = false;
     const initialHideSearch = () => {
@@ -3227,6 +3206,14 @@ const App = () => {
         </div>
         <div class="popover-inner">
           <div class="popover-search">
+            <button
+              type="button"
+              class="geolocate-btn"
+              title={t('search.geolocate')}
+              ref={geolocateBtn}
+              onClick={() => geolocateControlRef.current?.trigger()}
+              dangerouslySetInnerHTML={{ __html: GEOLOCATE_SVG }}
+            />
             <input
               type="search"
               placeholder={t('search.placeholder')}
