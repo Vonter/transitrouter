@@ -34,7 +34,7 @@ import stopEndImagePath from './images/stop-end.png';
 import busSingleImagePath from './images/bus-single.svg';
 import busDoubleImagePath from './images/bus-double.svg';
 import busBendyImagePath from './images/bus-bendy.svg';
-import busTinyImagePath from './images/bus-tiny.png';
+import busTinyImagePath from './images/bus-tiny-map.png';
 
 // Constants
 const city = getCurrentCity();
@@ -499,9 +499,9 @@ const renderPinnedRoutes = async (
         }
       }
 
-      const routeVariations =
-        destinationData?.routes ||
-        (Array.isArray(destinationData) ? destinationData : null);
+      const routeVariations = Array.isArray(destinationData)
+        ? destinationData
+        : null;
 
       // Helper function to try route name matching
       const tryRouteNameMatching = () => {
@@ -635,9 +635,10 @@ const extractPinnedRouteStops = (
     }
 
     // Get the route variations (array of stop code arrays)
-    const routeVariations =
-      destinationData?.routes ||
-      (Array.isArray(destinationData) ? destinationData : null);
+    // destinationData is directly an array of route variations, not an object with a 'routes' property
+    const routeVariations = Array.isArray(destinationData)
+      ? destinationData
+      : null;
 
     if (!routeVariations || !Array.isArray(routeVariations)) continue;
 
@@ -1177,7 +1178,7 @@ function ArrivalTimes() {
             'icon-image': 'bus-tiny',
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
-            'icon-size': ['step', ['zoom'], 0.3, 14, 0.35, 15, 0.45, 16, 0.55],
+            'icon-size': ['step', ['zoom'], 0.5, 14, 0.6, 15, 0.7, 16, 0.8],
             'text-field': ['get', 'vehicleNumber'],
             'text-optional': true,
             'text-size': [
@@ -1185,11 +1186,11 @@ function ArrivalTimes() {
               ['linear'],
               ['zoom'],
               12,
-              8,
-              14,
-              10,
-              16,
               12,
+              14,
+              14,
+              16,
+              16,
             ],
             'text-font': ['Noto Sans Regular'],
             'text-variable-anchor': ['left', 'right', 'bottom', 'top'],

@@ -43,12 +43,10 @@ import { createVehicleTracker } from './utils/fetchVehicles';
 import { setRafInterval, clearRafInterval } from './utils/rafInterval';
 import { stopMetrics, routeMetrics } from './utils/metricsPage';
 import {
-  EMPTY_FEATURE_COLLECTION,
   batchClearSources,
   rafThrottle,
   replaceFeatureStates,
   createFeaturesOptimized,
-  whenMapIdle,
 } from './utils/mapOptimizations';
 
 import BusServicesArrival from './components/BusServicesArrival';
@@ -61,11 +59,10 @@ import stopImagePath from './images/stop.png';
 import stopEndImagePath from './images/stop-end.png';
 import mrtStationImagePath from './images/mrt-station.png';
 import lrtStationImagePath from './images/lrt-station.png';
-import openNewWindowImagePath from './images/open-new-window.svg';
 import openNewWindowBlueImagePath from './images/open-new-window-blue.svg';
 import passingRoutesBlueImagePath from './images/passing-routes-blue.svg';
 import iconSVGPath from '../icons/icon.svg';
-import busTinyImagePath from './images/bus-tiny.png';
+import busTinyImagePath from './images/bus-tiny-map.png';
 
 const city = getCurrentCity();
 const dataPath = `/data/${city}`;
@@ -2764,6 +2761,7 @@ const App = () => {
         features: [],
       },
     });
+
     map
       .loadImage(busTinyImagePath)
       .then((img) => {
@@ -2781,7 +2779,7 @@ const App = () => {
         'icon-image': 'bus-tiny',
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
-        'icon-size': ['step', ['zoom'], 0.3, 14, 0.35, 15, 0.45, 16, 0.55],
+        'icon-size': ['step', ['zoom'], 0.5, 14, 0.6, 15, 0.7, 16, 0.8],
         'text-field': ['get', 'vehicleNumber'],
         'text-optional': true,
         'text-size': [
@@ -2789,11 +2787,11 @@ const App = () => {
           ['linear'],
           ['zoom'],
           12,
-          8,
-          14,
-          10,
-          16,
           12,
+          14,
+          14,
+          16,
+          16,
         ],
         'text-font': ['Noto Sans Regular'],
         'text-variable-anchor': ['left', 'right', 'bottom', 'top'],

@@ -19,7 +19,7 @@ import fetchCache from '../utils/fetchCache';
 
 import ArrivalTimeText from './ArrivalTimeText';
 
-import busTinyImagePath from '../images/bus-tiny.png';
+import busTinyImagePath from '../images/bus-tiny-map.png';
 
 const setupBusesStopLayerOnce = (map) => {
   if (!map) return;
@@ -32,11 +32,13 @@ const setupBusesStopLayerOnce = (map) => {
         features: [],
       },
     });
+
     if (!map.hasImage('bus-tiny')) {
       map.loadImage(busTinyImagePath, (e, img) => {
         if (!map.hasImage('bus-tiny')) map.addImage('bus-tiny', img);
       });
     }
+
     map.addLayer({
       id: 'buses-stop',
       type: 'symbol',
@@ -46,10 +48,10 @@ const setupBusesStopLayerOnce = (map) => {
         'icon-image': 'bus-tiny',
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
-        'icon-size': ['step', ['zoom'], 0.25, 15, 0.3, 16, 0.4],
+        'icon-size': ['step', ['zoom'], 0.4, 15, 0.5, 16, 0.6],
         'text-field': ['step', ['zoom'], '', 15, ['get', 'number']],
         'text-optional': true,
-        'text-size': 10,
+        'text-size': 14,
         // 'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Regular'],
         'text-font': ['Noto Sans Regular'],
         'text-variable-anchor': ['left', 'right', 'bottom', 'top'],
@@ -398,7 +400,6 @@ export default function BusServicesArrival({
                 }`}
               >
                 {service}
-                {servicesIssues.includes(service) && ' ⚠️'}
                 {servicesArrivals[service] && (
                   <span>
                     <ArrivalTimeText ms={servicesArrivals[service]} />
