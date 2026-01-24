@@ -392,6 +392,14 @@ const createRouteFeature = (serviceNo, destination, geometry, index) => ({
   geometry,
 });
 
+// Create a point feature for a stop on a pinned route
+const createStopFeature = (stopCode, coords, name, serviceNo) => ({
+  type: 'Feature',
+  id: encode(`stop-${serviceNo}-${stopCode}`),
+  properties: { code: stopCode, name, service: serviceNo },
+  geometry: { type: 'Point', coordinates: coords },
+});
+
 const renderPinnedRoutes = async (
   activePinnedServices,
   busStop,
@@ -547,6 +555,90 @@ const renderPinnedRoutes = async (
   }
 
   return features;
+};
+
+// Extract stop locations for pinned routes
+const extractPinnedRouteStops = (
+  activePinnedServices,
+  busStop,
+  servicesData,
+  stopsData,
+) => {
+  const stopFeatures = [];
+  const currentStopCode = busStop?.code;
+  const addedStops = new Set(); // Avoid duplicate stops
+
+  for (const pinned of activePinnedServices) {
+    const serviceNo = getServiceNo(pinned);
+    const destination = pinned.destination;
+    const serviceData = servicesData?.[serviceNo];
+
+    if (!serviceData) continue;
+
+    // Try to find destination by ID first, then by name
+    let destinationCode = destination;
+    let destinationData = serviceData[destination];
+
+    // If not found by ID, try to find by name
+    if (!destinationData && stopsData) {
+      for (const [code, stopData] of Object.entries(stopsData)) {
+        if (stopData?.[2] === destination) {
+          destinationCode = code;
+          destinationData = serviceData[code];
+          break;
+        }
+      }
+    }
+
+    // Get the route variations (array of stop code arrays)
+    const routeVariations =
+      destinationData?.routes ||
+      (Array.isArray(destinationData) ? destinationData : null);
+
+    if (!routeVariations || !Array.isArray(routeVariations)) continue;
+
+    // Find the route variation that contains the current stop
+    let stopSequence = null;
+    for (const variation of routeVariations) {
+      if (Array.isArray(variation) && variation.includes(currentStopCode)) {
+        stopSequence = variation;
+        break;
+      }
+    }
+
+    // If no variation contains current stop, use the first variation
+    if (!stopSequence && routeVariations.length > 0) {
+      stopSequence = routeVariations[0];
+    }
+
+    if (!Array.isArray(stopSequence)) continue;
+
+    // Find the index of current stop and get stops from there onwards
+    const currentStopIndex = stopSequence.indexOf(currentStopCode);
+    const stopsToRender =
+      currentStopIndex >= 0
+        ? stopSequence.slice(currentStopIndex + 1) // Skip current stop, render remaining
+        : stopSequence;
+
+    // Create features for each stop
+    for (const stopCode of stopsToRender) {
+      const stopKey = `${serviceNo}-${stopCode}`;
+      if (addedStops.has(stopKey)) continue;
+
+      const stopData = stopsData?.[stopCode];
+      if (!stopData) continue;
+
+      const [lng, lat, name] = stopData;
+      if (typeof lng !== 'number' || typeof lat !== 'number') continue;
+
+      addedStops.add(stopKey);
+      stopFeatures.push(
+        createStopFeature(stopCode, [lng, lat], name, serviceNo),
+      );
+    }
+  }
+
+  return stopFeatures;
 };
 
 // Vehicle extraction
@@ -956,6 +1048,70 @@ function ArrivalTimes() {
           'stop-highlight-icon',
         );
 
+        // Route stops (stops along pinned routes)
+        map.addSource('route-stops', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        });
+
+        map.addLayer(
+          {
+            id: 'route-stops',
+            type: 'circle',
+            source: 'route-stops',
+            paint: {
+              'circle-radius': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                12,
+                3,
+                16,
+                5,
+                20,
+                8,
+              ],
+              'circle-color': '#1a1a1a',
+              'circle-stroke-width': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                12,
+                1,
+                16,
+                1.5,
+              ],
+              'circle-stroke-color': '#ffffff',
+            },
+          },
+          'stop-highlight-icon',
+        );
+
+        // Route stop labels (shown at high zoom levels)
+        map.addLayer(
+          {
+            id: 'route-stops-labels',
+            type: 'symbol',
+            source: 'route-stops',
+            minzoom: 15,
+            layout: {
+              'text-field': ['get', 'name'],
+              'text-size': 12,
+              'text-font': ['Noto Sans Regular'],
+              'text-anchor': 'left',
+              'text-offset': [0.8, 0],
+              'text-optional': true,
+              'text-max-width': 10,
+            },
+            paint: {
+              'text-color': '#1a1a1a',
+              'text-halo-color': '#ffffff',
+              'text-halo-width': 1.5,
+            },
+          },
+          'stop-highlight-icon',
+        );
+
         // Vehicles
         map.addSource('buses-service', {
           type: 'geojson',
@@ -1018,10 +1174,11 @@ function ArrivalTimes() {
     };
   }, [busStop]);
 
-  // Render pinned routes
+  // Render pinned routes and stops
   useEffect(() => {
     const map = mapRef.current;
     const routesSource = map?.getSource('routes-pinned');
+    const stopsSource = map?.getSource('route-stops');
     if (!map || !routesSource) return;
 
     (async () => {
@@ -1033,6 +1190,7 @@ function ArrivalTimes() {
 
         if (!activePinnedServices.length) {
           clearMapSource(map, 'routes-pinned');
+          if (stopsSource) clearMapSource(map, 'route-stops');
           return;
         }
 
@@ -1043,9 +1201,24 @@ function ArrivalTimes() {
           stopsData,
         );
         routesSource.setData({ type: 'FeatureCollection', features });
+
+        // Render stops along pinned routes
+        if (stopsSource && servicesData && stopsData) {
+          const stopFeatures = extractPinnedRouteStops(
+            activePinnedServices,
+            busStop,
+            servicesData,
+            stopsData,
+          );
+          stopsSource.setData({
+            type: 'FeatureCollection',
+            features: stopFeatures,
+          });
+        }
       } catch (e) {
         console.error('Failed to render pinned routes', e);
         clearMapSource(map, 'routes-pinned');
+        if (stopsSource) clearMapSource(map, 'route-stops');
       }
     })();
   }, [pinnedServices, services, busStop, servicesData, stopsData]);
