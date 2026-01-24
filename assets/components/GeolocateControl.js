@@ -196,6 +196,7 @@ export default class GeolocateControl {
           }
 
           if (this._buttonClicked) {
+            // Only call onClick when button was clicked, not on continuous location updates
             // Differentiate between initiated from button click or watchPosition subsequent runs
             this._buttonClicked = false;
             onClick(this._currentLocation);

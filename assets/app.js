@@ -349,6 +349,8 @@ const App = () => {
   const [showBetweenPopover, setShowBetweenPopover] = useState(false);
   const [betweenStartStop, setBetweenStartStop] = useState(null);
   const [betweenEndStop, setBetweenEndStop] = useState(null);
+  const [currentLocation, setCurrentLocation] = useState(null);
+  const [closestStops, setClosestStops] = useState([]);
 
   const prevStopNumber = useRef(null);
   const servicesList = useRef(null);
@@ -361,6 +363,70 @@ const App = () => {
   const vehicleTracker = useRef(null);
   const geolocateBtn = useRef(null);
   const geolocateControlRef = useRef(null);
+  const hasPannedToLocationOnLoad = useRef(false);
+
+  // Calculate closest stops to location (within 5km, top 20)
+  const calculateClosestStops = useCallback((location) => {
+    if (!location || !stopsDataArr?.length) return [];
+
+    const [lng, lat] = location;
+    return stopsDataArr
+      .map((stop) => ({
+        ...stop,
+        distance: ruler.distance([lng, lat], stop.coordinates),
+      }))
+      .filter((stop) => stop.distance <= 5 * 1000)
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 25);
+  }, []);
+
+  // Pan/zoom to location with geolocateSource flag
+  const panToLocation = useCallback((location, geolocateControl) => {
+    if (!location || !map) return;
+
+    const checkAndPan = () => {
+      const marker = geolocateControl?._dot;
+      if (!marker || !marker._addedToMap) {
+        requestAnimationFrame(checkAndPan);
+        return;
+      }
+
+      // On mobile, adjust latitude to account for UI elements
+      const center = !BREAKPOINT()
+        ? [location[0], location[1] - 0.004]
+        : location;
+
+      const eventData = { geolocateSource: true };
+      map.flyTo(
+        {
+          center,
+          zoom: 15,
+          duration: 2000,
+        },
+        eventData,
+      );
+    };
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(checkAndPan);
+    });
+  }, []);
+
+  // Handle location update (from GeolocateControl)
+  const handleLocationUpdate = useCallback(
+    (location, geolocateControl) => {
+      if (!location) return;
+
+      setCurrentLocation(location);
+
+      // Pan/zoom on initial page load only
+      if (!hasPannedToLocationOnLoad.current) {
+        hasPannedToLocationOnLoad.current = true;
+        panToLocation(location, geolocateControl);
+      }
+    },
+    [panToLocation],
+  );
 
   let previewRAF = useRef(null).current;
 
@@ -414,7 +480,8 @@ const App = () => {
         }
       } else {
         setServices(servicesDataArr);
-        setStops([]);
+        // Show closest stops if location is available, otherwise empty
+        setStops(currentLocation ? closestStops : []);
         setSearching(false);
       }
     }, 150),
@@ -441,7 +508,8 @@ const App = () => {
     searchField.current.value = '';
     setSearching(false);
     setServices(servicesDataArr);
-    setStops([]);
+    // Show closest stops if location is available, otherwise empty
+    setStops(currentLocation ? closestStops : []);
   };
 
   const handleServicesScroll = () => {
@@ -450,6 +518,15 @@ const App = () => {
     setExpandedSearchOnce(true);
     // $map.classList.add('fade-out');
   };
+
+  // Update closest stops when location or stops data changes
+  useEffect(() => {
+    setClosestStops(
+      currentLocation && stopsDataArr?.length
+        ? calculateClosestStops(currentLocation)
+        : [],
+    );
+  }, [currentLocation, calculateClosestStops]);
 
   const _showStopPopover = (number) => {
     const stopData = stopsData[number];
@@ -1700,6 +1777,11 @@ const App = () => {
 
     setServices(servicesDataArr);
 
+    // Recalculate closest stops if location is already available
+    if (currentLocation && stopsDataArr.length > 0) {
+      setClosestStops(calculateClosestStops(currentLocation));
+    }
+
     window._data = {
       servicesData,
       stopsData,
@@ -1755,6 +1837,7 @@ const App = () => {
         return popover ? [0, -popover.offsetHeight / 2] : [0, 0];
       },
       showMapControl: BREAKPOINT(),
+      onClick: (location) => handleLocationUpdate(location, geolocateControl),
     });
     map.addControl(geolocateControl, 'top-left');
     geolocateControlRef.current = geolocateControl;
@@ -1775,7 +1858,9 @@ const App = () => {
     });
 
     let initialMoveStart = false;
-    const initialHideSearch = () => {
+    const initialHideSearch = (e) => {
+      // Don't collapse search bar if movement is from geolocation
+      if (e && e.geolocateSource) return;
       if (initialMoveStart) return;
       initialMoveStart = true;
       $logo.classList.add('fadeout');
@@ -2875,6 +2960,9 @@ const App = () => {
       // For cases when user already typed something before fuse.js inits
       if (searchField.current?.value) handleSearch();
     });
+
+    // GeolocateControl automatically acquires location on page load if permission is 'granted'
+    // The handleLocationUpdate callback will be triggered when location is acquired and marker is rendered
   }, [mapLoaded]);
 
   useEffect(() => {
@@ -3233,11 +3321,29 @@ const App = () => {
           </div>
           <ul
             class={`popover-list ${
-              services.length || searching ? '' : 'loading'
+              services.length ||
+              searching ||
+              (closestStops.length && !searching)
+                ? ''
+                : 'loading'
             } ${searching ? 'searching' : ''}`}
             ref={servicesList}
             onScroll={handleServicesScroll}
           >
+            {/* Show closest stops first when not searching and location is available */}
+            {!searching &&
+              closestStops.length > 0 &&
+              closestStops.map((s) => (
+                <li key={s.number}>
+                  <a href={`#${route.cityPrefix}/stops/${s.number}`}>
+                    <b class="stop-tag">{s.number}</b>
+                    <span class="stop-name-with-suffix">
+                      <span class="stop-name">{s.name}</span>
+                      {s.suffix && <span class="stop-suffix">{s.suffix}</span>}
+                    </span>
+                  </a>
+                </li>
+              ))}
             {services.length
               ? (expandedSearchOnce ? services : services.slice(0, 25)).map(
                   (s) => {
@@ -3289,6 +3395,7 @@ const App = () => {
                   },
                 )
               : !searching &&
+                !closestStops.length &&
                 [1, 2, 3, 4, 5, 6, 7, 8].map((s, i) => (
                   <li key={s}>
                     <a href={`#${route.cityPrefix}/`}>
