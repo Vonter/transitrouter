@@ -292,14 +292,16 @@ export default function BusServicesArrival({
 
   const servicesValue = route.value?.split('~') || [];
 
-  // Group by destination and collect all services going to each destination
+  // Group by arrival status (upcoming vs scheduled) and then by destination
   const groupedByDestination = useMemo(() => {
     if (!stopData?.destinationGroups) {
       // Fallback to old format if destinationGroups not available
+      const upcomingServices = services.filter((s) => servicesArrivals[s]);
+      const scheduledServices = services.filter((s) => !servicesArrivals[s]);
       return {
         hasGroups: false,
-        destinations: [],
-        ungroupedServices: services.sort(sortServices),
+        upcomingServices: upcomingServices.sort(sortServices),
+        scheduledServices: scheduledServices.sort(sortServices),
       };
     }
 
@@ -311,94 +313,81 @@ export default function BusServicesArrival({
       });
     }
 
-    // Map to collect all services for each destination
-    const destinationMap = new Map();
+    // Separate services into upcoming (with arrivals) and scheduled (without arrivals)
+    const upcomingServices = services.filter((s) => servicesArrivals[s]);
+    const scheduledServices = services.filter((s) => !servicesArrivals[s]);
 
-    services.forEach((service) => {
-      const destinationData = stopData.destinationGroups[service];
-      if (destinationData) {
-        // For each destination this service goes to
-        Object.keys(destinationData).forEach((destId) => {
-          if (!destinationMap.has(destId)) {
-            destinationMap.set(destId, {
-              id: destId,
-              name: window._data?.stopsData?.[destId]?.name || destId,
-              services: [],
-              maxStopCount: 0,
-              totalTripCount: 0,
-            });
-          }
+    // Helper function to group services by destination
+    const groupServicesByDestination = (serviceList) => {
+      const destinationMap = new Map();
 
-          const dest = destinationMap.get(destId);
-          dest.services.push(service);
+      serviceList.forEach((service) => {
+        const destinationData = stopData.destinationGroups[service];
+        if (destinationData) {
+          // For each destination this service goes to
+          Object.keys(destinationData).forEach((destId) => {
+            if (!destinationMap.has(destId)) {
+              destinationMap.set(destId, {
+                id: destId,
+                name: window._data?.stopsData?.[destId]?.name || destId,
+                services: [],
+                maxStopCount: 0,
+                totalTripCount: 0,
+              });
+            }
 
-          // Track the maximum stop count to this destination
-          const stopCount = destinationData[destId].stopCount || 0;
-          if (stopCount > dest.maxStopCount) {
-            dest.maxStopCount = stopCount;
-          }
+            const dest = destinationMap.get(destId);
+            dest.services.push(service);
 
-          // Add trip_count to total for this destination
-          const tripCount = serviceTripCounts.get(service) || 0;
-          dest.totalTripCount += tripCount;
-        });
-      }
-    });
+            // Track the maximum stop count to this destination
+            const stopCount = destinationData[destId].stopCount || 0;
+            if (stopCount > dest.maxStopCount) {
+              dest.maxStopCount = stopCount;
+            }
 
-    // Convert to array and sort by total trip_count (descending)
-    const destinations = Array.from(destinationMap.values()).sort((a, b) => {
-      // Sort by total trip_count (descending)
-      return b.totalTripCount - a.totalTripCount;
-    });
+            // Add trip_count to total for this destination
+            const tripCount = serviceTripCounts.get(service) || 0;
+            dest.totalTripCount += tripCount;
+          });
+        }
+      });
+
+      // Convert to array and sort by total trip_count (descending)
+      return Array.from(destinationMap.values()).sort((a, b) => {
+        return b.totalTripCount - a.totalTripCount;
+      });
+    };
+
+    const upcomingDestinations = groupServicesByDestination(upcomingServices);
+    const scheduledDestinations = groupServicesByDestination(scheduledServices);
 
     return {
       hasGroups: true,
-      destinations,
-      ungroupedServices: [],
+      upcomingDestinations,
+      scheduledDestinations,
     };
-  }, [services, stopData, scheduleData]);
+  }, [services, stopData, scheduleData, servicesArrivals]);
 
-  return (
-    <>
-      {groupedByDestination.hasGroups ? (
-        <>
-          {groupedByDestination.destinations.map((dest) => (
-            <div key={dest.id} class="service-destination-group">
-              <p class="service-destination-info">
-                <strong>{dest.name}</strong>
-              </p>
-              <p
-                class={`services-list ${isLoading ? 'loading' : ''}`}
-                style={{ marginTop: '4px' }}
-              >
-                {dest.services.sort(sortServices).map((service) => (
-                  <>
-                    <a
-                      href={`#${route.cityPrefix}/services/${service}`}
-                      class={`service-tag ${
-                        route.page === 'service' &&
-                        servicesValue.includes(service)
-                          ? 'current'
-                          : ''
-                      }`}
-                    >
-                      {service}
-                      {servicesIssues.includes(service) && ' ⚠️'}
-                      {servicesArrivals[service] && (
-                        <span>
-                          <ArrivalTimeText ms={servicesArrivals[service]} />
-                        </span>
-                      )}
-                    </a>{' '}
-                  </>
-                ))}
-              </p>
-            </div>
-          ))}
-        </>
-      ) : (
-        <p class={`services-list ${isLoading ? 'loading' : ''}`}>
-          {groupedByDestination.ungroupedServices.map((service) => (
+  // Helper component to render a destination group
+  const renderDestinationGroup = (dest, upcoming) => (
+    <div key={dest.id} class="service-destination-group">
+      <p class="service-destination-info">
+        <strong>{dest.name}</strong>
+      </p>
+      <p
+        class={`services-list ${isLoading ? 'loading' : ''}`}
+        style={{ marginTop: '4px' }}
+      >
+        {dest.services
+          .sort((a, b) => {
+            // If group has arrival time data, sort by arrival time (ascending)
+            if (upcoming) {
+              return servicesArrivals[a] - servicesArrivals[b];
+            }
+            // Otherwise, use service number sort
+            return sortServices(a, b);
+          })
+          .map((service) => (
             <>
               <a
                 href={`#${route.cityPrefix}/services/${service}`}
@@ -418,7 +407,70 @@ export default function BusServicesArrival({
               </a>{' '}
             </>
           ))}
-        </p>
+      </p>
+    </div>
+  );
+
+  // Helper component to render a service list (for fallback when no destination groups)
+  const renderServiceList = (serviceList) => (
+    <p class={`services-list ${isLoading ? 'loading' : ''}`}>
+      {serviceList.map((service) => (
+        <>
+          <a
+            href={`#${route.cityPrefix}/services/${service}`}
+            class={`service-tag ${
+              route.page === 'service' && servicesValue.includes(service)
+                ? 'current'
+                : ''
+            }`}
+          >
+            {service}
+            {servicesIssues.includes(service) && ' ⚠️'}
+            {servicesArrivals[service] && (
+              <span>
+                <ArrivalTimeText ms={servicesArrivals[service]} />
+              </span>
+            )}
+          </a>{' '}
+        </>
+      ))}
+    </p>
+  );
+
+  return (
+    <>
+      {groupedByDestination.hasGroups ? (
+        <>
+          {groupedByDestination.upcomingDestinations.length > 0 && (
+            <div class="service-arrival-group">
+              {groupedByDestination.upcomingDestinations.map((dest) =>
+                renderDestinationGroup(dest, true),
+              )}
+            </div>
+          )}
+
+          {groupedByDestination.scheduledDestinations.length > 0 && (
+            <div class="service-arrival-group">
+              {groupedByDestination.scheduledDestinations.map((dest) =>
+                renderDestinationGroup(dest, false),
+              )}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {groupedByDestination.upcomingServices.length > 0 && (
+            <div class="service-arrival-group">
+              {renderServiceList(groupedByDestination.upcomingServices)}
+            </div>
+          )}
+
+          {groupedByDestination.scheduledServices.length > 0 && (
+            <div class="service-arrival-group">
+              {renderServiceList(groupedByDestination.scheduledServices)}
+            </div>
+          )}
+        </>
       )}
       {oneServiceHasMultipleDirections && (
         <div class="callout warning iconic">

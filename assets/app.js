@@ -3452,25 +3452,6 @@ const App = () => {
               </h1>
             </header>
             <ScrollableContainer class="popover-scroll">
-              <h2>
-                {t('glossary.nServices_plural', {
-                  count: stopPopoverData.services.length,
-                })}{' '}
-                ∙{' '}
-                <a
-                  href={`/first-last/#${route.cityPrefix}/${stopPopoverData.number}`}
-                  target="_blank"
-                >
-                  {t('stop.firstLastBus')}{' '}
-                  <img
-                    src={openNewWindowImagePath}
-                    width="12"
-                    height="12"
-                    alt=""
-                    class="new-window"
-                  />
-                </a>
-              </h2>
               <BusServicesArrival
                 active={showStopPopover}
                 map={map}
