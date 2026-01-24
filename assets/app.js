@@ -397,7 +397,7 @@ const App = () => {
       if (value) {
         const services = fuseServices.search(value);
         let stops = [];
-        if (services.length < 20) {
+        if (services.length < 100) {
           stops = fuseStops.search(value);
         }
         setServices(services.map((s) => s.item));
