@@ -4,8 +4,9 @@ import polars as pl
 import polyline
 import argparse
 import os
+import importlib.util
 from pathlib import Path
-from typing import Dict, List, Tuple, Set
+from typing import Dict, List, Tuple, Set, Optional, Callable
 from collections import defaultdict
 
 from utils import (
@@ -13,6 +14,71 @@ from utils import (
     find_gtfs_files,
     load_gtfs_data_from_multiple_files
 )
+
+
+def load_city_utils(city: str) -> Optional[object]:
+    """
+    Load city-specific utils module if it exists.
+    
+    Looks for a utils.py file in the city directory (e.g., blr/utils.py).
+    
+    Args:
+        city: City name/directory
+        
+    Returns:
+        The loaded module, or None if not found
+    """
+    city_utils_path = Path(city) / 'utils.py'
+    
+    if not city_utils_path.exists():
+        return None
+    
+    try:
+        spec = importlib.util.spec_from_file_location(f"{city}_utils", city_utils_path)
+        if spec is None or spec.loader is None:
+            return None
+        
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        print(f"Loaded city-specific utils from {city_utils_path}")
+        return module
+    except Exception as e:
+        print(f"Warning: Failed to load city utils from {city_utils_path}: {e}")
+        return None
+
+
+def apply_city_stop_processing(
+    stops_dict: Dict[str, List],
+    gtfs_data: Dict[str, pl.DataFrame],
+    valid_routes: Set[str],
+    city_utils: Optional[object]
+) -> Dict[str, List]:
+    """
+    Apply city-specific stop name processing if available.
+    
+    Looks for a `process_stop_names` function in the city utils module.
+    
+    Args:
+        stops_dict: Dictionary of stop_id -> [lon, lat, name, suffix]
+        gtfs_data: Dictionary containing GTFS DataFrames
+        valid_routes: Set of valid route IDs
+        city_utils: City-specific utils module (or None)
+        
+    Returns:
+        Processed stops_dict (possibly modified by city-specific logic)
+    """
+    if city_utils is None:
+        return stops_dict
+    
+    process_fn = getattr(city_utils, 'process_stop_names', None)
+    if process_fn is None:
+        return stops_dict
+    
+    if not callable(process_fn):
+        print(f"Warning: process_stop_names in city utils is not callable")
+        return stops_dict
+    
+    return process_fn(stops_dict, gtfs_data, valid_routes)
 
 # Default minimum number of trips per day for a route to be included
 DEFAULT_MIN_TRIPS = 2
@@ -383,6 +449,9 @@ def main():
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
+    # Load city-specific utils if available
+    city_utils = load_city_utils(output_dir) if args.city else None
+    
     # Load all GTFS data once
     print("Loading GTFS data...")
     if len(gtfs_paths) > 1:
@@ -398,6 +467,10 @@ def main():
     print("Processing stops...")
     stops_dict = process_stops(gtfs_data, valid_routes)
     print(f"Found {len(stops_dict):,} stops")
+    
+    # Apply city-specific stop name processing
+    stops_dict = apply_city_stop_processing(stops_dict, gtfs_data, valid_routes, city_utils)
+    
     # Sort keys to ensure consistent output order
     stops_dict_sorted = dict(sorted(stops_dict.items()))
     with open(os.path.join(output_dir, 'stops.min.json'), 'w') as f:

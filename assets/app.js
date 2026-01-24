@@ -1597,7 +1597,7 @@ const App = () => {
     const stops = await fetchStopsP;
     Object.keys(stops).forEach((number) => {
       const stop = stops[number];
-      const [lng, lat, name] = stop;
+      const [lng, lat, name, suffix = ''] = stop;
       let left = false;
       if (/[19]$/.test(number)) {
         const oppositeNumber = number.replace(/[19]$/, (d) =>
@@ -1614,6 +1614,7 @@ const App = () => {
       }
       stopsData[number] = {
         name,
+        suffix,
         number,
         interchange:
           /\sint$/i.test(name) && !/^(bef|aft|opp|bet)\s/i.test(name),
@@ -3317,7 +3318,11 @@ const App = () => {
               stops.map((s) => (
                 <li key={s.number}>
                   <a href={`#${route.cityPrefix}/stops/${s.number}`}>
-                    <b class="stop-tag">{s.number}</b> {s.name}
+                    <b class="stop-tag">{s.number}</b>
+                    <span class="stop-name-with-suffix">
+                      <span class="stop-name">{s.name}</span>
+                      {s.suffix && <span class="stop-suffix">{s.suffix}</span>}
+                    </span>
                   </a>
                 </li>
               ))}
@@ -3343,8 +3348,13 @@ const App = () => {
             </a>
             <header>
               <h1 onClick={() => zoomToStop(stopPopoverData.number)}>
-                <b class="stop-tag">{stopPopoverData.number}</b>{' '}
-                {stopPopoverData.name}
+                <b class="stop-tag">{stopPopoverData.number}</b>
+                <span class="stop-name-with-suffix">
+                  <span class="stop-name">{stopPopoverData.name}</span>
+                  {stopPopoverData.suffix && (
+                    <span class="stop-suffix">{stopPopoverData.suffix}</span>
+                  )}
+                </span>
               </h1>
             </header>
             <ScrollableContainer class="popover-scroll">
