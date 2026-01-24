@@ -45,7 +45,7 @@ main {
 #bus-stop-map {
   position: relative;
   width: 100%;
-  height: 400px;
+  height: 50vh;
 }
 
 #bus-stop-map .maplibregl-canvas {
@@ -108,10 +108,9 @@ table tbody {
 }
 
 table tbody th:not([colspan]) {
-  width: 8ex;
+  width: 16ex;
   z-index: 10;
   position: relative;
-  background-color: rgba(255, 255, 255, 0.5);
 }
 
 table tbody tr:has(th:not([colspan])) {
@@ -119,13 +118,6 @@ table tbody tr:has(th:not([colspan])) {
 }
 table tbody th[colspan] {
   padding: 0 10px 6px;
-  background: repeating-linear-gradient(
-    to right,
-    rgba(0, 0, 0, 0.05) 0,
-    rgba(0, 0, 0, 0.05) 1px,
-    transparent 1px,
-    transparent 50px
-  ) 8ex 0;
 }
 table tbody th small {
   font-weight: normal;
@@ -343,19 +335,28 @@ footer {
 .bus-lane-cell {
   padding-left: 0;
   padding-right: 0;
-  background: repeating-linear-gradient(
-    to right,
-    rgba(0, 0, 0, 0.05) 0,
-    rgba(0, 0, 0, 0.05) 1px,
-    transparent 1px,
-    transparent 50px
-  );
   vertical-align: top;
+  position: relative;
+}
+
+/* Vertical stop indicator bar */
+.bus-lane-cell::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 0 2px 2px 0;
 }
 
 .bus-lane {
   position: relative;
   height: 1.8em;
+  overflow: hidden;
+  white-space: nowrap;
+  padding-left: 8px;
 }
 .bus-lane + .bus-lane {
   border-top: 1px dashed rgba(0, 0, 0, 0.05);
@@ -477,6 +478,52 @@ footer {
 .bus-lane .bus,
 .bus-lane .bus img {
   vertical-align: bottom;
+}
+
+/* More indicator - shows count of additional arrivals */
+.more-indicator {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 18px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  background-color: rgba(0, 0, 0, 0.08);
+  color: #666;
+  user-select: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+.more-indicator:hover {
+  background-color: rgba(0, 0, 0, 0.15);
+}
+
+.more-indicator:active {
+  transform: translateY(-50%) scale(0.95);
+}
+
+.more-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.more-collapse {
+  font-size: 14px;
+  font-weight: bold;
+  line-height: 1;
+}
+
+/* Expanded bus lane state */
+.bus-lane-expanded {
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .debug {

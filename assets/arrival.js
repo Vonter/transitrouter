@@ -99,6 +99,14 @@ const isSameBus = (b1, b2) =>
 const isSameBuses = (b1, b2) =>
   b1.map((b) => b._id).join() === b2.map((b) => b._id).join();
 
+// Display thresholds for progressive disclosure
+const DISPLAY_LIMITS = {
+  maxVisible: 6, // Maximum visible items before "+N more"
+};
+
+// Get max arrival time from city config (defaults to 24 hours)
+const maxArrivalTime = cityConfig?.maxArrivalTime;
+
 // Components
 const Bus = ({
   maxPx,
@@ -148,12 +156,33 @@ const Bus = ({
   );
 };
 
+// "+N more" indicator component
+const MoreIndicator = ({ count, expanded, onToggle }) => {
+  if (count <= 0 && !expanded) return null;
+
+  return (
+    <span class="more-indicator" onClick={onToggle}>
+      {expanded ? (
+        <span class="more-collapse">−</span>
+      ) : (
+        <span class="more-count">+{count}</span>
+      )}
+    </span>
+  );
+};
+
 const BusLane = ({ index, no, buses, maxDuration_ms, isFirstFetch }) => {
   const prevNo = useRef();
   const prevBuses = useRef();
   const busLaneRef = useRef();
   const [busLaneWidth, setBusLaneWidth] = useState(0);
-  const nextBuses = buses.filter((nb) => typeof nb?.duration_ms === 'number');
+  const [expanded, setExpanded] = useState(false);
+
+  // Filter buses within maxArrivalTime
+  const nextBuses = buses.filter(
+    (nb) =>
+      typeof nb?.duration_ms === 'number' && nb.duration_ms <= maxArrivalTime,
+  );
 
   // Match buses with previous state for smooth transitions
   if (prevNo.current === no && !isSameBuses(prevBuses.current, nextBuses)) {
@@ -190,9 +219,29 @@ const BusLane = ({ index, no, buses, maxDuration_ms, isFirstFetch }) => {
     setBusLaneWidth(busLaneRef.current?.offsetWidth);
   }, []);
 
+  // Filter out ghost buses for counting
+  const visibleBuses = nextBuses.filter((b) => !b._ghost);
+  const totalCount = visibleBuses.length;
+
+  // Determine which buses to show (limit to maxVisible unless expanded)
+  const hiddenCount = expanded
+    ? 0
+    : Math.max(0, totalCount - DISPLAY_LIMITS.maxVisible);
+  const displayBuses = expanded
+    ? nextBuses
+    : nextBuses.slice(0, nextBuses.length - hiddenCount);
+
+  const handleToggleExpand = (e) => {
+    e.stopPropagation();
+    setExpanded(!expanded);
+  };
+
   return (
-    <div class="bus-lane" ref={busLaneRef}>
-      {nextBuses.map((b, i) => (
+    <div
+      class={`bus-lane ${expanded ? 'bus-lane-expanded' : ''}`}
+      ref={busLaneRef}
+    >
+      {displayBuses.map((b, i) => (
         <Bus
           key={b._id}
           index={i}
@@ -202,6 +251,13 @@ const BusLane = ({ index, no, buses, maxDuration_ms, isFirstFetch }) => {
           isFirstFetch={isFirstFetch}
         />
       ))}
+      {(hiddenCount > 0 || expanded) && (
+        <MoreIndicator
+          count={hiddenCount}
+          expanded={expanded}
+          onToggle={handleToggleExpand}
+        />
+      )}
       {index && <span class="visit-number">{index}</span>}
     </div>
   );
@@ -265,28 +321,16 @@ const convertScheduleToArrival = (scheduleData) => {
   return Array.from(serviceMap.values())
     .map((service) => {
       const sortedTrips = service.trips.sort((a, b) => a.minutes - b.minutes);
+      // For static schedule mode, show next 10 arrivals
+      const tripsToShow = sortedTrips.slice(0, 10);
       const result = {
         no: service.no,
         destination: service.destination,
         frequency: sortedTrips.length,
-        next: createTrip(
-          sortedTrips[0].duration_ms,
-          sortedTrips[0].origin,
-          sortedTrips[0].destination,
+        arrivals: tripsToShow.map((trip) =>
+          createTrip(trip.duration_ms, trip.origin, trip.destination),
         ),
       };
-      if (sortedTrips[1])
-        result.next2 = createTrip(
-          sortedTrips[1].duration_ms,
-          sortedTrips[1].origin,
-          sortedTrips[1].destination,
-        );
-      if (sortedTrips[2])
-        result.next3 = createTrip(
-          sortedTrips[2].duration_ms,
-          sortedTrips[2].origin,
-          sortedTrips[2].destination,
-        );
       return result;
     })
     .sort((a, b) => b.frequency - a.frequency);
@@ -680,7 +724,13 @@ const extractVehicles = (services, pinnedServiceNumbers) => {
     const serviceNoStr = toServiceNoStr(service.no);
     if (!pinnedServiceNumbers.has(serviceNoStr)) return;
 
-    [service.next, service.next2, service.next3].forEach((trip) => {
+    // Support both old format (next, next2, next3) and new format (arrivals array)
+    const trips = service.arrivals || [
+      service.next,
+      service.next2,
+      service.next3,
+    ];
+    trips.forEach((trip) => {
       if (!trip) return;
       const location = extractVehicleLocation(trip);
       if (!location) return;
@@ -1256,7 +1306,13 @@ function ArrivalTimes() {
 
     let vehicleLocation = null;
     for (const service of services) {
-      for (const trip of [service.next, service.next2, service.next3]) {
+      // Support both old format (next, next2, next3) and new format (arrivals array)
+      const trips = service.arrivals || [
+        service.next,
+        service.next2,
+        service.next3,
+      ];
+      for (const trip of trips) {
         if (!trip?.location) continue;
         const tripVehicleId =
           trip.vehicle_id ||
@@ -1336,23 +1392,28 @@ function ArrivalTimes() {
     let maxDuration = 0;
 
     services.forEach((service) => {
-      const key = `${service.no}-${service.destination || service.next?.destination_code || ''}`;
+      // Support both old format (next, next2, next3) and new format (arrivals array)
+      const arrivals = service.arrivals || [
+        service.next,
+        service.next2,
+        service.next3,
+      ];
+      const firstArrival = arrivals.find(Boolean);
+      const key = `${service.no}-${service.destination || firstArrival?.destination_code || ''}`;
       if (!groups[key]) {
         groups[key] = {
           no: service.no,
-          destination: service.destination || service.next?.destination_code,
+          destination: service.destination || firstArrival?.destination_code,
           frequency: 0,
           buses: [],
         };
       }
-      [service.next, service.next2, service.next3]
-        .filter(Boolean)
-        .forEach((bus) => {
-          groups[key].buses.push(bus);
-          if (bus.duration_ms && bus.duration_ms > maxDuration) {
-            maxDuration = bus.duration_ms;
-          }
-        });
+      arrivals.filter(Boolean).forEach((bus) => {
+        groups[key].buses.push(bus);
+        if (bus.duration_ms && bus.duration_ms > maxDuration) {
+          maxDuration = bus.duration_ms;
+        }
+      });
       groups[key].frequency += service.frequency || 0;
     });
 

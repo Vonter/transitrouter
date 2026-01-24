@@ -14,6 +14,9 @@ export const AVAILABLE_CITIES = [
   'nyc',
 ];
 
+// Default max arrival time in milliseconds (24 hours)
+const DEFAULT_MAX_ARRIVAL_TIME_MS = 24 * 60 * 60 * 1000;
+
 export const CITY_CONFIGS = {
   blr: {
     city: {
@@ -38,6 +41,7 @@ export const CITY_CONFIGS = {
       enabled: true,
       removeChars: ['-', ' '],
     },
+    maxArrivalTime: 2 * 60 * 60 * 1000, // 2 hours in milliseconds
   },
   goa: {
     city: {
@@ -209,5 +213,8 @@ export const getConfigForCity = (cityCode) => {
     console.error(`No config found for city ${cityCode}`);
     return null;
   }
-  return config;
+  return {
+    ...config,
+    maxArrivalTime: config.maxArrivalTime ?? DEFAULT_MAX_ARRIVAL_TIME_MS,
+  };
 };
