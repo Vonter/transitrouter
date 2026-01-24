@@ -1407,15 +1407,14 @@ function ArrivalTimes() {
                 const buses2 = sortedBuses.filter((b) => b?.visit_number === 2);
                 return (
                   <Fragment key={`${no}-${destination}`}>
-                    <tr class={pinned ? 'pin' : ''}>
-                      <th
-                        onClick={(e) => {
-                          e.preventDefault();
-                          togglePin(no, destination);
-                        }}
-                      >
-                        {no}
-                      </th>
+                    <tr
+                      class={pinned ? 'pin' : ''}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        togglePin(no, destination);
+                      }}
+                    >
+                      <th>{no}</th>
                       <td
                         class={`bus-lane-cell ${buses2.length ? 'multiple' : ''}`}
                       >

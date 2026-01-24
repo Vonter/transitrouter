@@ -112,8 +112,10 @@ table tbody th:not([colspan]) {
   z-index: 10;
   position: relative;
   background-color: rgba(255, 255, 255, 0.5);
+}
+
+table tbody tr:has(th:not([colspan])) {
   cursor: pointer;
-  pointer-events: auto;
 }
 table tbody th[colspan] {
   padding: 0 10px 6px;
@@ -154,7 +156,7 @@ table tbody tr.pin th {
 }
 
 @media (hover: hover) {
-  table tbody th:hover {
+  table tbody tr:has(th:not([colspan])):hover th {
     color: darkorange;
   }
 }
