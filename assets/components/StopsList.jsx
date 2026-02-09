@@ -1,6 +1,7 @@
 import { h, Fragment } from 'preact';
 import { useRef, useMemo } from 'preact/hooks';
 import getRoute from '../utils/getRoute';
+import { getConfigForCity } from '../city-config';
 
 import busTinyImagePath from '../images/bus-tiny.png';
 
@@ -16,28 +17,41 @@ function rowSpaner(stopGrid, column, stop) {
   return span;
 }
 
-function isOpposite(stop) {
-  if (!stop || typeof stop !== 'string') return false;
-  return /[19]$/.test(stop);
+function isOpposite(stop, stopsData) {
+  if (!stop || typeof stop !== 'string' || !stopsData) return false;
+  const stopInfo = stopsData[stop];
+  if (!stopInfo || !stopInfo.parentStopID) return false;
+  // Check if there are other stops with the same parentStopID
+  return Object.values(stopsData).some(
+    s => s.parentStopID === stopInfo.parentStopID && s.number !== stop
+  );
 }
 
-function getOpposite(stop) {
-  if (!stop || typeof stop !== 'string') return null;
-  if (isOpposite(stop)) {
-    return stop.replace(/[19]$/, (d) => (d === '1' ? 9 : 1));
-  }
-  return null;
+function getOpposite(stop, stopsData) {
+  if (!stop || typeof stop !== 'string' || !stopsData) return null;
+  const stopInfo = stopsData[stop];
+  if (!stopInfo || !stopInfo.parentStopID) return null;
+  // Find a stop with the same parentStopID but different stop ID
+  const oppositeStop = Object.values(stopsData).find(
+    s => s.parentStopID === stopInfo.parentStopID && s.number !== stop
+  );
+  return oppositeStop ? oppositeStop.number : null;
 }
 
-function areOpposite(stop1, stop2) {
-  if (!stop1 || !stop2) return false;
-  return stop1 !== stop2 && stop1 === getOpposite(stop2);
+function areOpposite(stop1, stop2, stopsData) {
+  if (!stop1 || !stop2 || !stopsData) return false;
+  if (stop1 === stop2) return false;
+  const stop1Info = stopsData[stop1];
+  const stop2Info = stopsData[stop2];
+  if (!stop1Info || !stop2Info) return false;
+  return stop1Info.parentStopID && 
+         stop1Info.parentStopID === stop2Info.parentStopID;
 }
 
 export default function StopsList(props) {
   const route = getRoute();
 
-  const { routes, stopsData, vehicles = [], onStopClick, onStopClickAgain, onVehicleClick } = props;
+  const { routes, stopsData, vehicles = [], onStopClick, onVehicleClick } = props;
   
   if (
     !routes ||
@@ -140,26 +154,39 @@ export default function StopsList(props) {
     return positions;
   }, [vehicles]);
 
-  const StopLink = ({ stop }) =>
-    stop ? (
+  const StopLink = ({ stop }) => {
+    if (!stop) return null;
+    
+    const cityConfig = getConfigForCity(route.city);
+    const disableStopID = cityConfig?.disableStopID || false;
+    
+    return (
       <a
         href={`#${route.cityPrefix}/stops/${stop}`}
         data-stop={stop}
         onClick={(e) => {
           e.preventDefault();
-          if (lastStop.current === stop && onStopClickAgain) {
-            onStopClickAgain(stop);
-          } else if (onStopClick) {
+          location.hash = `#${route.cityPrefix}/stops/${stop}`;
+          if (onStopClick) {
             onStopClick(stop);
           }
           lastStop.current = stop;
         }}
       >
-        <b class="mini-stop-tag">{stop}</b>
-        <br />
-        {stopsData[stop].name}
+        {disableStopID ? (
+          <>
+            {stopsData[stop].name}
+          </>
+        ) : (
+          <>
+            <b class="mini-stop-tag">{stop}</b>
+            <br />
+            {stopsData[stop].name}
+          </>
+        )}
       </a>
-    ) : null;
+    );
+  };
 
   // Render vehicle indicator
   const VehicleIndicator = ({ vehicle }) => (
@@ -236,7 +263,7 @@ export default function StopsList(props) {
         const stop = route1[i];
         // console.log(i, j, route1, 1, stop);
 
-        if (isOpposite(stop)) {
+        if (isOpposite(stop, stopsData)) {
           // WEIRD CASE: the route has duplicate stops!
           // Don't check first item because last item is its duplicate in loop route
           if (i !== route1.lastIndexOf(stop)) {
@@ -245,9 +272,11 @@ export default function StopsList(props) {
             hasDupStops.push(stop);
           } else {
             // Normal case, let's find the middle index
-            const opStop = getOpposite(route1[i]);
-            const index = route1.lastIndexOf(opStop);
-            if (index > 0) j = index;
+            const opStop = getOpposite(route1[i], stopsData);
+            if (opStop) {
+              const index = route1.lastIndexOf(opStop);
+              if (index > 0) j = index;
+            }
           }
         }
         if (i === j - 1) {
@@ -277,11 +306,11 @@ export default function StopsList(props) {
       if (hasMidStop) {
         // Odd
         const midStop = route1[half];
-        if (areOpposite(midStop, route1[half - 1])) {
+        if (areOpposite(midStop, route1[half - 1], stopsData)) {
           // ~~~ = Dummy stop to connect at the end
           route2Copy.push(midStop, '~~~');
           route1Copy.push('~~~');
-        } else if (areOpposite(midStop, route1[half + 1])) {
+        } else if (areOpposite(midStop, route1[half + 1], stopsData)) {
           route1Copy.push(midStop, '~~~');
           route2Copy.push('~~~');
         } else {
@@ -323,8 +352,10 @@ export default function StopsList(props) {
       col1LastStop = false,
       col2LastStop = false;
     do {
-      const stop1HasOpposite = route2Copy.includes(getOpposite(route1Copy[0]));
-      const stop2HasOpposite = route1Copy.includes(getOpposite(route2Copy[0]));
+      const stop1Opposite = getOpposite(route1Copy[0], stopsData);
+      const stop2Opposite = getOpposite(route2Copy[0], stopsData);
+      const stop1HasOpposite = stop1Opposite && route2Copy.includes(stop1Opposite);
+      const stop2HasOpposite = stop2Opposite && route1Copy.includes(stop2Opposite);
       const stop1IsLast = route1Copy.length === 1 || !route1Copy.length;
       const stop2IsLast = route2Copy.length === 1 || !route2Copy.length;
 
@@ -359,7 +390,7 @@ export default function StopsList(props) {
       // Extra metadata
       const metadata = {
         isSame: stopGrid[i][0] === stopGrid[i][1], // Same stop (very lazy check, no snapping)
-        isOpposite: areOpposite(stopGrid[i][0], stopGrid[i][1]),
+        isOpposite: areOpposite(stopGrid[i][0], stopGrid[i][1], stopsData),
         col1IsEmpty,
         col2IsEmpty,
       };

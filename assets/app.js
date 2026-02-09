@@ -9,12 +9,14 @@ import {
   AVAILABLE_CITIES,
   getConfigForCity,
 } from './config';
+import { getApiUrl } from './city-config';
 import { normalizeName } from './utils/normalizeNames';
 import {
   pointDistance,
   closestPointOnSegment,
   findClosestPointOnPolyline,
   cropPolylineFromPoint,
+  cropPolylineBetweenPoints,
   decodePolylineCached,
 } from './utils/geometry';
 import { h, render, Fragment } from 'preact';
@@ -37,6 +39,7 @@ import { sortServices } from './utils/bus';
 import fetchCache from './utils/fetchCache';
 import getRoute from './utils/getRoute';
 import getDistance from './utils/getDistance';
+import { filterStaleArrivalsFromService } from './utils/fetchArrivals';
 import getWalkingMinutes from './utils/getWalkingMinutes';
 import usePrevious from './utils/usePrevious';
 import { createVehicleTracker } from './utils/fetchVehicles';
@@ -50,6 +53,7 @@ import {
 } from './utils/mapOptimizations';
 
 import BusServicesArrival from './components/BusServicesArrival';
+import { CLOSE_SVG } from './components/CloseControl';
 import GeolocateControl, { GEOLOCATE_SVG } from './components/GeolocateControl';
 import BetweenRoutes from './components/BetweenRoutes';
 import ScrollableContainer from './components/ScrollableContainer';
@@ -338,10 +342,13 @@ const App = () => {
   const [stopPopoverData, setStopPopoverData] = useState(null);
   const [showStopPopover, setShowStopPopover] = useState(false);
   const [showServicePopover, setShowServicePopover] = useState(false);
+  const [stopPopoverLoading, setStopPopoverLoading] = useState(false);
+  const [stopPopoverError, setStopPopoverError] = useState(false);
   const [intersectStops, setIntersectStops] = useState(0);
   const [routeServices, setRouteServices] = useState([]);
   const [routeVehicles, setRouteVehicles] = useState([]);
   const [followedVehicleId, setFollowedVehicleId] = useState(null);
+  const stopPopoverCancelRef = useRef(null);
 
   const [showBetweenPopover, setShowBetweenPopover] = useState(false);
   const [betweenStartStop, setBetweenStartStop] = useState(null);
@@ -792,17 +799,23 @@ const App = () => {
 
   const openBusArrival = (e) => {
     if (e) e.preventDefault();
-    const width = 360;
-    const height = 480;
-    const url = e.target.href;
-    const stopNumber = url.match(/[^#]+$/)[0];
-    const top = ((screen.availHeight || screen.height) - height) / 2;
-    const left = (screen.width - width) / 2;
-    window.open(
-      url,
-      `busArrivals-${stopNumber}`,
-      `width=${width},height=${height},menubar=0,toolbar=0,top=${top},left=${left}`,
-    );
+    // Get URL from currentTarget (the anchor) instead of target (might be child element)
+    const url =
+      e.currentTarget?.href || e.target?.href || e.target?.closest('a')?.href;
+
+    // Check if we're in PWA standalone mode
+    const isStandalone =
+      window.navigator.standalone ||
+      window.matchMedia('(display-mode: standalone)').matches ||
+      document.referrer.includes('android-app://');
+
+    if (isStandalone && url) {
+      // In standalone mode, navigate in the same window
+      window.location.href = url;
+    } else if (url) {
+      // In regular browser mode, try to open in new window
+      window.open(url, '_blank');
+    }
   };
 
   const _showBetweenPopover = (data) => {
@@ -854,109 +867,450 @@ const App = () => {
   };
 
   const renderBetweenRoute = ({ e, startStop, endStop, result }) => {
-    const { target } = e;
-    target.parentElement.parentElement
-      .querySelectorAll('.between-item')
-      .forEach((el) => {
-        if (el === target) {
-          target.classList.add('selected');
-        } else {
-          el.classList.remove('selected');
+    // Validate inputs
+    if (!result || !result.startRoute) {
+      console.warn('Invalid result object in renderBetweenRoute');
+      return;
+    }
+    if (
+      !startStop ||
+      !endStop ||
+      !startStop.coordinates ||
+      !endStop.coordinates
+    ) {
+      console.warn('Invalid start or end stop in renderBetweenRoute');
+      return;
+    }
+
+    // More reliable selection highlighting - find the clicked item's container
+    const clickedItem = e.target.closest('.between-item');
+    if (clickedItem) {
+      const container = clickedItem.closest('.between-block');
+      if (container) {
+        container.querySelectorAll('.between-item').forEach((el) => {
+          el.classList.toggle('selected', el === clickedItem);
+        });
+      }
+    }
+
+    // Build stops array with proper validation
+    const stops = [];
+
+    // Always include the user-selected start and end stops
+    if (startStop && startStop.coordinates) {
+      stops.push({ ...startStop, end: true });
+    }
+    if (endStop && endStop.coordinates) {
+      stops.push({ ...endStop, end: true });
+    }
+
+    // Add actual route start stop if different from user selection (nearby stop)
+    if (result.startStop && result.startStop.coordinates) {
+      const startStopNumber = String(
+        result.startStop.number || result.startStop,
+      );
+      const userStartNumber = String(startStop.number || startStop);
+      if (startStopNumber !== userStartNumber) {
+        stops.push({ ...result.startStop, end: true });
+      }
+    }
+
+    // Add actual route end stop if different from user selection (nearby stop)
+    if (result.endStop && result.endStop.coordinates) {
+      const endStopNumber = String(result.endStop.number || result.endStop);
+      const userEndNumber = String(endStop.number || endStop);
+      if (endStopNumber !== userEndNumber) {
+        stops.push({ ...result.endStop, end: true });
+      }
+    }
+
+    // Add intermediate stops with validation
+    if (result.stopsBetween && Array.isArray(result.stopsBetween)) {
+      result.stopsBetween.forEach((number) => {
+        const stop = stopsData[number];
+        if (stop && stop.coordinates) {
+          stops.push(stop);
         }
       });
-
-    const stops = [
-      { ...startStop, end: true },
-      { ...endStop, end: true },
-    ];
-    if (result.startStop && result.startStop.number != startStop.number) {
-      stops.push({ ...result.startStop, end: true });
-    }
-    if (result.endStop && result.endStop.number != endStop.number) {
-      stops.push({ ...result.endStop, end: true });
-    }
-    if (result.stopsBetween.length) {
-      result.stopsBetween.forEach((number) => stops.push(stopsData[number]));
     }
 
-    // Render stops
-    map.getSource('stops-highlight').setData({
-      type: 'FeatureCollection',
-      features: stops.map((stop) => ({
-        type: 'Feature',
-        id: encode(stop.number),
-        properties: {
-          name: stop.name,
-          number: stop.number,
-          type: stop.end ? 'end' : null,
-          left: stop.left,
-        },
-        geometry: {
-          type: 'Point',
-          coordinates: stop.coordinates,
-        },
-      })),
+    // Render stops - validate and filter valid stops
+    const validStops = stops.filter((stop) => {
+      return (
+        stop &&
+        stop.coordinates &&
+        Array.isArray(stop.coordinates) &&
+        stop.coordinates.length >= 2 &&
+        typeof stop.coordinates[0] === 'number' &&
+        typeof stop.coordinates[1] === 'number' &&
+        !isNaN(stop.coordinates[0]) &&
+        !isNaN(stop.coordinates[1])
+      );
     });
 
-    requestAnimationFrame(() => {
-      // Render routes
-      const geometries = [];
-
-      const routeIndex = route.lastIndexOf('-');
-      const service = route.substring(0, routeIndex);
-      const index = route.substring(routeIndex + 1, route.length);
-      geometries.push(decodePolyline(routesData[service][index]));
-
-      if (result.endRoute) {
-        const routeIndex = route.lastIndexOf('-');
-        const service = route.substring(0, routeIndex);
-        const index = route.substring(routeIndex + 1, route.length);
-        geometries.push(decodePolyline(routesData[service][index]));
-      }
-
-      if (result.startStop && result.startStop.number != startStop.number) {
-        geometries.push({
-          type: 'LineString',
-          coordinates: [result.startStop.coordinates, startStop.coordinates],
-        });
-      }
-      if (result.endStop && result.endStop.number != endStop.number) {
-        geometries.push({
-          type: 'LineString',
-          coordinates: [result.endStop.coordinates, endStop.coordinates],
-        });
-      }
-      map.getSource('routes-between').setData({
+    const stopsHighlightSource = map.getSource('stops-highlight');
+    if (stopsHighlightSource) {
+      stopsHighlightSource.setData({
         type: 'FeatureCollection',
-        features: geometries.map((geometry, i) => ({
+        features: validStops.map((stop) => ({
           type: 'Feature',
+          id: encode(stop.number),
           properties: {
-            type: i === 0 ? 'start' : i === 1 ? 'end' : 'walk',
+            name: stop.name,
+            number: stop.number,
+            type: stop.end ? 'end' : null,
+            left: stop.left,
           },
-          geometry,
+          geometry: {
+            type: 'Point',
+            coordinates: stop.coordinates,
+          },
         })),
       });
+    } else {
+      console.warn('stops-highlight source not found on map');
+    }
 
-      // Fit map to stops bounds
-      const bounds = new maplibregl.LngLatBounds();
-      stops.forEach((stop) => {
-        bounds.extend(stop.coordinates);
+    requestAnimationFrame(() => {
+      const STOP_PROXIMITY_THRESHOLD = 0.0045; // ~500m
+
+      // Helper: Parse route key format "serviceNumber|destination|variantIdx"
+      const parseRouteKey = (routeKey) => {
+        if (!routeKey || typeof routeKey !== 'string') {
+          console.warn('Invalid routeKey:', routeKey);
+          return { service: null, destination: null, variantIdx: null };
+        }
+        const parts = routeKey.split('|');
+        if (parts.length < 3) {
+          console.warn(
+            'Route key format invalid, expected "service|destination|variantIdx":',
+            routeKey,
+          );
+          return {
+            service: parts[0] || null,
+            destination: parts[1] || null,
+            variantIdx: parts[2] || null,
+          };
+        }
+        return {
+          service: parts[0],
+          destination: parts[1],
+          variantIdx: parts[2],
+        };
+      };
+
+      // Helper: Get and decode polyline for a route
+      const getPolyline = (service, variantIdx) => {
+        if (!service || !variantIdx) {
+          console.warn(
+            `Invalid service or variantIdx: service=${service}, variantIdx=${variantIdx}`,
+          );
+          return null;
+        }
+        if (!routesData || !routesData[service]) {
+          console.warn(`No routes data for service: ${service}`);
+          return null;
+        }
+        if (!routesData[service][variantIdx]) {
+          console.warn(
+            `No polyline for service ${service} variant ${variantIdx}`,
+          );
+          return null;
+        }
+        try {
+          const decoded = decodePolyline(routesData[service][variantIdx]);
+          if (
+            !decoded ||
+            !decoded.coordinates ||
+            !Array.isArray(decoded.coordinates)
+          ) {
+            console.warn(
+              `Decoded polyline is invalid for ${service}[${variantIdx}]`,
+            );
+            return null;
+          }
+          return decoded;
+        } catch (error) {
+          console.warn(
+            `Failed to decode polyline for ${service}[${variantIdx}]:`,
+            error,
+          );
+          return null;
+        }
+      };
+
+      // Helper: Crop polyline between two stops - always crops the original polyline
+      const cropPolylineBetweenStops = (
+        polyline,
+        startStopCoords,
+        endStopCoords,
+      ) => {
+        if (!polyline?.coordinates?.length) {
+          console.warn('Polyline has no coordinates');
+          return null;
+        }
+
+        try {
+          // Find closest points on polyline for validation/warning
+          const startClosest = findClosestPointOnPolyline(
+            startStopCoords,
+            polyline.coordinates,
+          );
+          const endClosest = findClosestPointOnPolyline(
+            endStopCoords,
+            polyline.coordinates,
+          );
+
+          // Check if we found valid points on the polyline
+          if (!startClosest.point || !endClosest.point) {
+            console.warn(
+              'Could not find valid points on polyline for cropping',
+            );
+            return null;
+          }
+
+          // Warn if stops are very far from polyline, but still attempt to crop
+          if (
+            startClosest.distance >= STOP_PROXIMITY_THRESHOLD ||
+            endClosest.distance >= STOP_PROXIMITY_THRESHOLD
+          ) {
+            console.warn(
+              `Stops are far from polyline (start: ${startClosest.distance.toFixed(4)}, end: ${endClosest.distance.toFixed(4)}), but cropping anyway`,
+            );
+          }
+
+          // Always crop the original polyline, using the original coordinates
+          // cropPolylineBetweenPoints will find the closest points on the polyline
+          const cropped = cropPolylineBetweenPoints(
+            polyline.coordinates,
+            startStopCoords,
+            endStopCoords,
+          );
+
+          // Validate cropped result - ensure it's a valid array of coordinates
+          if (
+            cropped &&
+            Array.isArray(cropped) &&
+            cropped.length >= 2 &&
+            cropped.every((coord) => Array.isArray(coord) && coord.length >= 2)
+          ) {
+            // Check if the cropped result is different from the original (not just a fallback)
+            // If it's the same length as original, it might be the fallback - but that's okay if it's valid
+            return { type: 'LineString', coordinates: cropped };
+          } else {
+            console.warn('Cropped polyline validation failed', {
+              cropped,
+              isValid: cropped && Array.isArray(cropped),
+              length: cropped?.length,
+            });
+          }
+        } catch (error) {
+          console.warn('Failed to crop polyline:', error);
+        }
+        return null;
+      };
+
+      // Helper: Validate coordinates
+      const isValidCoordinates = (coords) => {
+        return (
+          Array.isArray(coords) &&
+          coords.length >= 2 &&
+          typeof coords[0] === 'number' &&
+          typeof coords[1] === 'number' &&
+          !isNaN(coords[0]) &&
+          !isNaN(coords[1])
+        );
+      };
+
+      // Helper: Render a route segment - always crops the original polyline
+      const renderRouteSegment = (routeKey, startStopCoords, endStopCoords) => {
+        // Validate coordinates first
+        if (
+          !isValidCoordinates(startStopCoords) ||
+          !isValidCoordinates(endStopCoords)
+        ) {
+          console.warn('Invalid coordinates for route segment:', {
+            startStopCoords,
+            endStopCoords,
+          });
+          return null;
+        }
+
+        const { service, variantIdx } = parseRouteKey(routeKey);
+        if (!service || variantIdx === null || variantIdx === undefined) {
+          console.warn('Invalid route key parsed:', {
+            routeKey,
+            service,
+            variantIdx,
+          });
+          return null;
+        }
+
+        const polyline = getPolyline(service, variantIdx);
+        if (!polyline) return null;
+
+        // Always crop the original polyline - never return the full polyline
+        const cropped = cropPolylineBetweenStops(
+          polyline,
+          startStopCoords,
+          endStopCoords,
+        );
+        return cropped;
+      };
+
+      // Render route geometries
+      const geometries = [];
+
+      // Determine actual start and end coordinates for route rendering
+      // Use the actual route stops (which may be nearby stops) for accurate routing
+      const actualStartStop =
+        result.startStop && result.startStop.coordinates
+          ? result.startStop
+          : startStop;
+      const actualEndStop =
+        result.endStop && result.endStop.coordinates ? result.endStop : endStop;
+
+      if (result.endRoute) {
+        // Transfer route: two services with an interchange
+        // The interchange stop is where we switch from startRoute to endRoute
+        // For transfer routes, result.startStop is typically the interchange point
+        // where the first route ends and the second route begins
+        const interchangeStop =
+          result.startStop && result.startStop.coordinates
+            ? result.startStop
+            : result.endStop && result.endStop.coordinates
+              ? result.endStop
+              : startStop; // Fallback to user-selected start
+
+        // Validate interchange stop has coordinates
+        if (!interchangeStop.coordinates) {
+          console.warn(
+            'Interchange stop missing coordinates in transfer route',
+          );
+          return;
+        }
+
+        // First service: actual start stop -> interchange stop
+        const firstSegment = renderRouteSegment(
+          result.startRoute,
+          actualStartStop.coordinates,
+          interchangeStop.coordinates,
+        );
+        if (firstSegment) geometries.push(firstSegment);
+
+        // Second service: interchange stop -> actual end stop
+        const secondSegment = renderRouteSegment(
+          result.endRoute,
+          interchangeStop.coordinates,
+          actualEndStop.coordinates,
+        );
+        if (secondSegment) geometries.push(secondSegment);
+      } else {
+        // Direct route: single service from actual start to actual end
+        const segment = renderRouteSegment(
+          result.startRoute,
+          actualStartStop.coordinates,
+          actualEndStop.coordinates,
+        );
+        if (segment) geometries.push(segment);
+      }
+
+      // Add walking segments for nearby stops (when user-selected stop differs from route stop)
+      if (result.startStop && result.startStop.coordinates) {
+        const resultStartNumber = String(
+          result.startStop.number || result.startStop,
+        );
+        const userStartNumber = String(startStop.number || startStop);
+        if (resultStartNumber !== userStartNumber && startStop.coordinates) {
+          geometries.push({
+            type: 'LineString',
+            coordinates: [result.startStop.coordinates, startStop.coordinates],
+          });
+        }
+      }
+      if (result.endStop && result.endStop.coordinates) {
+        const resultEndNumber = String(result.endStop.number || result.endStop);
+        const userEndNumber = String(endStop.number || endStop);
+        if (resultEndNumber !== userEndNumber && endStop.coordinates) {
+          geometries.push({
+            type: 'LineString',
+            coordinates: [result.endStop.coordinates, endStop.coordinates],
+          });
+        }
+      }
+
+      // Validate geometries before updating map
+      const validGeometries = geometries.filter((geometry) => {
+        if (!geometry || !geometry.coordinates) return false;
+        if (!Array.isArray(geometry.coordinates)) return false;
+        if (geometry.coordinates.length < 2) return false;
+        // Validate all coordinates in the geometry
+        return geometry.coordinates.every((coord) => isValidCoordinates(coord));
       });
-      map.fitBounds(bounds, {
-        padding: BREAKPOINT()
-          ? {
-              top: 80,
-              right: betweenPopover.current.offsetWidth + 80,
-              bottom: 80,
-              left: 80,
+
+      // Update map source only if we have valid geometries and the source exists
+      const routesBetweenSource = map.getSource('routes-between');
+      if (routesBetweenSource) {
+        routesBetweenSource.setData({
+          type: 'FeatureCollection',
+          features: validGeometries.map((geometry, i) => {
+            // Determine type: first route is 'start', second is 'end', rest are 'walk'
+            let type = 'walk';
+            if (i === 0 && result.endRoute) {
+              type = 'start';
+            } else if (i === 1 && result.endRoute) {
+              type = 'end';
+            } else if (i === 0 && !result.endRoute) {
+              type = 'start';
             }
-          : {
-              top: 80,
-              right: 80,
-              bottom: betweenPopover.current.offsetHeight + 80,
-              left: 80,
-            },
-      });
+            return {
+              type: 'Feature',
+              properties: { type },
+              geometry,
+            };
+          }),
+        });
+      } else {
+        console.warn('routes-between source not found on map');
+      }
+
+      // Fit map to stops bounds - only if we have valid stops
+      if (stops.length > 0) {
+        const bounds = new maplibregl.LngLatBounds();
+        let hasValidBounds = false;
+        stops.forEach((stop) => {
+          if (
+            stop &&
+            stop.coordinates &&
+            isValidCoordinates(stop.coordinates)
+          ) {
+            bounds.extend(stop.coordinates);
+            hasValidBounds = true;
+          }
+        });
+
+        if (hasValidBounds) {
+          map.fitBounds(bounds, {
+            padding: BREAKPOINT()
+              ? {
+                  top: 80,
+                  right: betweenPopover.current?.offsetWidth
+                    ? betweenPopover.current.offsetWidth + 80
+                    : 80,
+                  bottom: 80,
+                  left: 80,
+                }
+              : {
+                  top: 80,
+                  right: 80,
+                  bottom: betweenPopover.current?.offsetHeight
+                    ? betweenPopover.current.offsetHeight + 80
+                    : 80,
+                  left: 80,
+                },
+          });
+        }
+      }
     });
   };
 
@@ -1032,7 +1386,9 @@ const App = () => {
 
         // Hide all stops
         map.setLayoutProperty('stops', 'visibility', 'none');
-        map.setLayoutProperty('stops-icon', 'visibility', 'none');
+        if (map.getLayer('stops-icon')) {
+          map.setLayoutProperty('stops-icon', 'visibility', 'none');
+        }
 
         setRouteServices(services);
 
@@ -1303,7 +1659,9 @@ const App = () => {
 
           // Hide all stops
           map.setLayoutProperty('stops', 'visibility', 'none');
-          map.setLayoutProperty('stops-icon', 'visibility', 'none');
+          if (map.getLayer('stops-icon')) {
+            map.setLayoutProperty('stops-icon', 'visibility', 'none');
+          }
 
           map.getSource('stops-highlight').setData({
             type: 'FeatureCollection',
@@ -1466,7 +1824,9 @@ const App = () => {
             url: `/stops/${stop}`,
           });
           map.setLayoutProperty('stops', 'visibility', 'visible');
-          map.setLayoutProperty('stops-icon', 'visibility', 'visible');
+          if (map.getLayer('stops-icon')) {
+            map.setLayoutProperty('stops-icon', 'visibility', 'visible');
+          }
           _showStopPopover(stop);
         }
         break;
@@ -1493,132 +1853,377 @@ const App = () => {
 
         // Hide all stops
         map.setLayoutProperty('stops', 'visibility', 'none');
-        map.setLayoutProperty('stops-icon', 'visibility', 'none');
+        if (map.getLayer('stops-icon')) {
+          map.setLayoutProperty('stops-icon', 'visibility', 'none');
+        }
 
-        function findRoutesBetween(startStop, endStop) {
-          const results = [];
+        // Fetch arrivals for start stop and filter routes
+        (async () => {
+          const cityConfig = getConfigForCity(city);
+          const ONE_HOUR_MS = 60 * 60 * 1000;
+          let availableServices = new Set();
+          let arrivalData = null; // Store full arrival data for scoring
 
-          const endServicesStops = endStop.routes
-            .map((route) => {
-              // Parse route key format: serviceNumber|destination|variantIdx
-              const service = route.split('|')[0];
-              const destination = route.split('|')[1];
-              const variantIdx = route.split('|')[2];
-              if (!service || !destination || !variantIdx) {
-                console.warn(`Failed to parse route key: ${route}`);
-                return null;
-              }
+          // Helper function to extract services from arrivals data
+          const extractServicesFromArrivals = (services) => {
+            if (!services || !Array.isArray(services)) return new Set();
+            const serviceSet = new Set();
+            services.forEach((service) => {
+              // Check all available arrivals (next, next2, next3, or arrivals array)
+              const arrivals =
+                service.arrivals ||
+                [service.next, service.next2, service.next3].filter(Boolean);
 
-              let serviceStops =
-                servicesData[service]?.[destination]?.[variantIdx];
-              if (!serviceStops) return null;
-
-              serviceStops = serviceStops.slice(
-                0,
-                serviceStops.indexOf(endStop.number) + 1,
+              // Check if any arrival is within the next hour
+              const hasArrivalInNextHour = arrivals.some(
+                (arrival) =>
+                  arrival &&
+                  typeof arrival.duration_ms === 'number' &&
+                  arrival.duration_ms >= 0 &&
+                  arrival.duration_ms <= ONE_HOUR_MS,
               );
-              return { service, stops: serviceStops, route };
-            })
-            .filter(Boolean);
 
-          startStop.routes.forEach((route) => {
-            // Parse route key format: serviceNumber|destination|variantIdx
-            const service = route.split('|')[0];
-            const destination = route.split('|')[1];
-            const variantIdx = route.split('|')[2];
-            if (!service || !destination || !variantIdx) {
-              console.warn(`Failed to parse route key: ${route}`);
-              return;
-            }
+              if (hasArrivalInNextHour) {
+                serviceSet.add(String(service.no));
+              }
+            });
+            return serviceSet;
+          };
 
-            let serviceStops =
-              servicesData[service]?.[destination]?.[variantIdx];
-            if (!serviceStops) return;
+          // Helper to convert schedule to arrival format
+          const convertScheduleToArrival = (scheduleData) => {
+            if (!scheduleData?.services) return [];
+            const now = new Date();
+            const currentMinutes = now.getHours() * 60 + now.getMinutes();
+            const ONE_HOUR_MS = 60 * 60 * 1000;
 
-            serviceStops = serviceStops.slice(
-              serviceStops.indexOf(startStop.number),
-            );
+            const allUpcomingTrips = [];
+            scheduleData.services.forEach((service) => {
+              const { no, origin, destination, trips } = service;
+              if (!trips || !Array.isArray(trips)) return;
 
-            // This service already can go straight to the end stop,
-            // there's no need to find any connections from end stop
-            if (serviceStops.includes(endStop.number)) {
-              results.push({
-                startService: service,
-                startRoute: route,
-                stopsBetween: [],
-              });
-            } else {
-              endServicesStops.forEach(({ service: s, stops, route: r }) => {
-                // console.log(serviceStops, stops);
-                const intersectedStops = intersect(stops, serviceStops);
-                if (intersectedStops.length) {
-                  const startIndex = intersectedStops.indexOf(startStop.number);
-                  if (startIndex > -1) intersectedStops.splice(startIndex, 1);
-                  const endIndex = intersectedStops.indexOf(endStop.number);
-                  if (endIndex > -1) intersectedStops.splice(endIndex, 1);
-
-                  if (intersectedStops.length) {
-                    results.push({
-                      startStop,
-                      startService: service,
-                      startRoute: route,
-                      stopsBetween: intersectedStops,
-                      endRoute: r,
-                      endService: s,
-                      endStop,
-                    });
-                  }
+              trips.forEach((timeStr) => {
+                const colonIdx = timeStr.indexOf(':');
+                if (colonIdx === -1) return;
+                const hours = parseInt(timeStr.substring(0, colonIdx), 10);
+                const minutes = parseInt(timeStr.substring(colonIdx + 1), 10);
+                const tripMinutes = hours * 60 + minutes;
+                const duration_ms = (tripMinutes - currentMinutes) * 60 * 1000;
+                if (duration_ms >= 0 && duration_ms <= ONE_HOUR_MS) {
+                  allUpcomingTrips.push({
+                    no,
+                    origin,
+                    destination,
+                    duration_ms,
+                    type: 'SD',
+                    load: 'SEA',
+                    feature: 'WAB',
+                    visit_number: 1,
+                    origin_code: origin,
+                    destination_code: destination,
+                  });
                 }
               });
-            }
-          });
+            });
 
-          return results;
-        }
+            // Sort by arrival time and group by service
+            allUpcomingTrips.sort((a, b) => a.duration_ms - b.duration_ms);
+            const serviceMap = new Map();
 
-        function findNearestStops(stop) {
-          let distance = Infinity;
-          let nearestStop = null;
-          for (let i = 0, l = stopsDataArr.length; i < l; i++) {
-            const s = stopsDataArr[i];
-            if (s.number !== stop.number) {
-              const d = getDistance(...stop.coordinates, ...s.coordinates);
-              if (d < distance) {
-                distance = d;
-                nearestStop = s;
+            allUpcomingTrips.forEach((trip) => {
+              const key = `${trip.no}-${trip.destination}`;
+              if (!serviceMap.has(key)) {
+                serviceMap.set(key, {
+                  no: trip.no,
+                  destination: trip.destination,
+                  frequency: 0,
+                  trips: [],
+                });
               }
+              const service = serviceMap.get(key);
+              service.trips.push(trip);
+              service.frequency++;
+            });
+
+            // Convert to arrival format (next, next2, next3)
+            return Array.from(serviceMap.values()).map((service) => {
+              const result = {
+                no: service.no,
+                destination: service.destination,
+                frequency: service.frequency,
+              };
+              if (service.trips.length > 0) result.next = service.trips[0];
+              if (service.trips.length > 1) result.next2 = service.trips[1];
+              if (service.trips.length > 2) result.next3 = service.trips[2];
+              return result;
+            });
+          };
+
+          // Try to fetch live arrivals
+          let liveApiFailed = false;
+          if (cityConfig?.liveArrivals?.enabled) {
+            try {
+              const apiUrl = getApiUrl(cityConfig.liveArrivals.apiPath);
+              if (apiUrl) {
+                const response = await fetch(
+                  `${apiUrl}?stationid=${startStopNumber}`,
+                );
+                if (response.ok) {
+                  const data = await response.json();
+                  if (data?.services?.length > 0) {
+                    const filtered = data.services
+                      .map(filterStaleArrivalsFromService)
+                      .filter(
+                        (s) => s.next || (s.arrivals && s.arrivals.length > 0),
+                      );
+                    arrivalData =
+                      filtered.length > 0 ? filtered : data.services;
+                    availableServices =
+                      extractServicesFromArrivals(arrivalData);
+                  }
+                } else {
+                  // API returned error status - this is a failure case
+                  liveApiFailed = true;
+                }
+              }
+            } catch (error) {
+              // API request failed - this is a failure case
+              liveApiFailed = true;
             }
           }
-          return nearestStop;
-        }
 
-        const startStop = stopsData[startStopNumber];
-        const endStop = stopsData[endStopNumber];
-        const nearestEndStop = findNearestStops(endStop);
-        const nearestStartStop = findNearestStops(startStop);
-        console.log(startStop, endStop, nearestEndStop, nearestStartStop);
-        _showBetweenPopover({
-          startStop,
-          endStop,
-          nearestStartStop,
-          nearestEndStop,
-          startWalkMins: getWalkingMinutes(
-            ruler.distance(
-              startStop.coordinates,
-              nearestStartStop.coordinates,
-            ) * 1000,
-          ),
-          endWalkMins: getWalkingMinutes(
-            ruler.distance(endStop.coordinates, nearestEndStop.coordinates) *
-              1000,
-          ),
-          results: [
-            findRoutesBetween(startStop, endStop),
-            findRoutesBetween(startStop, nearestEndStop),
-            findRoutesBetween(nearestStartStop, endStop),
-            findRoutesBetween(nearestStartStop, nearestEndStop),
-          ],
-        });
+          // Fallback to schedule if no live data or no services found
+          if (!arrivalData || arrivalData.length === 0) {
+            try {
+              const scheduleData = await fetchCache(
+                `${dataPath}/schedule/${startStopNumber}.json`,
+                60,
+              );
+              if (scheduleData?.services) {
+                // Convert schedule to arrival format
+                const now = new Date();
+                const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+                scheduleData.services.forEach((service) => {
+                  const { no, trips } = service;
+                  if (!trips || !Array.isArray(trips)) return;
+
+                  // Check if any trip is in the next hour
+                  const hasTripInNextHour = trips.some((timeStr) => {
+                    const colonIdx = timeStr.indexOf(':');
+                    if (colonIdx === -1) return false;
+                    const hours = parseInt(timeStr.substring(0, colonIdx), 10);
+                    const minutes = parseInt(
+                      timeStr.substring(colonIdx + 1),
+                      10,
+                    );
+                    const tripMinutes = hours * 60 + minutes;
+                    const duration_ms =
+                      (tripMinutes - currentMinutes) * 60 * 1000;
+                    return duration_ms >= 0 && duration_ms <= ONE_HOUR_MS;
+                  });
+
+                  if (hasTripInNextHour) {
+                    availableServices.add(String(no));
+                  }
+                });
+
+                // Convert schedule to arrival format for scoring
+                arrivalData = convertScheduleToArrival(scheduleData);
+              }
+            } catch (error) {
+              console.log('Schedule fetch failed:', error);
+            }
+          }
+
+          // Unified function to find all routes between stops, marking nearby stop usage
+          function findAllRoutes(
+            actualStartStop,
+            actualEndStop,
+            nearestStartStop,
+            nearestEndStop,
+            availableServicesSet = null,
+          ) {
+            const allResults = [];
+            const stopCombinations = [
+              {
+                start: actualStartStop,
+                end: actualEndStop,
+                nearbyStart: false,
+                nearbyEnd: false,
+              },
+              {
+                start: actualStartStop,
+                end: nearestEndStop,
+                nearbyStart: false,
+                nearbyEnd: true,
+              },
+              {
+                start: nearestStartStop,
+                end: actualEndStop,
+                nearbyStart: true,
+                nearbyEnd: false,
+              },
+              {
+                start: nearestStartStop,
+                end: nearestEndStop,
+                nearbyStart: true,
+                nearbyEnd: true,
+              },
+            ];
+
+            stopCombinations.forEach(
+              ({ start, end, nearbyStart, nearbyEnd }) => {
+                const endServicesStops = end.routes
+                  .map((route) => {
+                    const service = route.split('|')[0];
+                    const destination = route.split('|')[1];
+                    const variantIdx = route.split('|')[2];
+                    if (!service || !destination || !variantIdx) {
+                      console.warn(`Failed to parse route key: ${route}`);
+                      return null;
+                    }
+
+                    let serviceStops =
+                      servicesData[service]?.[destination]?.[variantIdx];
+                    if (!serviceStops) return null;
+
+                    serviceStops = serviceStops.slice(
+                      0,
+                      serviceStops.indexOf(end.number) + 1,
+                    );
+                    return { service, stops: serviceStops, route };
+                  })
+                  .filter(Boolean);
+
+                start.routes.forEach((route) => {
+                  const service = route.split('|')[0];
+                  const destination = route.split('|')[1];
+                  const variantIdx = route.split('|')[2];
+                  if (!service || !destination || !variantIdx) {
+                    console.warn(`Failed to parse route key: ${route}`);
+                    return;
+                  }
+
+                  // Filter: only include services that have arrivals in the next hour
+                  // Only apply this filter for the actual start stop, not nearby stops
+                  if (
+                    availableServicesSet &&
+                    start.number === startStopNumber &&
+                    !availableServicesSet.has(String(service))
+                  ) {
+                    return;
+                  }
+
+                  let serviceStops =
+                    servicesData[service]?.[destination]?.[variantIdx];
+                  if (!serviceStops) return;
+
+                  serviceStops = serviceStops.slice(
+                    serviceStops.indexOf(start.number),
+                  );
+
+                  // Direct route: service goes straight to end stop
+                  if (serviceStops.includes(end.number)) {
+                    allResults.push({
+                      startStop: start,
+                      startService: service,
+                      startRoute: route,
+                      stopsBetween: [],
+                      endStop: end,
+                      _nearbyStart: nearbyStart,
+                      _nearbyEnd: nearbyEnd,
+                    });
+                  } else {
+                    // Transfer route: need to find connection
+                    endServicesStops.forEach(
+                      ({ service: s, stops, route: r }) => {
+                        const intersectedStops = intersect(stops, serviceStops);
+                        if (intersectedStops.length) {
+                          const startIndex = intersectedStops.indexOf(
+                            start.number,
+                          );
+                          if (startIndex > -1)
+                            intersectedStops.splice(startIndex, 1);
+                          const endIndex = intersectedStops.indexOf(end.number);
+                          if (endIndex > -1)
+                            intersectedStops.splice(endIndex, 1);
+
+                          if (intersectedStops.length) {
+                            allResults.push({
+                              startStop: start,
+                              startService: service,
+                              startRoute: route,
+                              stopsBetween: intersectedStops,
+                              endRoute: r,
+                              endService: s,
+                              endStop: end,
+                              _nearbyStart: nearbyStart,
+                              _nearbyEnd: nearbyEnd,
+                            });
+                          }
+                        }
+                      },
+                    );
+                  }
+                });
+              },
+            );
+
+            return allResults;
+          }
+
+          function findNearestStops(stop) {
+            let distance = Infinity;
+            let nearestStop = null;
+            for (let i = 0, l = stopsDataArr.length; i < l; i++) {
+              const s = stopsDataArr[i];
+              if (s.number !== stop.number) {
+                const d = getDistance(...stop.coordinates, ...s.coordinates);
+                if (d < distance) {
+                  distance = d;
+                  nearestStop = s;
+                }
+              }
+            }
+            return nearestStop;
+          }
+
+          const startStop = stopsData[startStopNumber];
+          const endStop = stopsData[endStopNumber];
+          const nearestEndStop = findNearestStops(endStop);
+          const nearestStartStop = findNearestStops(startStop);
+          console.log(startStop, endStop, nearestEndStop, nearestStartStop);
+
+          // Find all routes in one unified call
+          const allRoutes = findAllRoutes(
+            startStop,
+            endStop,
+            nearestStartStop,
+            nearestEndStop,
+            availableServices,
+          );
+
+          _showBetweenPopover({
+            startStop,
+            endStop,
+            nearestStartStop,
+            nearestEndStop,
+            startWalkMins: getWalkingMinutes(
+              ruler.distance(
+                startStop.coordinates,
+                nearestStartStop.coordinates,
+              ) * 1000,
+            ),
+            endWalkMins: getWalkingMinutes(
+              ruler.distance(endStop.coordinates, nearestEndStop.coordinates) *
+                1000,
+            ),
+            arrivalData, // Pass arrival data for scoring
+            liveApiFailed, // Track if live API fetch failed
+            results: allRoutes, // Single unified array
+          });
+        })();
 
         break;
       }
@@ -1671,27 +2276,46 @@ const App = () => {
     // Init data
 
     const stops = await fetchStopsP;
+    // First pass: collect all stops with their parentStopID
+    const stopsByParent = {};
     Object.keys(stops).forEach((number) => {
       const stop = stops[number];
-      const [lng, lat, name, suffix = ''] = stop;
+      const [lng, lat, name, suffix = '', parentStopID = ''] = stop;
+      if (parentStopID) {
+        if (!stopsByParent[parentStopID]) {
+          stopsByParent[parentStopID] = [];
+        }
+        stopsByParent[parentStopID].push({ number, lng, lat });
+      }
+    });
+
+    // Second pass: process stops and calculate left based on parentStopID
+    Object.keys(stops).forEach((number) => {
+      const stop = stops[number];
+      const [lng, lat, name, suffix = '', parentStopID = ''] = stop;
       let left = false;
-      if (/[19]$/.test(number)) {
-        const oppositeNumber = number.replace(/[19]$/, (d) =>
-          d === '1' ? 9 : 1,
+
+      // Calculate left based on parentStopID (opposite stops)
+      if (parentStopID && stopsByParent[parentStopID]) {
+        const oppositeStops = stopsByParent[parentStopID].filter(
+          (s) => s.number !== number,
         );
-        const oppositeStop = stops[oppositeNumber];
-        if (oppositeStop) {
+        if (oppositeStops.length > 0) {
+          // Use the first opposite stop to calculate bearing
+          const oppositeStop = oppositeStops[0];
           const bearing = ruler.bearing(
             [lng, lat],
-            [oppositeStop[0], oppositeStop[1]],
+            [oppositeStop.lng, oppositeStop.lat],
           );
           left = bearing > 0;
         }
       }
+
       stopsData[number] = {
         name,
         suffix,
         number,
+        parentStopID: parentStopID || null,
         interchange:
           /\sint$/i.test(name) && !/^(bef|aft|opp|bet)\s/i.test(name),
         coordinates: [lng, lat],
@@ -1879,7 +2503,9 @@ const App = () => {
     });
 
     // Load all map images in parallel for faster initialization
-    Promise.all([
+    // Await image loading before setting mapLoaded to ensure
+    // layers that reference these images can render properly
+    await Promise.all([
       map
         .loadImage(stopImagePath)
         .then((img) => map.addImage('stop', img.data)),
@@ -2041,6 +2667,7 @@ const App = () => {
             name: stop.name,
             interchange: stop.interchange,
             left: stop.left,
+            suffix: stop.suffix,
           },
           geometry: {
             type: 'Point',
@@ -2050,16 +2677,38 @@ const App = () => {
       },
     });
 
-    const stopTextPartialFormat = ['get', 'number'];
-    const stopTextFullFormat = [
-      'format',
-      ['get', 'number'],
-      { 'font-scale': 0.8 },
-      '\n',
-      {},
-      ['get', 'name'],
-      { 'text-color': '#000' },
-    ];
+    // Check if stop IDs should be disabled for this city
+    const cityConfig = getConfigForCity(route.city);
+    const disableStopID = cityConfig?.disableStopID || false;
+
+    let stopTextPartialFormat, stopTextFullFormat;
+    if (disableStopID) {
+      stopTextPartialFormat = ['get', 'name'];
+      stopTextFullFormat = [
+        'format',
+        ['get', 'name'],
+        {},
+        [
+          'case',
+          ['!=', ['get', 'suffix'], null],
+          ['concat', '\n', ['get', 'suffix']],
+          '',
+        ],
+        { 'font-scale': 0.8, 'text-color': '#000' },
+      ];
+    } else {
+      stopTextPartialFormat = ['get', 'number'];
+      stopTextFullFormat = [
+        'format',
+        ['get', 'number'],
+        { 'font-scale': 0.8 },
+        '\n',
+        {},
+        ['get', 'name'],
+        { 'text-color': '#000' },
+      ];
+    }
+
     const stopText = {
       layout: {
         'text-optional': true,
@@ -2199,46 +2848,8 @@ const App = () => {
       },
     });
 
-    requestIdleCallback(() => {
-      map.on('mouseenter', 'stops', () => {
-        mapCanvas.style.cursor = 'pointer';
-      });
-
-      if (supportsHover) {
-        let lastFeature = null;
-        // RAF-throttled mousemove handler for smooth 60fps updates
-        const handleMouseMove = rafThrottle((e) => {
-          const { point } = e;
-          const features = map.queryRenderedFeatures(point, {
-            layers: ['stops', 'stops-highlight'],
-            validate: false,
-          });
-          if (features.length && map.getZoom() < 16 && !map.isMoving()) {
-            if (lastFeature && features[0].id === lastFeature.id) {
-              return;
-            }
-            lastFeature = features[0];
-            const stopID = decode(features[0].id);
-            const data = stopsData[stopID];
-            showStopTooltip({
-              ...data,
-              ...point,
-            });
-          } else if (lastFeature) {
-            lastFeature = null;
-            hideStopTooltip();
-          }
-        });
-        map.on('mousemove', handleMouseMove);
-      }
-      map.on('mouseleave', 'stops', () => {
-        mapCanvas.style.cursor = '';
-        hideStopTooltip();
-      });
-      map.on('mouseout', hideStopTooltip);
-      map.on('movestart', hideStopTooltip);
-    });
-
+    // Create stops-highlight source and layers BEFORE setting up event handlers
+    // that query this layer to avoid "layer does not exist" errors
     map.addSource('stops-highlight', {
       type: 'geojson',
       tolerance: 10,
@@ -2321,11 +2932,16 @@ const App = () => {
         'icon-padding': 0.5,
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
-        ...stopText.layout,
+        'text-optional': true,
         'text-field': [
           'step',
           ['zoom'],
-          ['case', ['==', ['get', 'type'], 'end'], stopTextFullFormat, ''],
+          [
+            'case',
+            ['==', ['get', 'type'], 'end'],
+            stopTextFullFormat,
+            '', // Empty string for no text
+          ],
           14,
           [
             'case',
@@ -2343,12 +2959,39 @@ const App = () => {
           16,
           14,
         ],
+        'text-justify': [
+          'case',
+          ['boolean', ['get', 'left'], false],
+          'right',
+          'left',
+        ],
+        'text-anchor': [
+          'case',
+          ['boolean', ['get', 'left'], false],
+          'right',
+          'left',
+        ],
+        'text-offset': [
+          'case',
+          ['boolean', ['get', 'left'], false],
+          ['literal', [-0.8, 0]],
+          ['literal', [0.8, 0]],
+        ],
+        'text-padding': 0.5,
+        'text-font': ['Noto Sans Regular'],
+        'text-max-width': 16,
+        'text-line-height': 1.1,
       },
       paint: {
         ...stopText.paint,
         'text-halo-width': ['case', ['==', ['get', 'type'], 'end'], 2, 1],
       },
     });
+    // Add stops-highlight-selected layer, checking if stops-highlight exists first
+    const stopsHighlightLayer = map.getLayer('stops-highlight');
+    const beforeLayerForSelected = stopsHighlightLayer
+      ? 'stops-highlight'
+      : 'stops';
     map.addLayer(
       {
         id: 'stops-highlight-selected',
@@ -2389,10 +3032,56 @@ const App = () => {
           ],
         },
       },
-      'stops-highlight',
+      beforeLayerForSelected,
     );
 
     requestIdleCallback(() => {
+      map.on('mouseenter', 'stops', () => {
+        mapCanvas.style.cursor = 'pointer';
+      });
+
+      if (supportsHover) {
+        let lastFeature = null;
+        // RAF-throttled mousemove handler for smooth 60fps updates
+        const handleMouseMove = rafThrottle((e) => {
+          const { point } = e;
+          // Build layers array, only including layers that exist
+          const queryLayers = ['stops'].filter((layerId) =>
+            map.getLayer(layerId),
+          );
+          // Only add stops-highlight if it exists
+          if (map.getLayer('stops-highlight')) {
+            queryLayers.push('stops-highlight');
+          }
+          const features = map.queryRenderedFeatures(point, {
+            layers: queryLayers,
+            validate: false,
+          });
+          if (features.length && map.getZoom() < 16 && !map.isMoving()) {
+            if (lastFeature && features[0].id === lastFeature.id) {
+              return;
+            }
+            lastFeature = features[0];
+            const stopID = decode(features[0].id);
+            const data = stopsData[stopID];
+            showStopTooltip({
+              ...data,
+              ...point,
+            });
+          } else if (lastFeature) {
+            lastFeature = null;
+            hideStopTooltip();
+          }
+        });
+        map.on('mousemove', handleMouseMove);
+      }
+      map.on('mouseleave', 'stops', () => {
+        mapCanvas.style.cursor = '';
+        hideStopTooltip();
+      });
+      map.on('mouseout', hideStopTooltip);
+      map.on('movestart', hideStopTooltip);
+
       map.on('mouseenter', 'stops-highlight', () => {
         mapCanvas.style.cursor = 'pointer';
       });
@@ -2864,6 +3553,10 @@ const App = () => {
       'stops',
     );
 
+    // Add routes-between-walk layer, checking if stops-highlight exists first
+    const beforeLayer = map.getLayer('stops-highlight')
+      ? 'stops-highlight'
+      : 'stops';
     map.addLayer(
       {
         id: 'routes-between-walk',
@@ -2887,7 +3580,7 @@ const App = () => {
           ],
         },
       },
-      'stops-highlight',
+      beforeLayer,
     );
 
     map.addLayer(
@@ -2972,8 +3665,16 @@ const App = () => {
         });
       }
       const { point } = e;
+      // Build layers array, only including layers that exist
+      const queryLayers = ['stops', 'stops-icon'].filter((layerId) =>
+        map.getLayer(layerId),
+      );
+      // Only add stops-highlight if it exists
+      if (map.getLayer('stops-highlight')) {
+        queryLayers.push('stops-highlight');
+      }
       const features = map.queryRenderedFeatures(point, {
-        layers: ['stops', 'stops-icon', 'stops-highlight'],
+        layers: queryLayers,
         validate: false,
       });
       if (features.length) {
@@ -3224,7 +3925,6 @@ const App = () => {
                                 onClick={(e) => {
                                   e.preventDefault();
                                   zoomToStop(s);
-                                  // onStopClickAgain={_showStopPopover}
                                 }}
                               >
                                 <b class="stop-tag">{stop.number}</b>{' '}
@@ -3250,10 +3950,38 @@ const App = () => {
             {showPassingRoutesFloatPill && (
               <>
                 <div class="service-flex">
-                  <span class="stop-tag">{route.value}</span>
-                  <div>
-                    <h1>{stopsData[route.value].name}</h1>
-                  </div>
+                  {(() => {
+                    const cityConfig = getConfigForCity(route.city);
+                    const disableStopID = cityConfig?.disableStopID || false;
+
+                    if (disableStopID) {
+                      return (
+                        <div>
+                          <h1>
+                            <span class="stop-name-with-suffix">
+                              <span class="stop-name">
+                                {stopsData[route.value].name}
+                              </span>
+                              {stopsData[route.value].suffix && (
+                                <span class="stop-suffix">
+                                  {stopsData[route.value].suffix}
+                                </span>
+                              )}
+                            </span>
+                          </h1>
+                        </div>
+                      );
+                    } else {
+                      return (
+                        <>
+                          <span class="stop-tag">{route.value}</span>
+                          <div>
+                            <h1>{stopsData[route.value].name}</h1>
+                          </div>
+                        </>
+                      );
+                    }
+                  })()}
                 </div>
                 <div class="services-list" onClick={unhighlightRoute}>
                   <h2>
@@ -3292,6 +4020,28 @@ const App = () => {
         </div>
         <div class="popover-inner">
           <div class="popover-search">
+            <div class="search-input-wrapper">
+              <input
+                type="search"
+                placeholder={t('search.placeholder')}
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                spellcheck="false"
+                ref={searchField}
+                onfocus={handleSearchFocus}
+                oninput={handleSearch}
+                onkeydown={handleKeys}
+                disabled={!searching && !services.length}
+              />
+              <button
+                type="button"
+                class="cancel-btn"
+                onclick={handleSearchClose}
+                title={t('common.cancel')}
+                dangerouslySetInnerHTML={{ __html: CLOSE_SVG }}
+              />
+            </div>
             <button
               type="button"
               class="geolocate-btn"
@@ -3300,22 +4050,6 @@ const App = () => {
               onClick={() => geolocateControlRef.current?.trigger()}
               dangerouslySetInnerHTML={{ __html: GEOLOCATE_SVG }}
             />
-            <input
-              type="search"
-              placeholder={t('search.placeholder')}
-              autocomplete="off"
-              autocorrect="off"
-              autocapitalize="off"
-              spellcheck="false"
-              ref={searchField}
-              onfocus={handleSearchFocus}
-              oninput={handleSearch}
-              onkeydown={handleKeys}
-              disabled={!searching && !services.length}
-            />
-            <button type="button" onclick={handleSearchClose}>
-              {t('common.cancel')}
-            </button>
           </div>
           <ul
             class={`popover-list ${
@@ -3439,14 +4173,72 @@ const App = () => {
               &times;
             </a>
             <header>
-              <h1 onClick={() => zoomToStop(stopPopoverData.number)}>
-                <b class="stop-tag">{stopPopoverData.number}</b>
-                <span class="stop-name-with-suffix">
-                  <span class="stop-name">{stopPopoverData.name}</span>
-                  {stopPopoverData.suffix && (
-                    <span class="stop-suffix">{stopPopoverData.suffix}</span>
+              {(stopPopoverLoading || stopPopoverError) && (
+                <span
+                  class={`live-data-loading-container ${
+                    stopPopoverError ? 'error' : ''
+                  }`}
+                  title={
+                    stopPopoverError
+                      ? 'Live data unavailable. Estimated based on timetable schedule.'
+                      : 'Fetching live information'
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const container = e.currentTarget;
+                    container.classList.toggle('show-tooltip');
+                    // Close tooltip when clicking outside
+                    const closeTooltip = (event) => {
+                      if (!container.contains(event.target)) {
+                        container.classList.remove('show-tooltip');
+                        document.removeEventListener('click', closeTooltip);
+                      }
+                    };
+                    // Use setTimeout to avoid immediate closure
+                    setTimeout(() => {
+                      document.addEventListener('click', closeTooltip);
+                    }, 0);
+                  }}
+                >
+                  {stopPopoverError ? (
+                    <span class="live-data-warning">⚠</span>
+                  ) : (
+                    <span class="live-data-loading" />
                   )}
                 </span>
+              )}
+              <h1 onClick={() => zoomToStop(stopPopoverData.number)}>
+                {(() => {
+                  const cityConfig = getConfigForCity(city);
+                  const disableStopID = cityConfig?.disableStopID || false;
+
+                  if (disableStopID) {
+                    return (
+                      <span class="stop-name-with-suffix">
+                        <span class="stop-name">{stopPopoverData.name}</span>
+                        {stopPopoverData.suffix && (
+                          <span class="stop-suffix">
+                            {stopPopoverData.suffix}
+                          </span>
+                        )}
+                      </span>
+                    );
+                  } else {
+                    return (
+                      <>
+                        <b class="stop-tag">{stopPopoverData.number}</b>
+                        <span class="stop-name-with-suffix">
+                          <span class="stop-name">{stopPopoverData.name}</span>
+                          {stopPopoverData.suffix && (
+                            <span class="stop-suffix">
+                              {stopPopoverData.suffix}
+                            </span>
+                          )}
+                        </span>
+                      </>
+                    );
+                  }
+                })()}
               </h1>
             </header>
             <ScrollableContainer class="popover-scroll">
@@ -3457,6 +4249,14 @@ const App = () => {
                 id={stopPopoverData.number}
                 services={stopPopoverData.services}
                 stopData={stopPopoverData}
+                onLoadingChange={(loading) => {
+                  setStopPopoverLoading(loading);
+                  if (loading) {
+                    setStopPopoverError(false);
+                  }
+                }}
+                onErrorChange={setStopPopoverError}
+                cancelRef={stopPopoverCancelRef}
               />
             </ScrollableContainer>
             <div class="popover-footer">
@@ -3576,16 +4376,11 @@ const App = () => {
                     routes={routes}
                     stopsData={stopsData}
                     vehicles={routeVehicles}
-                    onStopClick={zoomToStop}
-                    onStopClickAgain={_showStopPopover}
+                    onStopClick={_showStopPopover}
                     onVehicleClick={(vehicleId) =>
                       setFollowedVehicleId(vehicleId)
                     }
                   />
-                  <div class="callout info">
-                    <span class="legend-opposite" />{' '}
-                    {t('service.oppositeLegend')}
-                  </div>
                 </ScrollableContainer>
               </>
             );
@@ -3606,73 +4401,19 @@ const App = () => {
           </a>,
           <header>
             <h1>
-              <small>Routes between</small>
-              <br />
-              <b class="stop-tag">
-                {showBetweenPopover.startStop.number}
-              </b> and{' '}
-              <b class="stop-tag">{showBetweenPopover.endStop.number}</b>
+              {showBetweenPopover.startStop.name ||
+                showBetweenPopover.startStop.number}{' '}
+              to{' '}
+              {showBetweenPopover.endStop.name ||
+                showBetweenPopover.endStop.number}
             </h1>
           </header>,
           <div class="popover-scroll">
-            <div class="callout warning">
-              This is a beta feature. Directions and routes may not be correct.
-            </div>
-            <h2>Direct routes</h2>
             <BetweenRoutes
-              results={showBetweenPopover.results[0]}
-              onClickRoute={(e, result) =>
-                renderBetweenRoute({
-                  e,
-                  startStop: showBetweenPopover.startStop,
-                  endStop: showBetweenPopover.endStop,
-                  result,
-                })
-              }
-            />
-            <h2>Alternative routes</h2>
-            <h3>
-              Nearby arrival stop: {showBetweenPopover.nearestEndStop.number} (
-              {showBetweenPopover.endWalkMins}-min walk)
-            </h3>
-            <BetweenRoutes
-              results={showBetweenPopover.results[1]}
-              nearbyEnd={true}
-              onClickRoute={(e, result) =>
-                renderBetweenRoute({
-                  e,
-                  startStop: showBetweenPopover.startStop,
-                  endStop: showBetweenPopover.endStop,
-                  result,
-                })
-              }
-            />
-            <h3>
-              Nearby departure stop:{' '}
-              {showBetweenPopover.nearestStartStop.number} (
-              {showBetweenPopover.startWalkMins}-min walk)
-            </h3>
-            <BetweenRoutes
-              results={showBetweenPopover.results[2]}
-              nearbyStart={true}
-              onClickRoute={(e, result) =>
-                renderBetweenRoute({
-                  e,
-                  startStop: showBetweenPopover.startStop,
-                  endStop: showBetweenPopover.endStop,
-                  result,
-                })
-              }
-            />
-            <h3>
-              Nearby departure &amp; arrival stops:{' '}
-              {showBetweenPopover.nearestStartStop.number} -{' '}
-              {showBetweenPopover.nearestEndStop.number}
-            </h3>
-            <BetweenRoutes
-              results={showBetweenPopover.results[3]}
-              nearbyStart={true}
-              nearbyEnd={true}
+              results={showBetweenPopover.results || []}
+              stopsData={stopsData}
+              arrivalData={showBetweenPopover.arrivalData}
+              liveApiFailed={showBetweenPopover.liveApiFailed}
               onClickRoute={(e, result) =>
                 renderBetweenRoute({
                   e,

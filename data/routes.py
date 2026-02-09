@@ -157,13 +157,33 @@ def process_stops(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str]) ->
     ).select('stop_id').unique()
     
     # Filter and convert to dictionary
+    # Join first, then handle parent_station column
     valid_stops = stops_df.join(
         valid_stop_ids, on='stop_id', how='inner'
-    ).select(['stop_id', 'stop_lon', 'stop_lat', 'stop_name'])
+    )
+    
+    # Handle parent_station column - fill null values with empty string, or create if missing
+    if 'parent_station' in valid_stops.columns:
+        valid_stops = valid_stops.select([
+            'stop_id', 'stop_lon', 'stop_lat', 'stop_name',
+            pl.col('parent_station').fill_null("").alias('parent_station')
+        ])
+    else:
+        # If parent_station column doesn't exist, create a column with empty strings
+        valid_stops = valid_stops.select([
+            'stop_id', 'stop_lon', 'stop_lat', 'stop_name',
+            pl.lit("").alias('parent_station')
+        ])
     
     # Convert to dict using to_dicts for better performance
     return {
-        row['stop_id']: [float(row['stop_lon']), float(row['stop_lat']), row['stop_name'], ""]
+        row['stop_id']: [
+            float(row['stop_lon']), 
+            float(row['stop_lat']), 
+            row['stop_name'], 
+            "",
+            row['parent_station'] or ""  # parentStopID - empty string if not set
+        ]
         for row in valid_stops.to_dicts()
     }
 

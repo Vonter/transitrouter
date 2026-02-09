@@ -1,5 +1,38 @@
 import { getApiUrl } from '../city-config.js';
 
+/** Max age for live arrival/vehicle data (15 minutes). Items with lastRefreshMs older than this are considered stale. */
+export const LIVE_DATA_MAX_AGE_MS = 15 * 60 * 1000;
+
+/**
+ * Return true if an arrival/trip has lastRefreshMs and it is older than LIVE_DATA_MAX_AGE_MS.
+ * @param {Object} trip - Arrival/trip object (may have lastRefreshMs)
+ * @returns {boolean}
+ */
+export function isArrivalStale(trip) {
+  if (!trip || trip.lastRefreshMs == null) return false;
+  return Date.now() - Number(trip.lastRefreshMs) > LIVE_DATA_MAX_AGE_MS;
+}
+
+/**
+ * Return a copy of a service with only non-stale arrivals (next/next2/next3 or arrivals array).
+ * If an item has lastRefreshMs older than 15 minutes, it is excluded.
+ * @param {Object} service - Service object with next, next2, next3 and/or arrivals
+ * @returns {Object}
+ */
+export function filterStaleArrivalsFromService(service) {
+  if (!service) return service;
+  const list = service.arrivals
+    ? [...service.arrivals]
+    : [service.next, service.next2, service.next3].filter(Boolean);
+  const fresh = list.filter((trip) => !isArrivalStale(trip));
+  const result = { ...service };
+  result.next = fresh[0] ?? null;
+  result.next2 = fresh[1] ?? null;
+  result.next3 = fresh[2] ?? null;
+  if (service.arrivals) result.arrivals = fresh;
+  return result;
+}
+
 /**
  * Utility to fetch live bus arrival data from the arrivals API
  * @param {string} apiPath - The API path from city config

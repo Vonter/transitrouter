@@ -1229,7 +1229,7 @@
       "filter": [
         "match",
         ["get", "class"],
-        ["city", "continent", "country", "state", "town", "village"],
+        ["city", "continent", "country", "state", "town"],
         false,
         true
       ],
@@ -1253,7 +1253,7 @@
       "type": "symbol",
       "source": "openmaptiles",
       "source-layer": "place",
-      "minzoom": 9,
+      "minzoom": 13,
       "filter": ["==", ["get", "class"], "village"],
       "layout": {
         "icon-allow-overlap": true,

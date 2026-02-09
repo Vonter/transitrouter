@@ -1,4 +1,15 @@
 import { getApiUrl } from '../city-config.js';
+import { LIVE_DATA_MAX_AGE_MS } from './fetchArrivals.js';
+
+/**
+ * Return true if a vehicle has lastRefreshMs and it is older than LIVE_DATA_MAX_AGE_MS (15 min).
+ * @param {Object} vehicle - Vehicle object (may have lastRefreshMs)
+ * @returns {boolean}
+ */
+export function isVehicleStale(vehicle) {
+  if (!vehicle || vehicle.lastRefreshMs == null) return false;
+  return Date.now() - Number(vehicle.lastRefreshMs) > LIVE_DATA_MAX_AGE_MS;
+}
 
 /**
  * Fetch live vehicles data from the vehicles API
@@ -98,6 +109,8 @@ export function vehiclesToGeoJSON(vehicles) {
 
   const features = vehicles
     .filter((vehicle) => {
+      // Exclude vehicles with lastRefreshMs older than 15 minutes
+      if (isVehicleStale(vehicle)) return false;
       // Only include vehicles with valid location data
       if (
         !vehicle.location ||
@@ -203,16 +216,22 @@ export function createVehicleTracker({
       results.forEach(({ serviceNumber, response }) => {
         if (response) {
           if (response.vehicles) {
-            // Check if vehicles have location data
+            // Exclude vehicles with lastRefreshMs older than 15 minutes, then check location
             const vehiclesWithLocation = response.vehicles.filter(
               (v) =>
+                !isVehicleStale(v) &&
                 v.location &&
                 typeof v.location.lat === 'number' &&
                 typeof v.location.lng === 'number',
             );
 
-            currentVehicles.set(serviceNumber, response.vehicles);
-            allVehicles.push(...response.vehicles);
+            currentVehicles.set(
+              serviceNumber,
+              response.vehicles.filter((v) => !isVehicleStale(v)),
+            );
+            allVehicles.push(
+              ...response.vehicles.filter((v) => !isVehicleStale(v)),
+            );
           }
         }
       });

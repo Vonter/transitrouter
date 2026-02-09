@@ -282,6 +282,13 @@ a:active {
 #service-popover header {
   flex-shrink: 0;
   padding: 12px 40px 0 12px;
+  position: relative;
+}
+
+#stop-popover header .live-data-loading-container,
+#service-popover header .live-data-loading-container {
+  top: 12px;
+  right: 40px;
 }
 #stop-popover h1,
 #between-popover h1,
@@ -662,11 +669,21 @@ a:active {
   border-bottom: 1px solid rgba(0, 0, 0, 0.1);
   min-height: 60px;
   display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-input-wrapper {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
 .popover-search input[type='search'] {
   display: block;
-  width: 100%;
+  flex: 1;
   appearance: none;
   height: 30px;
   line-height: 30px;
@@ -674,6 +691,10 @@ a:active {
   border: 0;
   background-color: rgba(0, 0, 0, 0.1);
   padding: 0 7px;
+  padding-right: 40px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 .popover-search input[type='search']:focus {
   background-color: rgba(255, 255, 255, 0.5);
@@ -685,25 +706,36 @@ a:active {
   outline-color: #007aff;
 }
 
-.popover-search button {
+.search-input-wrapper .cancel-btn {
   display: none;
+  position: absolute;
+  right: 4px;
   height: 30px;
-  padding: 0 0 0 14px;
-  position: relative;
-  color: #007aff;
+  width: 30px;
+  padding: 0;
+  flex-shrink: 0;
+  color: #000;
   cursor: pointer;
   appearance: none;
   border: 0;
   margin: 0;
   background: transparent none;
   -webkit-tap-highlight-color: transparent;
-  white-space: nowrap;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
 }
-.popover.expand .popover-search button {
-  display: inline-block;
+.popover.expand .search-input-wrapper .cancel-btn {
+  display: flex;
 }
-.popover-search button:active {
+.search-input-wrapper .cancel-btn:active {
   opacity: 0.4;
+  background-color: rgba(0, 0, 0, 0.1);
+}
+.search-input-wrapper .cancel-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
 }
 
 /* Geolocate button in search bar (mobile only) */
@@ -715,8 +747,9 @@ a:active {
   height: 30px;
   flex-shrink: 0;
   padding: 0;
-  margin-right: 8px;
+  margin-left: 8px;
   border-radius: 10px;
+  border: 0;
   background-color: rgba(0, 0, 0, 0.1);
   color: #333;
   transition: color 0.3s;
@@ -1333,6 +1366,7 @@ a.service-tag:hover {
   background-color: rgba(0, 0, 0, 0.1);
   color: rgba(0, 0, 0, 0.45);
   text-decoration: none;
+  z-index: 10;
 }
 .popover-close:hover {
   color: rgba(0, 0, 0, 0.75);
@@ -1935,4 +1969,70 @@ input[type='checkbox']:checked:after {
 #locale-selector select:active,
 #locale-selector select:focus {
   background-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Live data loading indicator */
+.live-data-loading-container {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 5;
+  cursor: help;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.live-data-loading {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #1a1a1a;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.live-data-warning {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  font-size: 16px;
+  line-height: 1;
+  color: #f59e0b;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.live-data-loading-container::after {
+  content: attr(title);
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 8px;
+  padding: 6px 10px;
+  background-color: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+  border-radius: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  z-index: 1000;
+}
+
+.live-data-loading-container:hover::after,
+.live-data-loading-container.show-tooltip::after {
+  opacity: 1;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }

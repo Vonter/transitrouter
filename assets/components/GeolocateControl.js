@@ -219,7 +219,7 @@ export default class GeolocateControl {
           if (e.code === 1) {
             // PERMISSION_DENIED
             alert(
-              'Looks like location tracking is blocked on your browser. Please enable it in the settings to use this feature.',
+              'Looks like location tracking is blocked on your browser. Please enable it in the settings to use this feature. For the best experience, choose "Always" when prompted for location access.',
             );
           } else {
             if (this._retries > 3) return;

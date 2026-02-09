@@ -25,6 +25,7 @@ import { toGeoJSON } from '@mapbox/polyline';
 
 import { encode } from './utils/specialID';
 import fetchCache from './utils/fetchCache';
+import { filterStaleArrivalsFromService } from './utils/fetchArrivals';
 import setIcon from '../utils/setIcon';
 import { stopMetrics } from './utils/metricsPage';
 
@@ -337,10 +338,11 @@ const convertScheduleToArrival = (scheduleData) => {
 };
 
 // API functions
-const fetchLiveArrivalData = async (stationId) => {
+const fetchLiveArrivalData = async (stationId, signal) => {
   try {
     const response = await fetch(
       `${getApiUrl(cityConfig?.liveArrivals?.apiPath)}?stationid=${stationId}`,
+      { signal },
     );
     if (!response.ok) {
       console.error(`Live arrival API error for ${city}:`, response.status);
@@ -349,7 +351,10 @@ const fetchLiveArrivalData = async (stationId) => {
     const result = await response.json();
     return result.services?.length > 0 ? result.services : null;
   } catch (error) {
-    console.error(`Live arrival API error for ${city}:`, error);
+    // Don't log AbortError (user cancellation)
+    if (error.name !== 'AbortError') {
+      console.error(`Live arrival API error for ${city}:`, error);
+    }
     return null;
   }
 };
@@ -772,6 +777,7 @@ function ArrivalTimes() {
   const [busStop, setBusStop] = useState(null);
   const [stopsData, setStopsData] = useState(null);
   const [fetchServicesStatus, setFetchServicesStatus] = useState(null);
+  const [fetchServicesError, setFetchServicesError] = useState(false);
   const [services, setServices] = useState(null);
   const [servicesData, setServicesData] = useState(null);
   const [pinnedServices, setPinnedServices] = useState(() => {
@@ -800,6 +806,7 @@ function ArrivalTimes() {
   const vehicleLocationCache = useRef(new Map());
   const arrivalsTimeoutRef = useRef(null);
   const arrivalsRAFRef = useRef(null);
+  const fetchAbortControllerRef = useRef(null);
 
   // Load initial data
   useEffect(() => {
@@ -849,11 +856,20 @@ function ArrivalTimes() {
 
   // Update document title
   useEffect(() => {
+    const cityConfig = getConfigForCity(city);
+    const disableStopID = cityConfig?.disableStopID || false;
+
     const title = busStop?.code
-      ? t('arrivals.titleStop', {
-          stopNumber: busStop.code,
-          stopName: busStop.name,
-        })
+      ? disableStopID
+        ? t('arrivals.titleStop', {
+            stopNumber:
+              busStop.name + (busStop.suffix ? ` ${busStop.suffix}` : ''),
+            stopName: '',
+          }).replace(': ', '') // Remove the colon and space when no stopName
+        : t('arrivals.titleStop', {
+            stopNumber: busStop.code,
+            stopName: busStop.name,
+          })
       : t('arrivals.title');
     document.title = title;
     document
@@ -905,6 +921,13 @@ function ArrivalTimes() {
   const fetchServices = (id) => {
     if (!id || window._PAUSED) return;
     setFetchServicesStatus('loading');
+    setFetchServicesError(false);
+
+    // Abort any ongoing fetch
+    if (fetchAbortControllerRef.current) {
+      fetchAbortControllerRef.current.abort();
+    }
+    fetchAbortControllerRef.current = new AbortController();
 
     if (!cityConfig?.liveArrivals?.enabled) {
       fetchScheduleFallback(id);
@@ -915,28 +938,39 @@ function ArrivalTimes() {
       setTimeout(() => reject(new Error('TIMEOUT')), 10000);
     });
 
-    const liveApiPromise = fetchLiveArrivalData(id);
+    const liveApiPromise = fetchLiveArrivalData(
+      id,
+      fetchAbortControllerRef.current.signal,
+    );
 
     Promise.race([liveApiPromise, timeoutPromise])
       .then((liveServices) => {
         if (liveServices?.length > 0) {
+          const filtered = liveServices
+            .map(filterStaleArrivalsFromService)
+            .filter((s) => s.next || (s.arrivals && s.arrivals.length > 0));
           setFetchServicesStatus('online');
-          setServices(liveServices);
+          setFetchServicesError(false);
+          setServices(filtered.length > 0 ? filtered : liveServices);
           isFirstFetchRef.current = false;
           scheduleRetry(id);
         } else {
-          console.log(
-            'Live API returned no data, falling back to static schedule',
-          );
-          fetchScheduleFallback(id);
+          console.log('Live API returned no data');
+          setFetchServicesError(false);
         }
       })
       .catch((error) => {
+        if (error.name === 'AbortError') {
+          setFetchServicesStatus(null);
+          setFetchServicesError(false);
+          return;
+        }
         if (error.message === 'TIMEOUT') {
           console.log('Live API timeout (1s), falling back to static schedule');
         } else {
           console.log('Live API error, falling back to static schedule');
         }
+        setFetchServicesError(true);
         fetchScheduleFallback(id);
 
         // Continue waiting for live API in background
@@ -947,6 +981,7 @@ function ArrivalTimes() {
                 'Live API response received, updating with live data',
               );
               setFetchServicesStatus('online');
+              setFetchServicesError(false);
               setServices(liveServices);
               isFirstFetchRef.current = false;
               scheduleRetry(id);
@@ -1450,9 +1485,64 @@ function ArrivalTimes() {
     <div>
       <div id="bus-stop-map" ref={mapContainer}></div>
       <h1>
+        {(fetchServicesStatus === 'loading' || fetchServicesError) && (
+          <span
+            class={`live-data-loading-container ${
+              fetchServicesError ? 'error' : ''
+            }`}
+            title={
+              fetchServicesError
+                ? 'Live data unavailable. Estimated based on timetable schedule.'
+                : 'Fetching live information'
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              const container = e.currentTarget;
+              container.classList.toggle('show-tooltip');
+              // Close tooltip when clicking outside
+              const closeTooltip = (event) => {
+                if (!container.contains(event.target)) {
+                  container.classList.remove('show-tooltip');
+                  document.removeEventListener('click', closeTooltip);
+                }
+              };
+              // Use setTimeout to avoid immediate closure
+              setTimeout(() => {
+                document.addEventListener('click', closeTooltip);
+              }, 0);
+            }}
+          >
+            {fetchServicesError ? (
+              <span class="live-data-warning">⚠</span>
+            ) : (
+              <span class="live-data-loading" />
+            )}
+          </span>
+        )}
         {t('arrivals.preHeading')}
         <b id="bus-stop-name">
-          <span class={`stop-tag ${fetchServicesStatus}`}>{code}</span> {name}
+          {(() => {
+            const cityConfig = getConfigForCity(city);
+            const disableStopID = cityConfig?.disableStopID || false;
+
+            if (disableStopID) {
+              return (
+                <>
+                  {name}
+                  {busStop.suffix && (
+                    <span class="stop-suffix"> {busStop.suffix}</span>
+                  )}
+                </>
+              );
+            } else {
+              return (
+                <>
+                  <span class={`stop-tag ${fetchServicesStatus}`}>{code}</span>{' '}
+                  {name}
+                </>
+              );
+            }
+          })()}
         </b>
       </h1>
       <table>

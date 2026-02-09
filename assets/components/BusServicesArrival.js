@@ -16,6 +16,7 @@ import { setRafInterval, clearRafInterval } from '../utils/rafInterval';
 import { timeDisplay, sortServices } from '../utils/bus';
 import { getConfigForCity, getApiUrl } from '../city-config';
 import fetchCache from '../utils/fetchCache';
+import { filterStaleArrivalsFromService } from '../utils/fetchArrivals';
 
 import ArrivalTimeText from './ArrivalTimeText';
 
@@ -84,10 +85,14 @@ export default function BusServicesArrival({
   active,
   showBusesOnMap,
   stopData, // Added to access destination groups
+  onLoadingChange, // Callback to notify parent of loading state
+  onErrorChange, // Callback to notify parent of error state
+  cancelRef, // Ref to expose cancel function to parent
 }) {
   if (!id) return;
   const { t } = useTranslation();
   const [isLoading, setIsLoading] = useState(false);
+  const [hasError, setHasError] = useState(false);
   const [servicesArrivals, setServicesArrivals] = useState({});
   const [servicesIssues, setServicesIssues] = useState([]);
   const [liveBusCount, setLiveBusCount] = useState(0);
@@ -96,20 +101,32 @@ export default function BusServicesArrival({
   const [scheduleData, setScheduleData] = useState(null);
   const route = getRoute();
 
-  let controller;
+  const controllerRef = useRef(null);
   const renderStopsTimeout = useRef();
   const fetchServices = useCallback(async () => {
     setIsLoading(true);
-    controller = new AbortController();
+    setHasError(false);
+    onLoadingChange?.(true);
+    controllerRef.current = new AbortController();
 
     try {
       // Get city config to find the arrivals API path
       const cityConfig = getConfigForCity(route.city);
       const arrivalsApiPath = cityConfig?.liveArrivals?.apiPath;
+
+      if (!arrivalsApiPath) {
+        // No API path configured, skip live arrivals
+        setIsLoading(false);
+        setHasError(false);
+        onErrorChange?.(false);
+        onLoadingChange?.(false);
+        return;
+      }
+
       const apiUrl = `${getApiUrl(arrivalsApiPath)}?stationid=${id}`;
 
       const response = await fetch(apiUrl, {
-        signal: controller.signal,
+        signal: controllerRef.current.signal,
       });
 
       if (!response.ok) {
@@ -118,19 +135,25 @@ export default function BusServicesArrival({
 
       const results = await response.json();
 
-      if (results) {
+      if (results && results.services && results.services.length > 0) {
         const servicesArrivals = {};
-        const { services } = results;
+        const services = results.services
+          .map(filterStaleArrivalsFromService)
+          .filter((s) => s.next || (s.arrivals && s.arrivals.length > 0));
         services.forEach((service) => {
           if (
-            !servicesArrivals[service.no] ||
-            servicesArrivals[service.no] > service.next.duration_ms // if there is a service with multiple directions, we only want the one with the shortest duration
+            service.next &&
+            (!servicesArrivals[service.no] ||
+              servicesArrivals[service.no] > service.next.duration_ms) // if there is a service with multiple directions, we only want the one with the shortest duration
           ) {
             servicesArrivals[service.no] = service.next.duration_ms;
           }
         });
         setServicesArrivals(servicesArrivals);
         setIsLoading(false);
+        setHasError(false);
+        onErrorChange?.(false);
+        onLoadingChange?.(false);
 
         // check for issues (duplicate services, multiple visits)
         const servicesWithIssues = [];
@@ -255,12 +278,19 @@ export default function BusServicesArrival({
         }
       }
     } catch (error) {
-      // Silent fail
-      console.error('Error fetching arrivals:', error);
+      if (error.name !== 'AbortError') {
+        console.error('Error fetching arrivals:', error);
+        setHasError(true);
+        onErrorChange?.(true);
+        setIsLoading(false);
+        onLoadingChange?.(false);
+        return;
+      }
     } finally {
       setIsLoading(false);
+      onLoadingChange?.(false);
     }
-  }, [id]);
+  }, [id, onLoadingChange]);
 
   // Fetch schedule data to get trip_count for each service
   useEffect(() => {
@@ -286,11 +316,36 @@ export default function BusServicesArrival({
     }
     return () => {
       clearRafInterval(intervalID);
-      controller?.abort();
+      controllerRef.current?.abort();
       clearTimeout(renderStopsTimeout.current);
       removeMapBuses(map);
     };
   }, [id, active, showBusesOnMap]);
+
+  // Expose cancel function via ref
+  useEffect(() => {
+    if (cancelRef) {
+      cancelRef.current = () => {
+        if (controllerRef.current) {
+          controllerRef.current.abort();
+          setIsLoading(false);
+          setHasError(false);
+          onLoadingChange?.(false);
+          onErrorChange?.(false);
+        }
+      };
+    }
+    return () => {
+      if (cancelRef) {
+        cancelRef.current = null;
+      }
+    };
+  }, [onLoadingChange, onErrorChange]);
+
+  // Notify parent of error state changes
+  useEffect(() => {
+    onErrorChange?.(hasError);
+  }, [hasError, onErrorChange]);
 
   const servicesValue = route.value?.split('~') || [];
 
@@ -472,11 +527,6 @@ export default function BusServicesArrival({
             </div>
           )}
         </>
-      )}
-      {oneServiceHasMultipleDirections && (
-        <div class="callout warning iconic">
-          {t('stop.multipleDirectionsWarning')}
-        </div>
       )}
       {showBusesOnMap && liveBusCount > 0 && (
         <p style={{ marginTop: 5, fontSize: '.8em' }}>
