@@ -97,12 +97,27 @@ def apply_city_mapping_generation(
 # Default minimum number of trips per day for a route to be included
 DEFAULT_MIN_TRIPS = 2
 
+def _gtfs_time_to_seconds(col: str) -> pl.Expr:
+    """Parse a GTFS HH:MM:SS time column (supports >24h) into total seconds."""
+    parts = pl.col(col).str.split(':')
+    return (
+        parts.list.get(0).cast(pl.Int64) * 3600
+        + parts.list.get(1).cast(pl.Int64) * 60
+        + parts.list.get(2).cast(pl.Int64)
+    )
+
+
 def get_valid_routes(gtfs_data: Dict[str, pl.DataFrame], min_trips: int) -> Set[str]:
-    """Get routes that have at least min_trips in at least one direction."""
+    """Get routes that have at least min_trips in at least one direction.
+
+    For frequency-based feeds (frequencies.txt present) each template trip is
+    expanded to the number of actual departures implied by its frequency windows
+    before applying the threshold.
+    """
     trips_df = gtfs_data['trips']
     routes_df = gtfs_data['routes']
     has_direction = 'direction_id' in trips_df.columns
-    
+
     # Normalize direction_id
     if has_direction:
         trips_df = trips_df.with_columns(
@@ -111,8 +126,8 @@ def get_valid_routes(gtfs_data: Dict[str, pl.DataFrame], min_trips: int) -> Set[
     else:
         # Use UP/DOWN from route names
         trips_df = trips_df.join(
-            routes_df.select(['route_id', 'route_long_name']), 
-            on='route_id', 
+            routes_df.select(['route_id', 'route_long_name']),
+            on='route_id',
             how='left'
         ).with_columns([
             pl.col('route_long_name').str.to_uppercase().alias('route_upper'),
@@ -123,16 +138,46 @@ def get_valid_routes(gtfs_data: Dict[str, pl.DataFrame], min_trips: int) -> Set[
             .otherwise(pl.lit("0"))
             .alias('direction')
         ])
-    
-    # Count trips per route and direction
-    trip_counts = trips_df.group_by(['route_id', 'direction']).agg(
-        pl.len().alias('count')
-    ).pivot(
-        values='count',
-        index='route_id',
-        columns='direction',
-        aggregate_function='first'
-    ).fill_null(0)
+
+    # Build per-trip departure counts, expanding frequency-based trips
+    freq_df = gtfs_data.get('frequencies')
+    if freq_df is not None and len(freq_df) > 0 and 'trip_id' in freq_df.columns:
+        # Compute departures per frequency window: floor((end - start) / headway)
+        freq_counts = (
+            freq_df.select(['trip_id', 'start_time', 'end_time', 'headway_secs'])
+            .with_columns([
+                _gtfs_time_to_seconds('start_time').alias('start_sec'),
+                _gtfs_time_to_seconds('end_time').alias('end_sec'),
+                pl.col('headway_secs').cast(pl.Int64).alias('headway'),
+            ])
+            .with_columns(
+                ((pl.col('end_sec') - pl.col('start_sec')) / pl.col('headway'))
+                .floor().cast(pl.Int64).clip(1, None).alias('dep_count')
+            )
+            .group_by('trip_id').agg(pl.col('dep_count').sum().alias('freq_trips'))
+        )
+        # Each non-frequency trip contributes 1; frequency trips contribute their count
+        trips_with_counts = trips_df.join(freq_counts, on='trip_id', how='left').with_columns(
+            pl.col('freq_trips').fill_null(1)
+        )
+        trip_counts = trips_with_counts.group_by(['route_id', 'direction']).agg(
+            pl.col('freq_trips').sum().alias('count')
+        ).pivot(
+            values='count',
+            index='route_id',
+            columns='direction',
+            aggregate_function='first'
+        ).fill_null(0)
+    else:
+        # Count trips per route and direction
+        trip_counts = trips_df.group_by(['route_id', 'direction']).agg(
+            pl.len().alias('count')
+        ).pivot(
+            values='count',
+            index='route_id',
+            columns='direction',
+            aggregate_function='first'
+        ).fill_null(0)
     
     # Return routes with at least min_trips in any direction
     def compute_valid(min_required: int) -> Set[str]:
@@ -342,7 +387,7 @@ def process_routes(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str]) -
     routes_df = gtfs_data['routes']
     has_short_name = 'route_short_name' in routes_df.columns
     route_key_map = {
-        row['route_id']: (row.get('route_short_name') or '').strip() or row['route_id']
+        row['route_id']: (str(row['route_short_name']).strip() if row.get('route_short_name') else row['route_id'])
         for row in routes_df.select(
             ['route_id'] + (['route_short_name'] if has_short_name else [])
         ).to_dicts()
@@ -398,7 +443,10 @@ def process_services(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str])
     # Process each route
     for route_idx, route in enumerate(routes_df.to_dicts(), 1):
         route_id = route['route_id']
-        route_key = (route.get('route_short_name') or '').strip() or route_id
+        if route.get('route_short_name'):
+            route_key = (str(route.get('route_short_name'))).strip()
+        else:
+            route_key = route_id
         route_name = route['route_long_name']
 
         # Filter trips for this route

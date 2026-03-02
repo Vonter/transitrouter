@@ -113,34 +113,40 @@ def load_gtfs_data_from_multiple_files(gtfs_paths: List[str], include_shapes: bo
         'routes': [],
         'trips': [],
         'stop_times': [],
-        'stops': []
+        'stops': [],
+        'frequencies': [],
     }
-    
+
     if include_shapes:
         all_data['shapes'] = []
-    
+
     for gtfs_path in gtfs_paths:
         print(f"  Loading {Path(gtfs_path).name}...")
         # Read routes
         routes_df = read_gtfs_file(gtfs_path, 'routes.txt')
         if len(routes_df) > 0:
             all_data['routes'].append(routes_df)
-        
+
         # Read trips
         trips_df = read_gtfs_file(gtfs_path, 'trips.txt')
         if len(trips_df) > 0:
             all_data['trips'].append(trips_df)
-        
+
         # Read stop_times
         stop_times_df = read_gtfs_file(gtfs_path, 'stop_times.txt')
         if len(stop_times_df) > 0:
             all_data['stop_times'].append(stop_times_df)
-        
+
         # Read stops
         stops_df = read_gtfs_file(gtfs_path, 'stops.txt')
         if len(stops_df) > 0:
             all_data['stops'].append(stops_df)
-        
+
+        # Read frequencies (optional, used by frequency-based GTFS feeds)
+        freq_df = read_gtfs_file(gtfs_path, 'frequencies.txt')
+        if len(freq_df) > 0:
+            all_data['frequencies'].append(freq_df)
+
         # Check for shapes file if requested
         if include_shapes:
             with zipfile.ZipFile(gtfs_path) as z:

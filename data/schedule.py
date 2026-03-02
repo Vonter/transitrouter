@@ -67,19 +67,118 @@ def prepare_trips_with_directions(trips_df: pl.DataFrame, routes_df: pl.DataFram
     return trips_df
 
 
-def count_trips_per_route(trips_df: pl.DataFrame) -> Dict[str, Dict[str, int]]:
-    """Count the number of trips per route and direction using vectorized operations."""
-    # Group by route_id and direction, then count
-    counts = trips_df.group_by(['route_id', 'direction']).agg(
-        pl.len().alias('count')
-    )
-    
-    # Convert to nested dictionary
-    trip_counts = defaultdict(lambda: {"0": 0, "1": 0})
-    for row in counts.iter_rows(named=True):
-        trip_counts[row['route_id']][row['direction']] = row['count']
-    
+def _gtfs_time_to_seconds(time_str: str) -> int:
+    """Parse a GTFS HH:MM:SS time string (supports >24h) into total seconds."""
+    parts = time_str.split(':')
+    return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+
+
+def _seconds_to_time(secs: int) -> str:
+    """Format total seconds as HH:MM:SS (hours may exceed 24)."""
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def count_trips_per_route(trips_df: pl.DataFrame, freq_df: Optional[pl.DataFrame] = None) -> Dict[str, Dict[str, int]]:
+    """Count trips per route and direction, expanding frequency-based trips."""
+    if freq_df is not None and len(freq_df) > 0 and 'trip_id' in freq_df.columns:
+        # Compute departures per frequency window
+        freq_counts: Dict[str, int] = defaultdict(int)
+        for row in freq_df.select(['trip_id', 'start_time', 'end_time', 'headway_secs']).to_dicts():
+            try:
+                start = _gtfs_time_to_seconds(row['start_time'])
+                end = _gtfs_time_to_seconds(row['end_time'])
+                headway = int(row['headway_secs'])
+                if headway > 0:
+                    freq_counts[row['trip_id']] += max(1, (end - start) // headway)
+            except (ValueError, KeyError, TypeError):
+                pass
+
+        trip_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: {"0": 0, "1": 0})
+        for row in trips_df.select(['trip_id', 'route_id', 'direction']).to_dicts():
+            count = freq_counts.get(row['trip_id'], 1)
+            trip_counts[row['route_id']][row['direction']] += count
+    else:
+        counts = trips_df.group_by(['route_id', 'direction']).agg(pl.len().alias('count'))
+        trip_counts = defaultdict(lambda: {"0": 0, "1": 0})
+        for row in counts.iter_rows(named=True):
+            trip_counts[row['route_id']][row['direction']] = row['count']
+
     return dict(trip_counts)
+
+
+def expand_frequency_stop_times(stop_times_df: pl.DataFrame, freq_df: pl.DataFrame) -> pl.DataFrame:
+    """Expand frequency-based template trips into actual per-departure stop times.
+
+    For each trip defined in frequencies.txt the template stop times are offset
+    by n*headway for every departure in every frequency window, replacing the
+    single template row set with all real departure times.
+    """
+    freq_trip_ids = set(freq_df['trip_id'].to_list())
+    if not freq_trip_ids:
+        return stop_times_df
+
+    freq_stop_times = stop_times_df.filter(pl.col('trip_id').is_in(list(freq_trip_ids)))
+    non_freq_stop_times = stop_times_df.filter(~pl.col('trip_id').is_in(list(freq_trip_ids)))
+
+    if len(freq_stop_times) == 0:
+        return stop_times_df
+
+    # Build trip_id -> list of {stop_id, stop_sequence, arr_offset, dep_offset}
+    # where offsets are in seconds relative to the template's first departure
+    trip_templates: Dict[str, List[Dict]] = defaultdict(list)
+    for row in freq_stop_times.sort('stop_sequence').to_dicts():
+        trip_templates[row['trip_id']].append(row)
+
+    # Build trip_id -> list of frequency windows
+    trip_freqs: Dict[str, List[Dict]] = defaultdict(list)
+    for row in freq_df.select(['trip_id', 'start_time', 'end_time', 'headway_secs']).to_dicts():
+        trip_freqs[row['trip_id']].append(row)
+
+    expanded_rows: List[Dict] = []
+    original_cols = stop_times_df.columns
+
+    for trip_id, stops in trip_templates.items():
+        # Reference time is the departure of the first stop in the template
+        first_stop = stops[0]
+        ref_time_str = first_stop.get('departure_time') or first_stop.get('arrival_time') or '00:00:00'
+        ref_sec = _gtfs_time_to_seconds(ref_time_str)
+
+        # Compute per-stop offsets from the reference departure
+        stop_offsets = []
+        for stop in stops:
+            arr_str = stop.get('arrival_time') or stop.get('departure_time') or ref_time_str
+            dep_str = stop.get('departure_time') or stop.get('arrival_time') or ref_time_str
+            stop_offsets.append({
+                **stop,
+                '_arr_offset': _gtfs_time_to_seconds(arr_str) - ref_sec,
+                '_dep_offset': _gtfs_time_to_seconds(dep_str) - ref_sec,
+            })
+
+        for freq_row in trip_freqs.get(trip_id, []):
+            try:
+                start_sec = _gtfs_time_to_seconds(freq_row['start_time'])
+                end_sec = _gtfs_time_to_seconds(freq_row['end_time'])
+                headway = int(freq_row['headway_secs'])
+            except (ValueError, KeyError, TypeError):
+                continue
+
+            n = 0
+            while start_sec + n * headway < end_sec:
+                dep_base = start_sec + n * headway
+                for stop in stop_offsets:
+                    new_row = {col: stop.get(col) for col in original_cols}
+                    new_row['arrival_time'] = _seconds_to_time(dep_base + stop['_arr_offset'])
+                    new_row['departure_time'] = _seconds_to_time(dep_base + stop['_dep_offset'])
+                    expanded_rows.append(new_row)
+                n += 1
+
+    if not expanded_rows:
+        return stop_times_df
+
+    expanded_df = pl.DataFrame(expanded_rows, schema={col: stop_times_df[col].dtype for col in original_cols})
+    return pl.concat([non_freq_stop_times, expanded_df])
 
 
 def format_time(time_str: str) -> str:
@@ -154,39 +253,40 @@ def process_schedules(gtfs_paths: list[str], output_dir: str, min_trips: int = D
     # Prepare trips with standardized directions
     print("Processing trip directions...")
     trips_df = prepare_trips_with_directions(trips_df, routes_df)
-    
-    # Filter routes by minimum trips
+
+    freq_df = gtfs_data.get('frequencies')
+
+    # Filter routes by minimum trips (expand frequency-based trips for accurate counts)
     print("Filtering routes by minimum trips...")
-    trip_counts = count_trips_per_route(trips_df)
-    
+    trip_counts = count_trips_per_route(trips_df, freq_df)
+
     # Return routes with at least min_trips in any direction
     def compute_valid(min_required: int) -> set:
         valid = set()
         for route_id, counts in trip_counts.items():
-            # Check all direction counts
             direction_counts = [counts.get("0", 0), counts.get("1", 0)]
             if any(c >= min_required for c in direction_counts):
                 valid.add(route_id)
         return valid
-    
+
     valid_routes = compute_valid(min_trips)
     # Fallback for sparse datasets: if nothing qualifies, relax to 1
     if not valid_routes and min_trips > 1:
         valid_routes = compute_valid(1)
-    
+
     print(f"Found {len(valid_routes)} valid routes out of {len(routes_df)} total routes")
-    
+
     # Filter to only valid routes
     routes_df = routes_df.filter(pl.col('route_id').is_in(list(valid_routes))).clone()
     trips_df = trips_df.filter(pl.col('route_id').is_in(list(valid_routes))).clone()
-    
+
     # Get route endpoints in batch
     print("Computing route endpoints...")
     endpoints = get_route_endpoints_batch(trips_df, stop_times_df)
-    
+
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Build trip_id to route+direction mapping for fast lookup
     print("Building trip lookup table...")
     trip_lookup = {}
@@ -195,11 +295,16 @@ def process_schedules(gtfs_paths: list[str], output_dir: str, min_trips: int = D
             'route_id': row['route_id'],
             'direction': row['direction']
         }
-    
-    # Filter stop_times to only include trips from valid routes
+
+    # Filter stop_times to only include trips from valid routes, then expand
+    # frequency-based template trips into actual per-departure stop times
     print("Filtering stop times...")
     valid_trip_ids = set(trips_df['trip_id'].to_list())
     stop_times_df = stop_times_df.filter(pl.col('trip_id').is_in(list(valid_trip_ids))).clone()
+
+    if freq_df is not None and len(freq_df) > 0:
+        print("Expanding frequency-based stop times...")
+        stop_times_df = expand_frequency_stop_times(stop_times_df, freq_df)
     
     # Process stop times - use iter_rows for better performance
     print("Processing stop times...")
