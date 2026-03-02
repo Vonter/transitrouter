@@ -703,21 +703,30 @@ function drawRouteDiagram(
     MAX_STOP_STEP_PCT,
   );
 
-  // Identify the last displayed stop for each route (used for terminal icons).
-  const terminalStopIds = new Set();
-  routes.forEach((route) => {
-    const curNorm = normalizeStopId(currentStopId);
-    const curIdx = route.stopSequence.findIndex((id) =>
-      matchesStop(id, curNorm),
-    );
-    if (curIdx < 0) return;
-    const forwardStrs = new Set(route.stopSequence.slice(curIdx).map(String));
-    let lastInDiagram = null;
-    for (const sid of orderedStops) {
-      if (sid === currentStopId) continue;
-      if (forwardStrs.has(String(sid))) lastInDiagram = sid;
-    }
-    if (lastInDiagram) terminalStopIds.add(lastInDiagram);
+  // Identify the last displayed stop for each route, keyed by cluster index.
+  // terminalClusterMap: stopId → Set<clusterIndex> so that a stop is only
+  // rendered as a terminal on the cluster rows whose routes actually end there,
+  // not on rows where it's merely an intermediate stop for a longer route.
+  const terminalClusterMap = new Map();
+  clusters.forEach((cluster, ci) => {
+    cluster.forEach((route) => {
+      const curNorm = normalizeStopId(currentStopId);
+      const curIdx = route.stopSequence.findIndex((id) =>
+        matchesStop(id, curNorm),
+      );
+      if (curIdx < 0) return;
+      const forwardStrs = new Set(route.stopSequence.slice(curIdx).map(String));
+      let lastInDiagram = null;
+      for (const sid of orderedStops) {
+        if (sid === currentStopId) continue;
+        if (forwardStrs.has(String(sid))) lastInDiagram = sid;
+      }
+      if (lastInDiagram) {
+        if (!terminalClusterMap.has(lastInDiagram))
+          terminalClusterMap.set(lastInDiagram, new Set());
+        terminalClusterMap.get(lastInDiagram).add(ci);
+      }
+    });
   });
 
   // Compute effective cluster spacing — must be tall enough to fit label rows,
@@ -947,52 +956,71 @@ function drawRouteDiagram(
     if (x === undefined) return;
     const sorted = Array.from(clusterSet).sort((a, b) => a - b);
     const segs = getContiguousSegments(sorted);
-    const isTerminal = terminalStopIds.has(sid);
+    const terminalClusters = terminalClusterMap.get(sid);
 
-    if (isTerminal) {
-      // Filled blue circle; connect multi-cluster spans with a thin vertical line
-      segs.forEach(([first, last]) => {
-        if (first !== last) {
-          pillsG
-            .append('line')
-            .attr('x1', x)
-            .attr('y1', clusterY(first))
-            .attr('x2', x)
-            .attr('y2', clusterY(last))
-            .attr('stroke', C.primary)
-            .attr('stroke-width', 2);
+    segs.forEach(([first, last]) => {
+      // Split the contiguous cluster segment into runs of the same marker type
+      // (terminal vs non-terminal) so each run can be drawn independently.
+      const runs = [];
+      let runStart = first;
+      let runIsTerminal = terminalClusters?.has(first) ?? false;
+      for (let ci = first + 1; ci <= last; ci++) {
+        const ciIsTerminal = terminalClusters?.has(ci) ?? false;
+        if (ciIsTerminal !== runIsTerminal) {
+          runs.push({
+            start: runStart,
+            end: ci - 1,
+            isTerminal: runIsTerminal,
+          });
+          runStart = ci;
+          runIsTerminal = ciIsTerminal;
         }
-        for (let ci = first; ci <= last; ci++) {
+      }
+      runs.push({ start: runStart, end: last, isTerminal: runIsTerminal });
+
+      runs.forEach(({ start, end, isTerminal }) => {
+        if (isTerminal) {
+          // Filled blue circle; connect multi-row spans with a thin vertical line
+          if (start !== end) {
+            pillsG
+              .append('line')
+              .attr('x1', x)
+              .attr('y1', clusterY(start))
+              .attr('x2', x)
+              .attr('y2', clusterY(end))
+              .attr('stroke', C.primary)
+              .attr('stroke-width', 2);
+          }
+          for (let ci = start; ci <= end; ci++) {
+            pillsG
+              .append('circle')
+              .attr('cx', x)
+              .attr('cy', clusterY(ci))
+              .attr('r', TERMINAL_RADIUS)
+              .attr('fill', C.primary)
+              .append('title')
+              .text(getStopName(sid, stopsData));
+          }
+        } else {
+          // White pill spanning all non-terminal rows in this run
+          const pillW = PILL_W_SMALL;
+          const y1 = clusterY(start) - PILL_OVERHANG;
+          const y2 = clusterY(end) + PILL_OVERHANG;
           pillsG
-            .append('circle')
-            .attr('cx', x)
-            .attr('cy', clusterY(ci))
-            .attr('r', TERMINAL_RADIUS)
-            .attr('fill', C.primary)
+            .append('rect')
+            .attr('x', x - pillW / 2)
+            .attr('y', y1)
+            .attr('width', pillW)
+            .attr('height', y2 - y1)
+            .attr('rx', pillW / 2)
+            .attr('fill', C.white)
+            .attr('stroke', C.pillStroke)
+            .attr('stroke-width', 1)
             .append('title')
             .text(getStopName(sid, stopsData));
         }
       });
-    } else {
-      // Consistent pill width for all non-terminal stop markers.
-      const pillW = PILL_W_SMALL;
-      segs.forEach(([first, last]) => {
-        const y1 = clusterY(first) - PILL_OVERHANG;
-        const y2 = clusterY(last) + PILL_OVERHANG;
-        pillsG
-          .append('rect')
-          .attr('x', x - pillW / 2)
-          .attr('y', y1)
-          .attr('width', pillW)
-          .attr('height', y2 - y1)
-          .attr('rx', pillW / 2)
-          .attr('fill', C.white)
-          .attr('stroke', C.pillStroke)
-          .attr('stroke-width', 1)
-          .append('title')
-          .text(getStopName(sid, stopsData));
-      });
-    }
+    });
   });
 
   // ── Current-stop pill (spans all cluster rows) ───────────────────────────────
@@ -1028,7 +1056,7 @@ function drawRouteDiagram(
     const x = stopXMap[sid];
     const clusterArr = Array.from(stopClusters[sid]);
     const topCluster = Math.min(...clusterArr);
-    const isTermStop = terminalStopIds.has(sid);
+    const isTermStop = terminalClusterMap.get(sid)?.has(topCluster) ?? false;
     const overhang = isTermStop ? TERMINAL_RADIUS : PILL_OVERHANG;
     const lines = splitLabelName(name);
     rawLabels.push({

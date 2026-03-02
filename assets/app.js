@@ -63,7 +63,6 @@ import stopImagePath from './images/stop.png';
 import stopEndImagePath from './images/stop-end.png';
 import mrtStationImagePath from './images/mrt-station.png';
 import lrtStationImagePath from './images/lrt-station.png';
-import openNewWindowBlueImagePath from './images/open-new-window-blue.svg';
 import passingRoutesBlueImagePath from './images/passing-routes-blue.svg';
 import iconSVGPath from '../icons/icon.svg';
 import busTinyImagePath from './images/bus-tiny-map.png';
@@ -92,90 +91,91 @@ const decodePolyline = (encoded) => decodePolylineCached(encoded, toGeoJSON);
 
 const $logo = document.getElementById('logo');
 
-// City dropdown functionality
-let cityDropdownVisible = false;
-const createCityDropdown = () => {
-  const dropdown = document.createElement('div');
-  dropdown.id = 'city-dropdown';
-  dropdown.style.cssText = `
-    position: fixed;
-    top: 72px;
-    left: 12px;
-    background: white;
-    border: 1px solid #ccc;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    min-width: 180px;
-    z-index: 1000;
-    display: none;
-    overflow: hidden;
+// City drawer functionality
+const createCityDrawer = () => {
+  const overlay = document.createElement('div');
+  overlay.id = 'city-drawer-overlay';
+
+  const drawer = document.createElement('div');
+  drawer.id = 'city-drawer';
+
+  const intro = document.createElement('div');
+  intro.className = 'drawer-intro';
+  intro.innerHTML = `
+    <h2>TransitRouter</h2>
+    <p>Explore transit stops and routes across cities on an interactive map.</p>
+    <p>Source code on <a href="https://github.com/Vonter/transitrouter" target="_blank">GitHub</a>. Inspired by <a href="https://busrouter.sg" target="_blank" rel="noopener">busrouter.sg</a></p>
   `;
+
+  const divider = document.createElement('hr');
+  divider.className = 'drawer-divider';
+
+  const citiesSection = document.createElement('div');
+  citiesSection.className = 'drawer-cities';
+
+  const citiesLabel = document.createElement('p');
+  citiesLabel.className = 'drawer-cities-label';
+  citiesSection.appendChild(citiesLabel);
+
+  const cityList = document.createElement('ul');
+  cityList.className = 'drawer-city-list';
 
   AVAILABLE_CITIES.forEach((cityCode) => {
     const cityConfig = getConfigForCity(cityCode);
-    const option = document.createElement('div');
-    option.textContent = cityConfig.city.name;
-    option.style.cssText = `
-      padding: 12px 16px;
-      cursor: pointer;
-      transition: background 0.2s;
-      border-bottom: 1px solid #f0f0f0;
-    `;
-    option.onmouseenter = () => (option.style.background = '#f7f7f7');
-    option.onmouseleave = () => (option.style.background = 'white');
-    option.onclick = (e) => {
-      e.stopPropagation();
-      hideDropdown();
-      // Force a full page reload to switch cities
+    const item = document.createElement('li');
+    item.className = 'drawer-city-item';
+
+    const flag = document.createElement('span');
+    flag.className = 'drawer-city-flag';
+    flag.textContent = cityConfig.city.flag || '';
+    flag.setAttribute('aria-hidden', 'true');
+
+    const name = document.createElement('span');
+    name.className = 'drawer-city-name';
+    name.textContent = cityConfig.city.name;
+
+    item.appendChild(flag);
+    item.appendChild(name);
+    item.onclick = () => {
+      hideDrawer();
       window.location.hash = `/${cityCode}/`;
       window.location.reload();
     };
-    dropdown.appendChild(option);
+    cityList.appendChild(item);
   });
 
-  // Remove border from last option
-  const lastOption = dropdown.lastChild;
-  if (lastOption) {
-    lastOption.style.borderBottom = 'none';
-  }
+  citiesSection.appendChild(cityList);
+  drawer.appendChild(intro);
+  drawer.appendChild(divider);
+  drawer.appendChild(citiesSection);
+  overlay.appendChild(drawer);
 
-  return dropdown;
+  overlay.addEventListener('click', (e) => {
+    if (!drawer.contains(e.target)) hideDrawer();
+  });
+
+  return overlay;
 };
 
-const dropdown = createCityDropdown();
-document.body.appendChild(dropdown);
+const drawerOverlay = createCityDrawer();
+document.body.appendChild(drawerOverlay);
 
-const showDropdown = () => {
-  dropdown.style.display = 'block';
-  cityDropdownVisible = true;
+const showDrawer = () => {
+  drawerOverlay.classList.add('open');
 };
 
-const hideDropdown = () => {
-  dropdown.style.display = 'none';
-  cityDropdownVisible = false;
-};
-
-const toggleDropdown = () => {
-  if (cityDropdownVisible) {
-    hideDropdown();
-  } else {
-    showDropdown();
-  }
+const hideDrawer = () => {
+  drawerOverlay.classList.remove('open');
 };
 
 $logo.addEventListener('click', (e) => {
   e.stopPropagation();
-  toggleDropdown();
+  drawerOverlay.classList.contains('open') ? hideDrawer() : showDrawer();
 });
 
-// Click outside to close
-document.addEventListener('click', (e) => {
-  if (
-    cityDropdownVisible &&
-    !dropdown.contains(e.target) &&
-    !$logo.contains(e.target)
-  ) {
-    hideDropdown();
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && drawerOverlay.classList.contains('open')) {
+    hideDrawer();
   }
 });
 
@@ -349,6 +349,28 @@ const App = () => {
   const [routeVehicles, setRouteVehicles] = useState([]);
   const [followedVehicleId, setFollowedVehicleId] = useState(null);
   const stopPopoverCancelRef = useRef(null);
+  const [stopPopoverDestFilter, setStopPopoverDestFilter] = useState(
+    () => new URLSearchParams(window.location.search).get('dest') ?? '',
+  );
+  const [stopPopoverDestFilterExact, setStopPopoverDestFilterExact] = useState(
+    () => new URLSearchParams(window.location.search).get('destExact') === '1',
+  );
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (stopPopoverDestFilter) {
+      url.searchParams.set('dest', stopPopoverDestFilter);
+      if (stopPopoverDestFilterExact) {
+        url.searchParams.set('destExact', '1');
+      } else {
+        url.searchParams.delete('destExact');
+      }
+    } else {
+      url.searchParams.delete('dest');
+      url.searchParams.delete('destExact');
+    }
+    history.replaceState(null, '', url);
+  }, [stopPopoverDestFilter, stopPopoverDestFilterExact]);
 
   const [showBetweenPopover, setShowBetweenPopover] = useState(false);
   const [betweenStartStop, setBetweenStartStop] = useState(null);
@@ -795,27 +817,6 @@ const App = () => {
         { fadein: false, hover: false },
       );
     });
-  };
-
-  const openBusArrival = (e) => {
-    if (e) e.preventDefault();
-    // Get URL from currentTarget (the anchor) instead of target (might be child element)
-    const url =
-      e.currentTarget?.href || e.target?.href || e.target?.closest('a')?.href;
-
-    // Check if we're in PWA standalone mode
-    const isStandalone =
-      window.navigator.standalone ||
-      window.matchMedia('(display-mode: standalone)').matches ||
-      document.referrer.includes('android-app://');
-
-    if (isStandalone && url) {
-      // In standalone mode, navigate in the same window
-      window.location.href = url;
-    } else if (url) {
-      // In regular browser mode, try to open in new window
-      window.open(url, '_blank');
-    }
   };
 
   const _showBetweenPopover = (data) => {
@@ -2650,6 +2651,24 @@ const App = () => {
   }, []);
 
   useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const kh = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      document.documentElement.style.setProperty(
+        '--keyboard-height',
+        `${kh}px`,
+      );
+    };
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!mapLoaded) return;
     const mapCanvas = map.getCanvas();
 
@@ -4241,6 +4260,61 @@ const App = () => {
                 })()}
               </h1>
             </header>
+            {stopPopoverData.services.length > 0 && (
+              <div class="dest-filter-wrapper">
+                <div class="dest-filter-row">
+                  <svg
+                    class="dest-filter-icon"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    width="16"
+                    height="16"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fill-rule="evenodd"
+                      d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                  <div class="dest-filter-input-wrapper">
+                    <input
+                      type="search"
+                      class="dest-filter"
+                      placeholder="Search for stop…"
+                      value={stopPopoverDestFilter}
+                      onInput={(e) => {
+                        setStopPopoverDestFilter(e.target.value);
+                        setStopPopoverDestFilterExact(false);
+                      }}
+                    />
+                    {stopPopoverDestFilter && (
+                      <button
+                        class="dest-filter-clear"
+                        onClick={() => {
+                          setStopPopoverDestFilter('');
+                          setStopPopoverDestFilterExact(false);
+                        }}
+                        aria-label="Clear search"
+                      >
+                        <svg
+                          viewBox="0 0 20 20"
+                          fill="currentColor"
+                          width="16"
+                          height="16"
+                        >
+                          <path
+                            fill-rule="evenodd"
+                            d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                            clip-rule="evenodd"
+                          />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
             <ScrollableContainer class="popover-scroll">
               <BusServicesArrival
                 active={showStopPopover}
@@ -4257,23 +4331,21 @@ const App = () => {
                 }}
                 onErrorChange={setStopPopoverError}
                 cancelRef={stopPopoverCancelRef}
+                destFilter={stopPopoverDestFilter}
+                destFilterExact={stopPopoverDestFilterExact}
+                onDestFilterChange={(value, exact = false) => {
+                  setStopPopoverDestFilter(value);
+                  setStopPopoverDestFilterExact(exact);
+                }}
               />
             </ScrollableContainer>
             <div class="popover-footer">
               <div class="popover-buttons alt-hide">
                 <a
-                  href={`/arrival/#${route.cityPrefix}/${stopPopoverData.number}`}
-                  target="_blank"
-                  onClick={openBusArrival}
+                  href={`/arrival/${stopPopoverDestFilter ? `?dest=${encodeURIComponent(stopPopoverDestFilter)}${stopPopoverDestFilterExact ? '&destExact=1' : ''}` : ''}#${route.cityPrefix}/${stopPopoverData.number}`}
                   class="popover-button primary"
                 >
-                  {t('glossary.busArrivals')}{' '}
-                  <img
-                    src={openNewWindowBlueImagePath}
-                    width="16"
-                    height="16"
-                    alt=""
-                  />
+                  {t('glossary.busArrivals')}
                 </a>
                 {stopPopoverData.services.length > 1 && (
                   <a

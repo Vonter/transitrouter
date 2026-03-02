@@ -18,3 +18,4 @@ data/*.zip
 data/**/schedule
 data/**/*.zip
 data/parse.log*
+**/__pycache__

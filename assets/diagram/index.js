@@ -262,45 +262,176 @@ const COLOR_KEYS = [
 
 // ── Data table ─────────────────────────────────────────────────────────────────
 
-function allRouteStops(routes) {
-  const seen = new Set();
-  const result = [];
-  for (const route of routes) {
-    for (const id of route.seqForGrouping || route.stopSequence || []) {
-      const sid = String(id);
-      if (!seen.has(sid)) {
-        seen.add(sid);
-        result.push(sid);
-      }
+// Contenteditable span that bypasses VDOM to avoid clobbering user edits.
+// Supports vertical writing-mode (for rotated stop labels) or normal text.
+function EditableText({ value, className, title, onChange }) {
+  const ref = useRef(null);
+  const isEditing = useRef(false);
+
+  useEffect(() => {
+    if (ref.current && !isEditing.current) {
+      ref.current.textContent = value;
     }
-  }
-  return result;
+  });
+
+  return (
+    <span
+      ref={ref}
+      class={className}
+      title={title}
+      contenteditable="true"
+      onFocus={() => {
+        isEditing.current = true;
+      }}
+      onBlur={(e) => {
+        isEditing.current = false;
+        const newVal = e.currentTarget.textContent.trim();
+        if (newVal && newVal !== value) onChange(newVal);
+        else if (!newVal) e.currentTarget.textContent = value;
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.currentTarget.blur();
+        }
+        if (e.key === 'Escape') {
+          isEditing.current = false;
+          e.currentTarget.textContent = value;
+          e.currentTarget.blur();
+        }
+      }}
+      onPaste={(e) => {
+        e.preventDefault();
+        const text = e.clipboardData.getData('text/plain').replace(/\n/g, ' ');
+        const sel = window.getSelection();
+        if (sel?.rangeCount) {
+          sel.deleteFromDocument();
+          sel.getRangeAt(0).insertNode(document.createTextNode(text));
+          sel.collapseToEnd();
+        }
+      }}
+    />
+  );
 }
 
-function DataTable({ diagramData, stopsData, onDataChange }) {
+// Controlled input with local state so the user can type freely; commits on blur.
+function RouteNameInput({ routeId, value, onChange }) {
+  const [local, setLocal] = useState(value);
+
+  useEffect(() => {
+    setLocal(value);
+  }, [value]);
+
+  return (
+    <input
+      type="text"
+      class="data-table-route-name-input"
+      value={local}
+      onInput={(e) => setLocal(e.target.value)}
+      onBlur={() => {
+        const trimmed = local.trim();
+        onChange(trimmed || routeId);
+        if (!trimmed) setLocal(routeId);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.target.blur();
+        if (e.key === 'Escape') {
+          setLocal(value);
+          e.target.blur();
+        }
+      }}
+    />
+  );
+}
+
+// Dropdown to pick a route from a list (mirrors StopSelector's UX).
+function RouteSelector({ routes, onSelect, onClose }) {
+  const [query, setQuery] = useState('');
+  const wrapperRef = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target))
+        onClose();
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const filtered = routes
+    .filter(
+      (r) =>
+        !query ||
+        r.routeId.toLowerCase().includes(query.toLowerCase()) ||
+        (r.routeName || '').toLowerCase().includes(query.toLowerCase()),
+    )
+    .slice(0, 100);
+
+  return (
+    <div class="route-selector-dropdown" ref={wrapperRef}>
+      <input
+        type="text"
+        class="stop-search-input"
+        placeholder="Search routes by ID or name…"
+        value={query}
+        onInput={(e) => setQuery(e.target.value)}
+        autoFocus
+      />
+      <div class="stop-list">
+        {filtered.length > 0 ? (
+          filtered.map((r) => (
+            <div
+              key={r.routeId}
+              class="stop-list-item"
+              onClick={() => onSelect(r.routeId)}
+            >
+              <span class="stop-list-id">{r.routeId}</span>
+              {r.routeName && <span class="stop-list-name">{r.routeName}</span>}
+            </div>
+          ))
+        ) : (
+          <div class="stop-list-empty">No routes found</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DataTable({ diagramData, stopsData, servicesData, onDataChange }) {
   const [tableRoutes, setTableRoutes] = useState(() =>
     diagramData.routes.map((r) => r.routeId),
   );
-  const [tableStops, setTableStops] = useState(() =>
-    allRouteStops(diagramData.routes),
-  );
+  const [tableStops, setTableStops] = useState(() => diagramData.orderedStops);
   const [cellOverrides, setCellOverrides] = useState(() => new Map());
+  const [nameOverrides, setNameOverrides] = useState(() => new Map());
+  const [routeNameOverrides, setRouteNameOverrides] = useState(() => new Map());
+  const [showAddStop, setShowAddStop] = useState(false);
+  const [showAddRoute, setShowAddRoute] = useState(false);
 
   useEffect(() => {
     setTableRoutes(diagramData.routes.map((r) => r.routeId));
-    setTableStops(allRouteStops(diagramData.routes));
+    setTableStops(diagramData.orderedStops);
     setCellOverrides(new Map());
+    setNameOverrides(new Map());
+    setRouteNameOverrides(new Map());
   }, [diagramData]);
 
-  // For each rendered route, build the set of stop IDs it visits (forward journey)
+  // For each rendered route, build the set of stop IDs it visits (forward journey).
+  // Routes added from city data (not in diagramData) use their first sequence.
   const routeStopSets = {};
   for (const routeId of tableRoutes) {
-    const route = diagramData.routes.find((r) => r.routeId === routeId);
-    routeStopSets[routeId] = new Set(
-      route
-        ? (route.seqForGrouping || route.stopSequence || []).map(String)
-        : [],
-    );
+    const inDiagram = diagramData.routes.find((r) => r.routeId === routeId);
+    if (inDiagram) {
+      routeStopSets[routeId] = new Set(
+        (inDiagram.seqForGrouping || inDiagram.stopSequence || []).map(String),
+      );
+    } else {
+      const rd = servicesData[routeId];
+      const destId = rd && Object.keys(rd).find((k) => k !== 'name');
+      routeStopSets[routeId] = new Set(
+        destId ? (rd[destId][0] || []).map(String) : [],
+      );
+    }
   }
 
   const isCellHit = (routeId, stopId) => {
@@ -327,15 +458,44 @@ function DataTable({ diagramData, stopsData, onDataChange }) {
   const removeStop = (stopId) =>
     setTableStops((prev) => prev.filter((id) => id !== stopId));
 
-  const handleApply = () =>
-    onDataChange({ routes: tableRoutes, stops: tableStops, cellOverrides });
-  const handleReset = () => {
-    setTableRoutes(diagramData.routes.map((r) => r.routeId));
-    setTableStops(allRouteStops(diagramData.routes));
-    setCellOverrides(new Map());
+  const addStop = (stopId) => {
+    if (!tableStops.includes(stopId))
+      setTableStops((prev) => [...prev, stopId]);
+    setShowAddStop(false);
   };
 
-  const stopName = (stopId) => stopsData[stopId]?.[2] || stopId;
+  const addRoute = (routeId) => {
+    if (!tableRoutes.includes(routeId))
+      setTableRoutes((prev) => [...prev, routeId]);
+    setShowAddRoute(false);
+  };
+
+  const handleApply = () =>
+    onDataChange({
+      routes: tableRoutes,
+      stops: tableStops,
+      cellOverrides,
+      nameOverrides,
+      routeNameOverrides,
+    });
+
+  const handleReset = () => {
+    setTableRoutes(diagramData.routes.map((r) => r.routeId));
+    setTableStops(diagramData.orderedStops);
+    setCellOverrides(new Map());
+    setNameOverrides(new Map());
+    setRouteNameOverrides(new Map());
+  };
+
+  const displayStopName = (stopId) =>
+    nameOverrides.get(stopId) ?? (stopsData[stopId]?.[2] || stopId);
+
+  const displayRouteName = (routeId) =>
+    routeNameOverrides.get(routeId) ?? routeId;
+
+  const availableRoutes = Object.keys(servicesData)
+    .filter((id) => !tableRoutes.includes(id))
+    .map((id) => ({ routeId: id, routeName: servicesData[id]?.name }));
 
   return (
     <div class="data-table-wrapper">
@@ -350,16 +510,24 @@ function DataTable({ diagramData, stopsData, onDataChange }) {
                   <button
                     class="data-table-rm"
                     onClick={() => removeStop(stopId)}
-                    title={`Remove ${stopName(stopId)}`}
+                    title={`Remove ${displayStopName(stopId)}`}
                   >
                     ×
                   </button>
-                  <span
-                    class="data-table-stop-label"
-                    title={`${stopName(stopId)} (${stopId})`}
-                  >
-                    {stopName(stopId)}
-                  </span>
+                  <EditableText
+                    value={displayStopName(stopId)}
+                    className="data-table-stop-label"
+                    title={`${stopsData[stopId]?.[2] || stopId} (${stopId}) — click to rename`}
+                    onChange={(val) =>
+                      setNameOverrides((m) => {
+                        const n = new Map(m);
+                        if (val === (stopsData[stopId]?.[2] || stopId))
+                          n.delete(stopId);
+                        else n.set(stopId, val);
+                        return n;
+                      })
+                    }
+                  />
                 </th>
               ))}
             </tr>
@@ -376,7 +544,20 @@ function DataTable({ diagramData, stopsData, onDataChange }) {
                     ×
                   </button>
                 </td>
-                <td class="data-table-route-id">{routeId}</td>
+                <td class="data-table-route-id">
+                  <RouteNameInput
+                    routeId={routeId}
+                    value={displayRouteName(routeId)}
+                    onChange={(val) =>
+                      setRouteNameOverrides((m) => {
+                        const n = new Map(m);
+                        if (val === routeId) n.delete(routeId);
+                        else n.set(routeId, val);
+                        return n;
+                      })
+                    }
+                  />
+                </td>
                 {tableStops.map((stopId) => {
                   const hit = isCellHit(routeId, stopId);
                   const original = routeStopSets[routeId]?.has(stopId) ?? false;
@@ -400,6 +581,37 @@ function DataTable({ diagramData, stopsData, onDataChange }) {
         </table>
       </div>
       <div class="data-table-actions">
+        <div class="data-table-add-wrapper">
+          <button
+            class="data-table-add-btn"
+            onClick={() => setShowAddStop((v) => !v)}
+          >
+            + Stop
+          </button>
+          {showAddStop && (
+            <StopSelector
+              stopsData={stopsData}
+              onSelect={addStop}
+              onClose={() => setShowAddStop(false)}
+            />
+          )}
+        </div>
+        <div class="data-table-add-wrapper">
+          <button
+            class="data-table-add-btn"
+            onClick={() => setShowAddRoute((v) => !v)}
+            disabled={availableRoutes.length === 0}
+          >
+            + Route
+          </button>
+          {showAddRoute && (
+            <RouteSelector
+              routes={availableRoutes}
+              onSelect={addRoute}
+              onClose={() => setShowAddRoute(false)}
+            />
+          )}
+        </div>
         <button class="expert-apply-btn" onClick={handleApply}>
           Apply
         </button>
@@ -413,7 +625,13 @@ function DataTable({ diagramData, stopsData, onDataChange }) {
 
 // ── Expert panel ───────────────────────────────────────────────────────────────
 
-function ExpertPanel({ diagramData, stopsData, onThemeChange, onDataChange }) {
+function ExpertPanel({
+  diagramData,
+  stopsData,
+  servicesData,
+  onThemeChange,
+  onDataChange,
+}) {
   const [vals, setVals] = useState(getCurrentThemeValues);
 
   const applyNumeric = (key, rawValue) => {
@@ -452,6 +670,7 @@ function ExpertPanel({ diagramData, stopsData, onThemeChange, onDataChange }) {
         <DataTable
           diagramData={diagramData}
           stopsData={stopsData}
+          servicesData={servicesData}
           onDataChange={onDataChange}
         />
       </div>
@@ -613,6 +832,8 @@ export default function BusDiagram() {
   const [routeOverrides, setRouteOverrides] = useState(null);
   const [stopOverrides, setStopOverrides] = useState(null);
   const [cellOverrides, setCellOverrides] = useState(null); // Map<"routeId:stopId", boolean>
+  const [nameOverrides, setNameOverrides] = useState(null); // Map<stopId, displayName>
+  const [routeNameOverrides, setRouteNameOverrides] = useState(null); // Map<routeId, displayName>
 
   const [showStopSelector, setShowStopSelector] = useState(false);
   const [showMapPicker, setShowMapPicker] = useState(false);
@@ -658,6 +879,8 @@ export default function BusDiagram() {
       setRouteOverrides(null);
       setStopOverrides(null);
       setCellOverrides(null);
+      setNameOverrides(null);
+      setRouteNameOverrides(null);
 
       let resolvedStopId = location.hash.slice(1);
       const route = getRoute();
@@ -756,21 +979,64 @@ export default function BusDiagram() {
     const baseRoutes =
       routeOverrides && routeOverrides.length > 0
         ? routeOverrides
-            .map((id) => diagramData.routes.find((r) => r.routeId === id))
+            .map((id) => {
+              const inDiagram = diagramData.routes.find(
+                (r) => r.routeId === id,
+              );
+              if (inDiagram) return inDiagram;
+              const rd = cityData.servicesData[id];
+              if (!rd) return null;
+              const destId = Object.keys(rd).find((k) => k !== 'name');
+              if (!destId) return null;
+              const seq = (rd[destId][0] || []).map(String);
+              return {
+                routeId: id,
+                routeName: rd.name,
+                destinationStopId: destId,
+                stopSequence: rd[destId][0] || [],
+                seqForGrouping: seq,
+                tripCount: 0,
+              };
+            })
             .filter(Boolean)
         : diagramData.routes;
-    const effectiveRoutes = applyCell(
+    const cellRoutes = applyCell(
       baseRoutes.length > 0 ? baseRoutes : diagramData.routes,
     );
+
+    const effectiveRoutes =
+      routeNameOverrides?.size > 0
+        ? cellRoutes.map((route) =>
+            routeNameOverrides.has(route.routeId)
+              ? { ...route, routeName: routeNameOverrides.get(route.routeId) }
+              : route,
+          )
+        : cellRoutes;
 
     const effectiveStops =
       stopOverrides && stopOverrides.length > 0
         ? stopOverrides
         : diagramData.orderedStops;
 
+    const effectiveStopsData =
+      nameOverrides?.size > 0
+        ? {
+            ...cityData.stopsData,
+            ...Object.fromEntries(
+              [...nameOverrides.entries()].map(([id, name]) => {
+                const d = cityData.stopsData[id];
+                return [
+                  id,
+                  d ? [d[0], d[1], name, ...d.slice(3)] : [null, null, name],
+                ];
+              }),
+            ),
+          }
+        : cityData.stopsData;
+
     renderDiagramSVG(svgHostRef.current, {
       stopId,
-      stopsData: cityData.stopsData,
+      stopsData: effectiveStopsData,
       routes: effectiveRoutes,
       orderedStops: effectiveStops,
       city,
@@ -790,6 +1056,8 @@ export default function BusDiagram() {
     routeOverrides,
     stopOverrides,
     cellOverrides,
+    nameOverrides,
+    routeNameOverrides,
   ]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -886,11 +1154,20 @@ export default function BusDiagram() {
         <ExpertPanel
           diagramData={diagramData}
           stopsData={cityData.stopsData}
+          servicesData={cityData.servicesData}
           onThemeChange={() => setThemeRenderKey((k) => k + 1)}
-          onDataChange={({ routes, stops, cellOverrides: co }) => {
+          onDataChange={({
+            routes,
+            stops,
+            cellOverrides: co,
+            nameOverrides: no,
+            routeNameOverrides: rno,
+          }) => {
             setRouteOverrides(routes.length > 0 ? routes : null);
             setStopOverrides(stops.length > 0 ? stops : null);
             setCellOverrides(co?.size > 0 ? co : null);
+            setNameOverrides(no?.size > 0 ? no : null);
+            setRouteNameOverrides(rno?.size > 0 ? rno : null);
           }}
         />
       )}

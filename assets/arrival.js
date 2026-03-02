@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import { toGeoJSON } from '@mapbox/polyline';
 
+import Fuse from 'fuse.js';
 import { encode } from './utils/specialID';
 import fetchCache from './utils/fetchCache';
 import { filterStaleArrivalsFromService } from './utils/fetchArrivals';
@@ -62,6 +63,14 @@ const THRESHOLDS = {
 
 let routesDataCache = null;
 let busIdCounter = 1;
+
+// Capture the browser's install prompt as early as possible.
+// We defer it so the bookmark button can trigger it later.
+let _installPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  _installPrompt = e;
+});
 
 // Helper to decode polylines with caching
 const decodePolyline = (encoded) => decodePolylineCached(encoded, toGeoJSON);
@@ -217,7 +226,16 @@ const BusLane = ({ index, no, buses, maxDuration_ms, isFirstFetch }) => {
   }, [no, nextBuses]);
 
   useLayoutEffect(() => {
-    setBusLaneWidth(busLaneRef.current?.offsetWidth);
+    const el = busLaneRef.current;
+    if (!el) return;
+    const update = () => {
+      const w = el.offsetWidth;
+      if (w > 0) setBusLaneWidth(w);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   // Filter out ghost buses for counting
@@ -367,6 +385,7 @@ const findMatchingPolyline = (
   routeName,
   servicesData,
   serviceNo,
+  destinationCoords = null,
 ) => {
   if (!stopCoords || !routeName || !servicesData || !serviceNo) {
     return { bestPolyline: null, bestMatchIndex: -1 };
@@ -391,44 +410,53 @@ const findMatchingPolyline = (
 
       // Check if polyline passes through the current stop
       const closest = findClosestPointOnPolyline(stopCoords, coords);
-      allCandidates.push({
+
+      // Check direction: the destination should appear after the current stop
+      // along the polyline (higher segment index = downstream).
+      let isCorrectDirection = true;
+      if (destinationCoords) {
+        const destClosest = findClosestPointOnPolyline(
+          destinationCoords,
+          coords,
+        );
+        isCorrectDirection = destClosest.segmentIndex >= closest.segmentIndex;
+      }
+
+      const candidate = {
         index,
         geometry,
         distance: closest.distance,
-      });
+        isCorrectDirection,
+      };
+      allCandidates.push(candidate);
 
       if (closest.distance < THRESHOLDS.stopProximity) {
-        candidates.push({
-          index,
-          geometry,
-          distance: closest.distance,
-        });
+        candidates.push(candidate);
       }
     } catch (e) {
       // Skip invalid polyline
     }
   }
 
-  // Prefer polylines within proximity threshold
-  if (candidates.length > 0) {
-    const best = candidates.reduce((best, current) =>
+  // Pick the best candidate: prefer correct direction, then smallest distance.
+  const pickBest = (pool) => {
+    const directional = pool.filter((c) => c.isCorrectDirection);
+    const source = directional.length > 0 ? directional : pool;
+    return source.reduce((best, current) =>
       current.distance < best.distance ? current : best,
     );
-    return {
-      bestPolyline: best.geometry,
-      bestMatchIndex: best.index,
-    };
+  };
+
+  // Prefer polylines within proximity threshold
+  if (candidates.length > 0) {
+    const best = pickBest(candidates);
+    return { bestPolyline: best.geometry, bestMatchIndex: best.index };
   }
 
   // Fallback: return closest polyline even if outside threshold
   if (allCandidates.length > 0) {
-    const best = allCandidates.reduce((best, current) =>
-      current.distance < best.distance ? current : best,
-    );
-    return {
-      bestPolyline: best.geometry,
-      bestMatchIndex: best.index,
-    };
+    const best = pickBest(allCandidates);
+    return { bestPolyline: best.geometry, bestMatchIndex: best.index };
   }
 
   return { bestPolyline: null, bestMatchIndex: -1 };
@@ -512,12 +540,22 @@ const renderPinnedRoutes = async (
       const tryRouteNameMatching = () => {
         if (!serviceData.name) return false;
 
+        // Resolve destination coordinates so findMatchingPolyline can prefer
+        // the polyline whose shape goes *toward* the destination from this stop.
+        const destStopData = destinationCode
+          ? stopsData?.[destinationCode]
+          : null;
+        const destinationCoords = destStopData
+          ? [destStopData[0], destStopData[1]]
+          : null;
+
         const { bestPolyline, bestMatchIndex } = findMatchingPolyline(
           serviceRoutes,
           stopCoords,
           serviceData.name,
           servicesData,
           serviceNo,
+          destinationCoords,
         );
 
         if (bestPolyline?.coordinates && bestMatchIndex >= 0) {
@@ -771,6 +809,19 @@ const extractVehicles = (services, pinnedServiceNumbers) => {
   }));
 };
 
+// Browser detection for install instructions
+const detectBrowser = () => {
+  const ua = navigator.userAgent;
+  if (/Firefox/i.test(ua)) return 'firefox';
+  if (
+    /CriOS/i.test(ua) ||
+    (/Chrome/i.test(ua) && !/Edg|SamsungBrowser/i.test(ua))
+  )
+    return 'chrome';
+  if (/Safari/i.test(ua)) return 'safari';
+  return 'chrome';
+};
+
 // Main component
 function ArrivalTimes() {
   const { t, i18n } = useTranslation();
@@ -799,6 +850,81 @@ function ArrivalTimes() {
     }
   });
   const [followedVehicleId, setFollowedVehicleId] = useState(null);
+  const [destFilter, setDestFilter] = useState(
+    () => new URLSearchParams(window.location.search).get('dest') ?? '',
+  );
+  const [destFilterExact, setDestFilterExact] = useState(
+    () => new URLSearchParams(window.location.search).get('destExact') === '1',
+  );
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [showInstallSheet, setShowInstallSheet] = useState(false);
+  const [installBrowser, setInstallBrowser] = useState(detectBrowser);
+  const [isInstalled, setIsInstalled] = useState(
+    () =>
+      window.navigator.standalone ||
+      window.matchMedia('(display-mode: standalone)').matches,
+  );
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (destFilter) {
+      url.searchParams.set('dest', destFilter);
+      if (destFilterExact) {
+        url.searchParams.set('destExact', '1');
+      } else {
+        url.searchParams.delete('destExact');
+      }
+    } else {
+      url.searchParams.delete('dest');
+      url.searchParams.delete('destExact');
+    }
+    history.replaceState(null, '', url);
+  }, [destFilter, destFilterExact]);
+
+  // Sync destFilter into the uncontrolled input when it changes externally
+  // (e.g. clicking a stop match header). Skip when the input is focused so
+  // we don't overwrite what the user is currently typing.
+  useEffect(() => {
+    const input = destFilterInputRef.current;
+    if (input && document.activeElement !== input) {
+      input.value = destFilter;
+    }
+  }, [destFilter]);
+
+  // When a stop loads, update the manifest link and page title for per-stop PWA install.
+  // This runs whenever the stop or filter changes so the installed app opens to the right view.
+  useEffect(() => {
+    if (!busStop) return;
+    const { code, name } = busStop;
+
+    document.title = name;
+    const appleTitle = document.querySelector(
+      'meta[name="apple-mobile-web-app-title"]',
+    );
+    if (appleTitle) appleTitle.content = name;
+
+    const params = new URLSearchParams({ name, code, city });
+    if (destFilter) params.set('dest', destFilter);
+    if (destFilterExact) params.set('destExact', '1');
+
+    let manifestLink = document.querySelector('link[rel="manifest"]');
+    if (!manifestLink) {
+      manifestLink = document.createElement('link');
+      manifestLink.rel = 'manifest';
+      document.head.appendChild(manifestLink);
+    }
+    manifestLink.href = `/arrival/manifest.json?${params.toString()}`;
+  }, [busStop, destFilter, destFilterExact]);
+
+  // Track when the PWA is installed so we can update the button state.
+  useEffect(() => {
+    const onInstalled = () => {
+      setIsInstalled(true);
+      _installPrompt = null;
+    };
+    window.addEventListener('appinstalled', onInstalled);
+    return () => window.removeEventListener('appinstalled', onInstalled);
+  }, []);
 
   const mapContainer = useRef(null);
   const mapRef = useRef(null);
@@ -807,6 +933,29 @@ function ArrivalTimes() {
   const arrivalsTimeoutRef = useRef(null);
   const arrivalsRAFRef = useRef(null);
   const fetchAbortControllerRef = useRef(null);
+  const destFilterInputRef = useRef(null);
+
+  // On iOS, the keyboard overlaps content rather than resizing the viewport.
+  // Use visualViewport to detect keyboard height and add matching padding-bottom
+  // so the sticky header and table rows stay accessible above the keyboard.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const keyboardHeight = Math.max(
+        0,
+        window.innerHeight - vv.height - vv.offsetTop,
+      );
+      document.querySelector('main').style.paddingBottom =
+        keyboardHeight > 0 ? `${keyboardHeight}px` : '';
+    };
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }, []);
 
   // Load initial data
   useEffect(() => {
@@ -1249,6 +1398,8 @@ function ArrivalTimes() {
             map.easeTo({ center: [lng, lat], duration: 600 });
           }
         });
+
+        setMapLoaded(true);
       });
     });
 
@@ -1257,6 +1408,7 @@ function ArrivalTimes() {
         mapRef.current.remove();
         mapRef.current = null;
       }
+      setMapLoaded(false);
     };
   }, [busStop]);
 
@@ -1307,7 +1459,7 @@ function ArrivalTimes() {
         if (stopsSource) clearMapSource(map, 'route-stops');
       }
     })();
-  }, [pinnedServices, services, busStop, servicesData, stopsData]);
+  }, [pinnedServices, services, busStop, servicesData, stopsData, mapLoaded]);
 
   // Render vehicles
   useEffect(() => {
@@ -1333,7 +1485,7 @@ function ArrivalTimes() {
         vehicleLocationCache.current.delete(vehicleId);
       }
     }
-  }, [pinnedServices, services]);
+  }, [pinnedServices, services, mapLoaded]);
 
   // Follow vehicle
   useEffect(() => {
@@ -1464,6 +1616,139 @@ function ArrivalTimes() {
     return { groupedServices: sorted, maxDuration_ms: maxDuration };
   }, [services, pinnedSet]);
 
+  // Build a Fuse index over all downstream stop names for this stop.
+  // Rebuilt only when the set of routes or stop data changes (not on every filter keystroke).
+  const destFuse = useMemo(() => {
+    if (!servicesData || !busStop || !stopsData) return null;
+    const names = new Set();
+    groupedServices.forEach(({ no, destination }) => {
+      const serviceData = servicesData[no];
+      if (!serviceData) return;
+      let downstreamStops = null;
+      const exactVariations = destination ? serviceData[destination] : null;
+      if (exactVariations) {
+        for (const route of exactVariations) {
+          const idx = route.indexOf(busStop.code);
+          if (idx !== -1) {
+            downstreamStops = route.slice(idx + 1);
+            break;
+          }
+        }
+      }
+      if (!downstreamStops) {
+        outer: for (const [destCode, variations] of Object.entries(
+          serviceData,
+        )) {
+          if (destCode === 'name' || !Array.isArray(variations)) continue;
+          for (const route of variations) {
+            const idx = route.indexOf(busStop.code);
+            if (idx !== -1) {
+              downstreamStops = route.slice(idx + 1);
+              break outer;
+            }
+          }
+        }
+      }
+      if (!downstreamStops) return;
+      downstreamStops.forEach((stopId) => {
+        const n = stopsData[stopId]?.[2];
+        if (n) names.add(n);
+      });
+    });
+    return new Fuse(Array.from(names), { threshold: 0.35 });
+  }, [groupedServices, servicesData, stopsData, busStop]);
+
+  // When filter is active: groups arrival rows by which downstream stop name matched.
+  // Each row may appear under multiple matching stop names.
+  // Returns { matchingStopGroups: [...] } when filter active, or { flatGroups: [...] } otherwise.
+  const filteredGroupedServices = useMemo(() => {
+    if (
+      !destFilter.trim() ||
+      !servicesData ||
+      !busStop ||
+      !stopsData ||
+      !destFuse
+    ) {
+      return { matchingStopGroups: null, flatGroups: groupedServices };
+    }
+
+    const fuzzyMatches = destFilterExact
+      ? new Set([destFilter.trim()])
+      : new Set(destFuse.search(destFilter).map((r) => r.item));
+    if (fuzzyMatches.size === 0) {
+      return { matchingStopGroups: [], flatGroups: null };
+    }
+
+    const stopNameToGroups = new Map();
+
+    groupedServices.forEach((group) => {
+      const { no, destination } = group;
+      const serviceData = servicesData[no];
+      if (!serviceData) return;
+      // Step 1: Try exact destination key
+      let downstreamStops = null;
+      const exactVariations = destination ? serviceData[destination] : null;
+      if (exactVariations) {
+        for (const route of exactVariations) {
+          const idx = route.indexOf(busStop.code);
+          if (idx !== -1) {
+            downstreamStops = route.slice(idx + 1);
+            break;
+          }
+        }
+      }
+
+      // Step 2: Fallback — scan all destinations for a route containing busStop.code
+      if (!downstreamStops) {
+        outer: for (const [destCode, variations] of Object.entries(
+          serviceData,
+        )) {
+          if (destCode === 'name' || !Array.isArray(variations)) continue;
+          for (const route of variations) {
+            const idx = route.indexOf(busStop.code);
+            if (idx !== -1) {
+              downstreamStops = route.slice(idx + 1);
+              break outer;
+            }
+          }
+        }
+      }
+
+      if (!downstreamStops || downstreamStops.length === 0) return;
+
+      const matchedStopNames = new Set();
+      downstreamStops.forEach((stopId) => {
+        const stopName = stopsData[stopId]?.[2];
+        if (
+          stopName &&
+          fuzzyMatches.has(stopName) &&
+          !matchedStopNames.has(stopName)
+        ) {
+          matchedStopNames.add(stopName);
+          if (!stopNameToGroups.has(stopName)) {
+            stopNameToGroups.set(stopName, []);
+          }
+          stopNameToGroups.get(stopName).push(group);
+        }
+      });
+    });
+
+    return {
+      matchingStopGroups: Array.from(stopNameToGroups.entries())
+        .map(([stopName, groups]) => ({ stopName, groups }))
+        .sort((a, b) => b.groups.length - a.groups.length),
+      flatGroups: null,
+    };
+  }, [
+    groupedServices,
+    destFilter,
+    destFilterExact,
+    servicesData,
+    stopsData,
+    busStop,
+    destFuse,
+  ]);
+
   if (!busStop) {
     if (stopsData) {
       return (
@@ -1481,142 +1766,388 @@ function ArrivalTimes() {
 
   const { code, name } = busStop;
 
+  const handleInstall = () => {
+    if (_installPrompt) {
+      _installPrompt.prompt();
+      _installPrompt.userChoice.then((choice) => {
+        if (choice.outcome === 'accepted') setIsInstalled(true);
+        _installPrompt = null;
+      });
+    } else {
+      setShowInstallSheet(true);
+    }
+  };
+
   return (
     <div>
       <div id="bus-stop-map" ref={mapContainer}></div>
       <h1>
-        {(fetchServicesStatus === 'loading' || fetchServicesError) && (
-          <span
-            class={`live-data-loading-container ${
-              fetchServicesError ? 'error' : ''
-            }`}
-            title={
-              fetchServicesError
-                ? 'Live data unavailable. Estimated based on timetable schedule.'
-                : 'Fetching live information'
-            }
-            onClick={(e) => {
-              e.stopPropagation();
-              const container = e.currentTarget;
-              container.classList.toggle('show-tooltip');
-              // Close tooltip when clicking outside
-              const closeTooltip = (event) => {
-                if (!container.contains(event.target)) {
-                  container.classList.remove('show-tooltip');
-                  document.removeEventListener('click', closeTooltip);
-                }
-              };
-              // Use setTimeout to avoid immediate closure
-              setTimeout(() => {
-                document.addEventListener('click', closeTooltip);
-              }, 0);
-            }}
-          >
-            {fetchServicesError ? (
-              <span class="live-data-warning">⚠</span>
-            ) : (
-              <span class="live-data-loading" />
-            )}
-          </span>
-        )}
-        {t('arrivals.preHeading')}
-        <b id="bus-stop-name">
-          {(() => {
-            const cityConfig = getConfigForCity(city);
-            const disableStopID = cityConfig?.disableStopID || false;
+        <div class="stop-heading-row">
+          <span class="stop-heading-name">
+            {t('arrivals.preHeading')}
+            <b id="bus-stop-name">
+              {(() => {
+                const cityConfig = getConfigForCity(city);
+                const disableStopID = cityConfig?.disableStopID || false;
 
-            if (disableStopID) {
-              return (
-                <>
-                  {name}
-                  {busStop.suffix && (
-                    <span class="stop-suffix"> {busStop.suffix}</span>
-                  )}
-                </>
-              );
-            } else {
-              return (
-                <>
-                  <span class={`stop-tag ${fetchServicesStatus}`}>{code}</span>{' '}
-                  {name}
-                </>
-              );
-            }
-          })()}
-        </b>
+                if (disableStopID) {
+                  return (
+                    <>
+                      {name}
+                      {busStop.suffix && (
+                        <span class="stop-suffix"> {busStop.suffix}</span>
+                      )}
+                    </>
+                  );
+                } else {
+                  return (
+                    <>
+                      <span class={`stop-tag ${fetchServicesStatus}`}>
+                        {code}
+                      </span>{' '}
+                      {name}
+                    </>
+                  );
+                }
+              })()}
+            </b>
+          </span>
+          <span class="stop-heading-controls">
+            {(fetchServicesStatus === 'loading' || fetchServicesError) && (
+              <span
+                class={`live-data-loading-container ${fetchServicesError ? 'error' : ''}`}
+                title={
+                  fetchServicesError
+                    ? 'Live data unavailable. Estimated based on timetable schedule.'
+                    : 'Fetching live information'
+                }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const container = e.currentTarget;
+                  container.classList.toggle('show-tooltip');
+                  const closeTooltip = (event) => {
+                    if (!container.contains(event.target)) {
+                      container.classList.remove('show-tooltip');
+                      document.removeEventListener('click', closeTooltip);
+                    }
+                  };
+                  setTimeout(() => {
+                    document.addEventListener('click', closeTooltip);
+                  }, 0);
+                }}
+              >
+                {fetchServicesError ? (
+                  <span class="live-data-warning">⚠</span>
+                ) : (
+                  <span class="live-data-loading" />
+                )}
+              </span>
+            )}
+            <button
+              class={`bookmark-btn${isInstalled ? ' installed' : ''}`}
+              onClick={handleInstall}
+              title="Add to Home Screen"
+            >
+              {isInstalled ? (
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              ) : (
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                </svg>
+              )}
+            </button>
+          </span>
+        </div>
+        <div class="dest-filter-row">
+          <svg
+            class="dest-filter-icon"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            width="16"
+            height="16"
+            aria-hidden="true"
+          >
+            <path
+              fill-rule="evenodd"
+              d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
+              clip-rule="evenodd"
+            />
+          </svg>
+          <div class="dest-filter-input-wrapper">
+            <input
+              type="search"
+              class="dest-filter"
+              placeholder="Search for stop…"
+              ref={destFilterInputRef}
+              defaultValue={destFilter}
+              onInput={(e) => {
+                setDestFilter(e.target.value);
+                setDestFilterExact(false);
+              }}
+            />
+            {destFilter && (
+              <button
+                class="dest-filter-clear"
+                onClick={() => {
+                  setDestFilter('');
+                  setDestFilterExact(false);
+                }}
+                aria-label="Clear search"
+              >
+                <svg
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  width="16"
+                  height="16"
+                >
+                  <path
+                    fill-rule="evenodd"
+                    d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                    clip-rule="evenodd"
+                  />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
       </h1>
+      {showInstallSheet && (
+        <div
+          class="install-sheet-backdrop"
+          onClick={() => setShowInstallSheet(false)}
+        >
+          <div class="install-sheet" onClick={(e) => e.stopPropagation()}>
+            <p class="install-sheet-title">
+              Save live tracking for <strong>{name}</strong> to Home Screen
+            </p>
+            <div class="install-browser-tabs">
+              {['chrome', 'safari', 'firefox'].map((b) => (
+                <button
+                  key={b}
+                  class={`install-browser-tab${installBrowser === b ? ' active' : ''}`}
+                  onClick={() => setInstallBrowser(b)}
+                >
+                  {b.charAt(0).toUpperCase() + b.slice(1)}
+                </button>
+              ))}
+            </div>
+            {installBrowser === 'safari' && (
+              <ol class="install-sheet-steps">
+                <li>
+                  Tap the <strong>Share</strong> button{' '}
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    width="16"
+                    height="16"
+                    style="vertical-align: middle"
+                  >
+                    <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+                    <polyline points="16 6 12 2 8 6" />
+                    <line x1="12" y1="2" x2="12" y2="15" />
+                  </svg>{' '}
+                  at the bottom of the screen
+                </li>
+                <li>
+                  Tap <strong>Add to Home Screen</strong>
+                </li>
+                <li>
+                  Tap <strong>Add</strong>
+                </li>
+              </ol>
+            )}
+            {installBrowser === 'chrome' && (
+              <ol class="install-sheet-steps">
+                <li>
+                  Tap the <strong>⋮</strong>
+                </li>
+                <li>
+                  Tap <strong>Add to Home Screen</strong>
+                </li>
+                <li>
+                  Tap <strong>Add</strong>
+                </li>
+              </ol>
+            )}
+            {installBrowser === 'firefox' && (
+              <ol class="install-sheet-steps">
+                <li>
+                  Tap the <strong>⋮</strong>
+                </li>
+                <li>
+                  Tap <strong>Install</strong>
+                </li>
+                <li>
+                  Tap <strong>Add</strong>
+                </li>
+              </ol>
+            )}
+            <button
+              class="install-sheet-close"
+              onClick={() => setShowInstallSheet(false)}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
       <table>
         {services ? (
-          groupedServices.length ? (
-            <tbody>
-              {groupedServices.map((group) => {
-                const { no, destination, buses } = group;
-                const pinned = isPinned(no, pinnedServices);
-                const sortedBuses = [...buses].sort(
-                  (a, b) => a.duration_ms - b.duration_ms,
-                );
-                const buses1 = sortedBuses.filter((b) => b?.visit_number === 1);
-                const buses2 = sortedBuses.filter((b) => b?.visit_number === 2);
-                return (
-                  <Fragment key={`${no}-${destination}`}>
-                    <tr
-                      class={pinned ? 'pin' : ''}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        togglePin(no, destination);
-                      }}
+          (() => {
+            const renderGroupRow = (group) => {
+              const { no, destination, buses } = group;
+              const pinned = isPinned(no, pinnedServices);
+              const sortedBuses = [...buses].sort(
+                (a, b) => a.duration_ms - b.duration_ms,
+              );
+              const buses1 = sortedBuses.filter((b) => b?.visit_number === 1);
+              const buses2 = sortedBuses.filter((b) => b?.visit_number === 2);
+              return (
+                <Fragment key={`${no}-${destination}`}>
+                  <tr
+                    class={pinned ? 'pin' : ''}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      togglePin(no, destination);
+                    }}
+                  >
+                    <th>{no}</th>
+                    <td
+                      class={`bus-lane-cell ${buses2.length ? 'multiple' : ''}`}
                     >
-                      <th>{no}</th>
-                      <td
-                        class={`bus-lane-cell ${buses2.length ? 'multiple' : ''}`}
-                      >
-                        {buses2.length ? (
-                          <>
-                            <BusLane
-                              index={1}
-                              no={no}
-                              buses={buses1}
-                              maxDuration_ms={maxDuration_ms}
-                              isFirstFetch={isFirstFetchRef.current}
-                            />
-                            <BusLane
-                              index={2}
-                              no={no}
-                              buses={buses2}
-                              maxDuration_ms={maxDuration_ms}
-                              isFirstFetch={isFirstFetchRef.current}
-                            />
-                          </>
-                        ) : (
+                      {buses2.length ? (
+                        <>
                           <BusLane
+                            index={1}
                             no={no}
-                            buses={sortedBuses}
+                            buses={buses1}
                             maxDuration_ms={maxDuration_ms}
                             isFirstFetch={isFirstFetchRef.current}
                           />
-                        )}
+                          <BusLane
+                            index={2}
+                            no={no}
+                            buses={buses2}
+                            maxDuration_ms={maxDuration_ms}
+                            isFirstFetch={isFirstFetchRef.current}
+                          />
+                        </>
+                      ) : (
+                        <BusLane
+                          no={no}
+                          buses={sortedBuses}
+                          maxDuration_ms={maxDuration_ms}
+                          isFirstFetch={isFirstFetchRef.current}
+                        />
+                      )}
+                    </td>
+                  </tr>
+                  <tr class={pinned ? 'pin' : ''}>
+                    <th colspan="2">
+                      <small class="destination">
+                        {(destination && stopsData[destination]?.[2]) ||
+                          destination ||
+                          ''}
+                      </small>
+                    </th>
+                  </tr>
+                </Fragment>
+              );
+            };
+
+            const { matchingStopGroups, flatGroups } = filteredGroupedServices;
+
+            if (matchingStopGroups !== null) {
+              if (matchingStopGroups.length === 0) {
+                return (
+                  <tbody>
+                    <tr>
+                      <td class="blank">
+                        {fetchServicesError
+                          ? `No routes operate to "${destFilter}"`
+                          : `No routes arriving soon for "${destFilter}"`}
                       </td>
                     </tr>
-                    <tr class={pinned ? 'pin' : ''}>
-                      <th colspan="2">
-                        <small class="destination">
-                          {(destination && stopsData[destination]?.[2]) ||
-                            destination ||
-                            ''}
-                        </small>
-                      </th>
-                    </tr>
-                  </Fragment>
+                  </tbody>
                 );
-              })}
-            </tbody>
-          ) : (
-            <tbody>
-              <tr>
-                <td class="blank">No upcoming arrivals.</td>
-              </tr>
-            </tbody>
-          )
+              }
+
+              const groupHasETA = (group) =>
+                group.buses.some(
+                  (b) =>
+                    typeof b?.duration_ms === 'number' &&
+                    b.duration_ms <= maxArrivalTime,
+                );
+
+              const renderStopHeader = (stopName) => (
+                <tr class="stop-match-header">
+                  <th
+                    colspan="2"
+                    onClick={() => {
+                      setDestFilter(stopName);
+                      setDestFilterExact(true);
+                    }}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    {stopName}
+                  </th>
+                </tr>
+              );
+
+              return (
+                <tbody>
+                  {matchingStopGroups.map(({ stopName, groups }) => {
+                    const withETA = groups.filter(groupHasETA);
+                    return withETA.length > 0 ? (
+                      <Fragment key={`${stopName}-eta`}>
+                        {renderStopHeader(stopName)}
+                        {withETA.map(renderGroupRow)}
+                      </Fragment>
+                    ) : null;
+                  })}
+                  {matchingStopGroups.map(({ stopName, groups }) => {
+                    const withoutETA = groups.filter((g) => !groupHasETA(g));
+                    return withoutETA.length > 0 ? (
+                      <Fragment key={`${stopName}-noeta`}>
+                        {renderStopHeader(stopName)}
+                        {withoutETA.map(renderGroupRow)}
+                      </Fragment>
+                    ) : null;
+                  })}
+                </tbody>
+              );
+            }
+
+            return flatGroups.length ? (
+              <tbody>{flatGroups.map(renderGroupRow)}</tbody>
+            ) : (
+              <tbody>
+                <tr>
+                  <td class="blank">No upcoming arrivals.</td>
+                </tr>
+              </tbody>
+            );
+          })()
         ) : (
           <tbody class="loading">
             <tr>

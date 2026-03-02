@@ -19,6 +19,7 @@ export const CITY_CONFIGS = {
     city: {
       name: 'Bengaluru',
       code: 'blr',
+      flag: '🇮🇳',
       bounds: {
         lowerLat: 12.8,
         upperLat: 13.15,
@@ -45,6 +46,7 @@ export const CITY_CONFIGS = {
     city: {
       name: 'Goa',
       code: 'goa',
+      flag: '🇮🇳',
       bounds: {
         lowerLat: 15.1,
         upperLat: 15.9,
@@ -57,6 +59,7 @@ export const CITY_CONFIGS = {
     city: {
       name: 'Kochi',
       code: 'kochi',
+      flag: '🇮🇳',
       bounds: {
         lowerLat: 9.8,
         upperLat: 10.2,
@@ -69,6 +72,7 @@ export const CITY_CONFIGS = {
     city: {
       name: 'Chennai',
       code: 'chennai',
+      flag: '🇮🇳',
       bounds: {
         lowerLat: 12.85,
         upperLat: 13.35,
@@ -81,6 +85,7 @@ export const CITY_CONFIGS = {
     city: {
       name: 'Delhi',
       code: 'delhi',
+      flag: '🇮🇳',
       bounds: {
         lowerLat: 28.35,
         upperLat: 28.95,
@@ -93,6 +98,7 @@ export const CITY_CONFIGS = {
     city: {
       name: 'Pune',
       code: 'pune',
+      flag: '🇮🇳',
       bounds: {
         lowerLat: 18.35,
         upperLat: 18.75,
@@ -105,6 +111,7 @@ export const CITY_CONFIGS = {
     city: {
       name: 'Telangana',
       code: 'telangana',
+      flag: '🇮🇳',
       bounds: {
         lowerLat: 15.5,
         upperLat: 20.5,
@@ -117,6 +124,7 @@ export const CITY_CONFIGS = {
     city: {
       name: 'Andhra Pradesh',
       code: 'andhrapradesh',
+      flag: '🇮🇳',
       bounds: {
         lowerLat: 12.4,
         upperLat: 19.7,
@@ -129,6 +137,7 @@ export const CITY_CONFIGS = {
     city: {
       name: 'Indore',
       code: 'indore',
+      flag: '🇮🇳',
       bounds: {
         lowerLat: 22.5,
         upperLat: 22.9,
@@ -141,6 +150,7 @@ export const CITY_CONFIGS = {
     city: {
       name: 'Railways',
       code: 'railways',
+      flag: '🇮🇳',
       bounds: {
         lowerLat: -5,
         upperLat: 45,
@@ -153,6 +163,7 @@ export const CITY_CONFIGS = {
     city: {
       name: 'Greyhound',
       code: 'greyhound',
+      flag: '🇺🇸',
       bounds: {
         lowerLat: 24.9493,
         upperLat: 49.5904,
@@ -166,6 +177,7 @@ export const CITY_CONFIGS = {
     city: {
       name: 'New York City',
       code: 'nyc',
+      flag: '🇺🇸',
       bounds: {
         lowerLat: 40.5,
         upperLat: 41.0,

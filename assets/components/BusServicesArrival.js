@@ -10,6 +10,7 @@ import CheapRuler from 'cheap-ruler';
 const ruler = new CheapRuler(1.3);
 import { useTranslation } from 'react-i18next';
 
+import Fuse from 'fuse.js';
 import { encode } from '../utils/specialID';
 import getRoute from '../utils/getRoute';
 import { setRafInterval, clearRafInterval } from '../utils/rafInterval';
@@ -88,6 +89,9 @@ export default function BusServicesArrival({
   onLoadingChange, // Callback to notify parent of loading state
   onErrorChange, // Callback to notify parent of error state
   cancelRef, // Ref to expose cancel function to parent
+  destFilter = '',
+  destFilterExact = false,
+  onDestFilterChange = () => {},
 }) {
   if (!id) return;
   const { t } = useTranslation();
@@ -100,6 +104,79 @@ export default function BusServicesArrival({
     useState(false);
   const [scheduleData, setScheduleData] = useState(null);
   const route = getRoute();
+
+  // Build a Fuse index over all downstream stop names for this stop.
+  // Rebuilt only when stop data or services list changes.
+  const destFuse = useMemo(() => {
+    if (!stopData?.destinationGroups) return null;
+    const names = new Set();
+    services.forEach((service) => {
+      const serviceDestGroups = stopData.destinationGroups[service];
+      if (!serviceDestGroups) return;
+      Object.values(serviceDestGroups).forEach(({ routes }) => {
+        routes.forEach((routeStops) => {
+          const idx = routeStops.indexOf(stopData.number);
+          if (idx === -1) return;
+          routeStops.slice(idx + 1).forEach((stopId) => {
+            const stopName = window._data?.stopsData?.[stopId]?.name;
+            if (stopName) names.add(stopName);
+          });
+        });
+      });
+    });
+    return new Fuse(Array.from(names), { threshold: 0.35 });
+  }, [services, stopData]);
+
+  // When filter is active, group services by which downstream stop name fuzzy-matches.
+  // Each service may appear under multiple matching stop names.
+  // Returns null when no filter is active.
+  const matchingStopGroups = useMemo(() => {
+    if (!destFilter.trim() || !stopData?.destinationGroups || !destFuse)
+      return null;
+
+    const fuzzyMatches = destFilterExact
+      ? new Set([destFilter.trim()])
+      : new Set(destFuse.search(destFilter).map((r) => r.item));
+    if (fuzzyMatches.size === 0) return [];
+
+    const stopNameToServices = new Map();
+
+    services.forEach((service) => {
+      const serviceDestGroups = stopData.destinationGroups[service];
+      if (!serviceDestGroups) return;
+
+      // Track which stop names we've already added this service to (avoid duplicates)
+      const matchedStopNames = new Set();
+
+      Object.values(serviceDestGroups).forEach(({ routes }) => {
+        routes.forEach((routeStops) => {
+          const idx = routeStops.indexOf(stopData.number);
+          if (idx === -1) return;
+          routeStops.slice(idx + 1).forEach((stopId) => {
+            const stopName = window._data?.stopsData?.[stopId]?.name;
+            if (
+              stopName &&
+              fuzzyMatches.has(stopName) &&
+              !matchedStopNames.has(stopName)
+            ) {
+              matchedStopNames.add(stopName);
+              if (!stopNameToServices.has(stopName)) {
+                stopNameToServices.set(stopName, new Set());
+              }
+              stopNameToServices.get(stopName).add(service);
+            }
+          });
+        });
+      });
+    });
+
+    return Array.from(stopNameToServices.entries())
+      .map(([stopName, serviceSet]) => ({
+        stopName,
+        services: Array.from(serviceSet).sort(sortServices),
+      }))
+      .sort((a, b) => b.services.length - a.services.length);
+  }, [services, destFilter, destFilterExact, stopData, destFuse]);
 
   const controllerRef = useRef(null);
   const renderStopsTimeout = useRef();
@@ -349,7 +426,8 @@ export default function BusServicesArrival({
 
   const servicesValue = route.value?.split('~') || [];
 
-  // Group by arrival status (upcoming vs scheduled) and then by destination
+  // Group by arrival status (upcoming vs scheduled) and then by terminal destination.
+  // Only used when no destination filter is active.
   const groupedByDestination = useMemo(() => {
     if (!stopData?.destinationGroups) {
       // Fallback to old format if destinationGroups not available
@@ -425,45 +503,51 @@ export default function BusServicesArrival({
     };
   }, [services, stopData, scheduleData, servicesArrivals]);
 
-  // Helper component to render a destination group
-  const renderDestinationGroup = (dest, upcoming) => (
+  // Renders a list of service tags for a given set of service numbers,
+  // sorted by soonest arrival first, then alphabetically for those without arrivals.
+  const renderServiceTags = (serviceList) => (
+    <p
+      class={`services-list ${isLoading ? 'loading' : ''}`}
+      style={{ marginTop: '4px' }}
+    >
+      {[...serviceList]
+        .sort((a, b) => {
+          const aMs = servicesArrivals[a],
+            bMs = servicesArrivals[b];
+          if (aMs && !bMs) return -1;
+          if (!aMs && bMs) return 1;
+          if (aMs && bMs) return aMs - bMs;
+          return sortServices(a, b);
+        })
+        .map((service) => (
+          <>
+            <a
+              href={`#${route.cityPrefix}/services/${service}`}
+              class={`service-tag ${
+                route.page === 'service' && servicesValue.includes(service)
+                  ? 'current'
+                  : ''
+              }`}
+            >
+              {service}
+              {servicesArrivals[service] && (
+                <span>
+                  <ArrivalTimeText ms={servicesArrivals[service]} />
+                </span>
+              )}
+            </a>{' '}
+          </>
+        ))}
+    </p>
+  );
+
+  // Helper component to render a destination group (terminal destination header + routes)
+  const renderDestinationGroup = (dest) => (
     <div key={dest.id} class="service-destination-group">
       <p class="service-destination-info">
         <strong>{dest.name}</strong>
       </p>
-      <p
-        class={`services-list ${isLoading ? 'loading' : ''}`}
-        style={{ marginTop: '4px' }}
-      >
-        {dest.services
-          .sort((a, b) => {
-            // If group has arrival time data, sort by arrival time (ascending)
-            if (upcoming) {
-              return servicesArrivals[a] - servicesArrivals[b];
-            }
-            // Otherwise, use service number sort
-            return sortServices(a, b);
-          })
-          .map((service) => (
-            <>
-              <a
-                href={`#${route.cityPrefix}/services/${service}`}
-                class={`service-tag ${
-                  route.page === 'service' && servicesValue.includes(service)
-                    ? 'current'
-                    : ''
-                }`}
-              >
-                {service}
-                {servicesArrivals[service] && (
-                  <span>
-                    <ArrivalTimeText ms={servicesArrivals[service]} />
-                  </span>
-                )}
-              </a>{' '}
-            </>
-          ))}
-      </p>
+      {renderServiceTags(dest.services)}
     </div>
   );
 
@@ -495,39 +579,82 @@ export default function BusServicesArrival({
 
   return (
     <>
-      {groupedByDestination.hasGroups ? (
-        <>
-          {groupedByDestination.upcomingDestinations.length > 0 && (
-            <div class="service-arrival-group">
-              {groupedByDestination.upcomingDestinations.map((dest) =>
-                renderDestinationGroup(dest, true),
-              )}
-            </div>
-          )}
-
-          {groupedByDestination.scheduledDestinations.length > 0 && (
-            <div class="service-arrival-group">
-              {groupedByDestination.scheduledDestinations.map((dest) =>
-                renderDestinationGroup(dest, false),
-              )}
-            </div>
-          )}
-        </>
+      {destFilter.trim() ? (
+        // Filter active: group routes by the downstream stop name that matched
+        matchingStopGroups && matchingStopGroups.length > 0 ? (
+          (() => {
+            const renderDestGroup = (stopName, services) => (
+              <div class="service-destination-group">
+                <p class="service-destination-info">
+                  <strong
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => onDestFilterChange(stopName, true)}
+                  >
+                    {stopName}
+                  </strong>
+                </p>
+                {renderServiceTags(services)}
+              </div>
+            );
+            return (
+              <div class="service-arrival-group">
+                {matchingStopGroups.map(({ stopName, services: svc }) => {
+                  const withETA = svc.filter((s) => servicesArrivals[s]);
+                  return withETA.length > 0
+                    ? renderDestGroup(stopName, withETA)
+                    : null;
+                })}
+                {matchingStopGroups.map(({ stopName, services: svc }) => {
+                  const withoutETA = svc.filter((s) => !servicesArrivals[s]);
+                  return withoutETA.length > 0
+                    ? renderDestGroup(stopName, withoutETA)
+                    : null;
+                })}
+              </div>
+            );
+          })()
+        ) : (
+          <p class="dest-filter-empty">No routes to "{destFilter}"</p>
+        )
       ) : (
+        // No filter: show existing terminal-destination grouping
         <>
-          {groupedByDestination.upcomingServices.length > 0 && (
-            <div class="service-arrival-group">
-              {renderServiceList(groupedByDestination.upcomingServices)}
-            </div>
-          )}
+          {groupedByDestination.hasGroups ? (
+            <>
+              {groupedByDestination.upcomingDestinations.length > 0 && (
+                <div class="service-arrival-group">
+                  {groupedByDestination.upcomingDestinations.map((dest) =>
+                    renderDestinationGroup(dest),
+                  )}
+                </div>
+              )}
 
-          {groupedByDestination.scheduledServices.length > 0 && (
-            <div class="service-arrival-group">
-              {renderServiceList(groupedByDestination.scheduledServices)}
-            </div>
+              {groupedByDestination.scheduledDestinations.length > 0 && (
+                <div class="service-arrival-group">
+                  {groupedByDestination.scheduledDestinations.map((dest) =>
+                    renderDestinationGroup(dest),
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {groupedByDestination.upcomingServices.length > 0 && (
+                <div class="service-arrival-group">
+                  {renderServiceList(groupedByDestination.upcomingServices)}
+                </div>
+              )}
+
+              {groupedByDestination.scheduledServices.length > 0 && (
+                <div class="service-arrival-group">
+                  {renderServiceList(groupedByDestination.scheduledServices)}
+                </div>
+              )}
+            </>
           )}
         </>
       )}
+
       {showBusesOnMap && liveBusCount > 0 && (
         <p style={{ marginTop: 5, fontSize: '.8em' }}>
           <span class="live">{t('common.live')}</span>{' '}

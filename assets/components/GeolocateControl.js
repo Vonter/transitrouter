@@ -75,7 +75,19 @@ export default class GeolocateControl {
 
     this._setup = true;
 
-    if (supported === 'granted') this._clickButton(null, false);
+    const isStandalone =
+      window.navigator.standalone ||
+      window.matchMedia('(display-mode: standalone)').matches;
+    // Auto-trigger in two cases:
+    // 1. Permission explicitly granted (from Permissions API)
+    // 2. Running as installed PWA and permission isn't explicitly denied
+    //    (iOS PWA often returns 'prompt' even when previously granted)
+    if (
+      supported === 'granted' ||
+      (isStandalone && supported !== false && supported !== 'denied')
+    ) {
+      this._clickButton(null, false);
+    }
   };
   registerExternalButton = (btn) => this._externalButtons.push(btn);
   trigger = () => this._clickButton(null, true);

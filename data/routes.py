@@ -80,6 +80,20 @@ def apply_city_stop_processing(
     
     return process_fn(stops_dict, gtfs_data, valid_routes)
 
+
+def apply_city_mapping_generation(
+    gtfs_data: Dict[str, pl.DataFrame],
+    output_dir: str,
+    city_utils: Optional[object],
+) -> None:
+    """Call city-specific generate_mapping if the city utils module provides it."""
+    if city_utils is None:
+        return
+    generate_fn = getattr(city_utils, 'generate_mapping', None)
+    if generate_fn and callable(generate_fn):
+        generate_fn(gtfs_data, output_dir)
+
+
 # Default minimum number of trips per day for a route to be included
 DEFAULT_MIN_TRIPS = 2
 
@@ -112,7 +126,7 @@ def get_valid_routes(gtfs_data: Dict[str, pl.DataFrame], min_trips: int) -> Set[
     
     # Count trips per route and direction
     trip_counts = trips_df.group_by(['route_id', 'direction']).agg(
-        pl.count().alias('count')
+        pl.len().alias('count')
     ).pivot(
         values='count',
         index='route_id',
@@ -323,8 +337,17 @@ def process_routes(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str]) -
         print(f"Generating mock shapes for {len(valid_routes):,} routes...")
         routes_dict = generate_mock_shapes_batch(gtfs_data, valid_routes)
         print(f"  Generated shapes for {len(routes_dict):,} routes...")
-    
-    return dict(routes_dict)
+
+    # Remap keys from route_id to route_short_name (fallback: route_id)
+    routes_df = gtfs_data['routes']
+    has_short_name = 'route_short_name' in routes_df.columns
+    route_key_map = {
+        row['route_id']: (row.get('route_short_name') or '').strip() or row['route_id']
+        for row in routes_df.select(
+            ['route_id'] + (['route_short_name'] if has_short_name else [])
+        ).to_dicts()
+    }
+    return {route_key_map.get(rid, rid): shapes for rid, shapes in routes_dict.items()}
 
 def process_services(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str]) -> Dict:
     """Process trips.txt and stop_times.txt to generate services.min.json format with destination grouping."""
@@ -375,8 +398,9 @@ def process_services(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str])
     # Process each route
     for route_idx, route in enumerate(routes_df.to_dicts(), 1):
         route_id = route['route_id']
+        route_key = (route.get('route_short_name') or '').strip() or route_id
         route_name = route['route_long_name']
-        
+
         # Filter trips for this route
         route_trip_dests = trip_destinations.filter(pl.col('route_id') == route_id)
         
@@ -422,12 +446,12 @@ def process_services(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str])
         )
 
         # Create final format without nested "routes" key and without trip_count
-        services_dict[route_id] = {
+        services_dict[route_key] = {
             "name": route_name
         }
         # Add destinations directly (not nested under "routes" key)
         for dest, data in sorted_destinations:
-            services_dict[route_id][dest] = data['routes']
+            services_dict[route_key][dest] = data['routes']
         
         if route_idx % 50 == 0:
             print(f"  Processed {route_idx:,}/{total_routes:,} routes ({100*route_idx/total_routes:.1f}%)...")
@@ -524,6 +548,9 @@ def main():
     with open(os.path.join(output_dir, 'services.min.json'), 'w') as f:
         json.dump(services_dict_sorted, f, separators=(',', ':'))
     
+    # Apply city-specific mapping generation if available
+    apply_city_mapping_generation(gtfs_data, output_dir, city_utils)
+
     print("\n✓ Completed! Generated all JSON files")
 
 if __name__ == '__main__':

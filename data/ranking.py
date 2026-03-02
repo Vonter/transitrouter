@@ -47,7 +47,7 @@ def get_valid_routes(trips_df: pl.DataFrame, routes_df: pl.DataFrame, min_trips:
     
     # Count trips per route and direction, then check if any direction meets threshold
     trip_counts = trips_df.group_by(['route_id', 'direction']).agg(
-        pl.count().alias('count')
+        pl.len().alias('count')
     )
     
     # Find routes with at least min_trips in any direction using vectorized operations

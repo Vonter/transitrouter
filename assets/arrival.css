@@ -61,16 +61,82 @@ h1 {
   font-weight: normal;
   padding: 10px;
   margin: 0;
-  z-index: 1;
-  background-color: rgba(240, 240, 240, 0.75);
   z-index: 11;
-  backdrop-filter: blur(1px) saturate(3);
+  background-color: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(4px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-h1 .live-data-loading-container {
+.stop-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stop-heading-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.stop-heading-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.stop-heading-controls .live-data-loading-container {
+  position: relative;
+  top: auto;
+  right: auto;
+  padding: 0 2px;
+}
+
+.dest-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.dest-filter-icon {
+  flex-shrink: 0;
+  color: #666;
+}
+
+.dest-filter-input-wrapper {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.dest-filter-clear {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 50%;
+  cursor: pointer;
+  color: #555;
+}
+
+.dest-filter-clear:active {
+  opacity: 0.6;
+}
+
+.dest-filter-clear svg {
+  width: 12px;
+  height: 12px;
 }
 
 h1 b {
@@ -123,7 +189,7 @@ table tbody tr:has(th:not([colspan])) {
   cursor: pointer;
 }
 table tbody th[colspan] {
-  padding: 0 10px 6px;
+  padding: 0 10px 12px;
 }
 table tbody th small {
   font-weight: normal;
@@ -543,9 +609,9 @@ footer {
 
 .destination {
   border-radius: 3px;
-  padding: 2px;
-  color: #3a6727;
-  background: linear-gradient(90deg, #5d33 0%, #fff0 100%);
+  padding: 2px 5px;
+  background-color: #e8f5e2;
+  color: #2a5a2a;
 }
 
 /* Live data loading indicator */
@@ -612,4 +678,161 @@ footer {
   100% {
     transform: rotate(360deg);
   }
+}
+
+.dest-filter {
+  width: 100%;
+  padding: 6px 32px 6px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  background-color: rgba(0, 0, 0, 0.05);
+  font-size: 14px;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.dest-filter:focus {
+  outline: none;
+  border-color: #007aff;
+  background-color: #fff;
+  scroll-margin-bottom: 20px;
+}
+
+.bookmark-btn {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: #555;
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.bookmark-btn:hover {
+  color: #007aff;
+}
+
+.bookmark-btn.installed {
+  color: #1a1a1a;
+  pointer-events: none;
+}
+
+.bookmark-btn:active {
+  opacity: 0.6;
+}
+
+.bookmark-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Hide install button on desktop — only relevant on mobile */
+@media (min-width: 641px) {
+  .bookmark-btn {
+    display: none;
+  }
+}
+
+/* iOS install instruction sheet */
+.install-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 100;
+  display: flex;
+  align-items: flex-end;
+}
+
+.install-sheet {
+  background: #fff;
+  border-radius: 16px 16px 0 0;
+  padding: 20px 16px 28px;
+  width: 100%;
+  box-shadow: 0 -2px 20px rgba(0, 0, 0, 0.15);
+  font-size: 14px;
+}
+
+.install-sheet-title {
+  font-size: 1em;
+  font-weight: 600;
+  margin: 0 0 14px;
+  color: #111;
+  line-height: 1.4;
+}
+
+.install-browser-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.install-browser-tab {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  background: none;
+  font-size: 0.9em;
+  font-family: inherit;
+  color: #555;
+  cursor: pointer;
+}
+
+.install-browser-tab.active {
+  background: #007aff;
+  color: #fff;
+  border-color: #007aff;
+}
+
+.install-browser-tab:active {
+  opacity: 0.7;
+}
+
+.install-sheet-steps {
+  margin: 0 0 16px;
+  padding-left: 20px;
+  line-height: 1.8;
+  color: #333;
+}
+
+.install-sheet-close {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  background: #007aff;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 1em;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.install-sheet-close:active {
+  opacity: 0.8;
+}
+
+.stop-match-header th {
+  padding: 16px 10px 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  background: transparent;
+}
+
+.stop-match-header:first-child th {
+  border-top: none;
+}
+
+.no-eta-section-header th {
+  padding: 16px 10px 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #999;
+  border-top: 2px solid rgba(0, 0, 0, 0.1);
+  background: transparent;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }

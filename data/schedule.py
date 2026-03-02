@@ -71,7 +71,7 @@ def count_trips_per_route(trips_df: pl.DataFrame) -> Dict[str, Dict[str, int]]:
     """Count the number of trips per route and direction using vectorized operations."""
     # Group by route_id and direction, then count
     counts = trips_df.group_by(['route_id', 'direction']).agg(
-        pl.count().alias('count')
+        pl.len().alias('count')
     )
     
     # Convert to nested dictionary

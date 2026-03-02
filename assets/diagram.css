@@ -630,10 +630,81 @@ body {
 
 .data-table-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
 }
 
 .data-table-actions .expert-apply-btn { flex: 1; }
+
+/* ── Editable stop labels ───────────────────────────────────────────────────── */
+
+.data-table-stop-label[contenteditable] {
+  cursor: text;
+  outline: none;
+  border-radius: 2px;
+  transition: background 0.1s;
+}
+
+.data-table-stop-label[contenteditable]:hover { background: rgba(27,77,169,0.07); }
+.data-table-stop-label[contenteditable]:focus { background: rgba(27,77,169,0.13); outline: none; }
+
+/* ── Editable route name input ─────────────────────────────────────────────── */
+
+.data-table-route-name-input {
+  display: block;
+  width: 100%;
+  padding: 3px 8px;
+  border: none;
+  background: transparent;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 0.7rem;
+  color: #1b4da9;
+  cursor: text;
+  min-width: 44px;
+  box-sizing: border-box;
+}
+
+.data-table-route-name-input:hover { background: rgba(27,77,169,0.06); }
+.data-table-route-name-input:focus { outline: 1px solid #1b4da9; border-radius: 2px; background: #fff; }
+
+/* ── Add stop / route buttons ──────────────────────────────────────────────── */
+
+.data-table-add-wrapper {
+  position: relative;
+}
+
+.data-table-add-btn {
+  padding: 3px 9px;
+  border: 1px solid rgba(27,77,169,0.3);
+  border-radius: 4px;
+  background: #fff;
+  font-size: 0.74rem;
+  color: #1b4da9;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.1s;
+}
+
+.data-table-add-btn:hover { background: #1b4da9; border-color: #1b4da9; color: #fff; }
+.data-table-add-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* ── Route selector dropdown ───────────────────────────────────────────────── */
+
+.route-selector-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 200px;
+  max-width: 320px;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.14);
+  z-index: 300;
+  overflow: hidden;
+}
 
 /* ── Print ──────────────────────────────────────────────────────────────────── */
 

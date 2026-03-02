@@ -4,6 +4,7 @@
  *
  * Endpoint: /api/bmtc/arrivals?stationid=20820
  */
+import BLR_ROUTE_MAPPING from './blr-route-mapping.js';
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -39,12 +40,6 @@ export async function onRequest(context) {
       );
     }
 
-    // Log the request body
-    console.log('BMTC API Request:', {
-      stationid: parseInt(stationId),
-      triptype: 1,
-    });
-
     // Fetch data from BMTC API
     const bmtcResponse = await fetch(
       'https://bmtcmobileapi.karnataka.gov.in/WebAPI/GetMobileTripsData',
@@ -72,9 +67,6 @@ export async function onRequest(context) {
     // Read the response body once and parse it
     const result = await bmtcResponse.json();
 
-    // Log the parsed result
-    console.log('BMTC API Response:', result);
-
     // Check if API returned success
     if (!result.Issuccess || !result.data || result.data.length === 0) {
       return new Response(JSON.stringify({ services: [] }), {
@@ -88,7 +80,7 @@ export async function onRequest(context) {
     }
 
     // Convert BMTC API response to transitrouter format
-    const services = await convertBMTCToServices(result.data, context);
+    const services = await convertBMTCToServices(result.data);
 
     return new Response(JSON.stringify({ services }), {
       status: 200,
@@ -140,48 +132,6 @@ function parseBMTCDate(dateString) {
   const isoString = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}+05:30`;
 
   return new Date(isoString);
-}
-
-/**
- * Fetch route ID for a service number
- * Does route search directly against BMTC API
- */
-async function getRouteIdForService(routeNo, context) {
-  try {
-    // Fetch route ID from BMTC route search API directly
-    const routeSearchResponse = await fetch(
-      'https://bmtcmobileapi.karnataka.gov.in/WebAPI/SearchRoute_v2',
-      {
-        method: 'POST',
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
-          Accept: 'application/json, text/plain, */*',
-          'Content-Type': 'application/json',
-          lan: 'en',
-          deviceType: 'WEB',
-        },
-        body: JSON.stringify({
-          routetext: routeNo.toLowerCase(),
-        }),
-      },
-    );
-
-    if (!routeSearchResponse.ok) return null;
-
-    const result = await routeSearchResponse.json();
-    if (result.Issuccess && result.data && result.data.length > 0) {
-      // Find exact match (case-insensitive)
-      const exactMatch = result.data.find(
-        (r) => r.routeno.toLowerCase() === routeNo.toLowerCase(),
-      );
-      return exactMatch ? exactMatch.routeparentid : null;
-    }
-    return null;
-  } catch (error) {
-    console.error(`Error fetching route ID for ${routeNo}:`, error);
-    return null;
-  }
 }
 
 /**
@@ -272,38 +222,37 @@ async function fetchVehicleDataForRoute(routeId) {
 /**
  * Convert BMTC API response to transitrouter service format
  */
-async function convertBMTCToServices(data, context) {
+async function convertBMTCToServices(data) {
   const servicesMap = new Map();
   const now = new Date();
 
   let processedCount = 0;
   let filteredCount = 0;
 
-  // First pass: collect all unique route numbers and vehicles
+  // First pass: collect unique routes that have GPS-enabled vehicles.
+  // Routes where all trips have devicestatusflag === 0 have no live location
+  // data, so skip the SearchRoute_v2 + SearchByRouteDetails_v4 round-trips
+  // for them entirely.
   const uniqueRoutes = new Set();
   const vehicleIds = new Map(); // Map vehicle_id to trip info
 
   data.forEach((trip) => {
-    const routeNo = trip.routeno;
-    uniqueRoutes.add(routeNo);
-
     if (trip.vehicleid) {
       vehicleIds.set(trip.vehicleid, {
-        routeNo,
+        routeNo: trip.routeno,
         busNo: trip.busno,
       });
+
+      if (trip.devicestatusflag === 1) {
+        uniqueRoutes.add(trip.routeno);
+      }
     }
   });
 
-  // Fetch vehicle data for all unique routes in parallel
-  const routeIdPromises = Array.from(uniqueRoutes).map(async (routeNo) => {
-    const routeId = await getRouteIdForService(routeNo, context);
-    return { routeNo, routeId };
-  });
-
-  const routeIds = await Promise.all(routeIdPromises);
+  // Resolve route IDs from the bundled GTFS mapping (route_short_name -> route_id)
   const routeIdMap = new Map();
-  routeIds.forEach(({ routeNo, routeId }) => {
+  uniqueRoutes.forEach((routeNo) => {
+    const routeId = BLR_ROUTE_MAPPING[routeNo];
     if (routeId) routeIdMap.set(routeNo, routeId);
   });
 
