@@ -2084,8 +2084,8 @@ function ArrivalTimes() {
                     <tr>
                       <td class="blank">
                         {fetchServicesError
-                          ? `No routes operate to "${destFilter}"`
-                          : `No routes arriving soon for "${destFilter}"`}
+                          ? `No buses operate from ${name} towards "${destFilter}"`
+                          : `No buses arriving at ${name} towards "${destFilter}"`}
                       </td>
                     </tr>
                   </tbody>
