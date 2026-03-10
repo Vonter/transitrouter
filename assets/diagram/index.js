@@ -7,6 +7,7 @@ import {
   loadCityData,
   loadScheduleData,
   computeDiagramData,
+  computeStopsForRoutes,
 } from './dataLoader';
 import { renderDiagramSVG } from './DiagramSVG';
 import MapPicker from './MapPicker';
@@ -29,6 +30,59 @@ function syncUrlParams(routes, stops, expert) {
   params.set('stops', stops);
   if (expert) params.set('expert', '1');
   else params.delete('expert');
+  history.replaceState(
+    null,
+    '',
+    `${location.pathname}?${params}${location.hash}`,
+  );
+}
+
+// ── Data override URL serialization ──────────────────────────────────────────
+
+function encodeOverridesToUrl(overrides) {
+  const obj = {};
+  if (overrides.routes?.length) obj.r = overrides.routes;
+  if (overrides.stops?.length) obj.s = overrides.stops;
+  if (overrides.cellOverrides?.size)
+    obj.c = Object.fromEntries(overrides.cellOverrides);
+  if (overrides.nameOverrides?.size)
+    obj.n = Object.fromEntries(overrides.nameOverrides);
+  if (overrides.routeNameOverrides?.size)
+    obj.rn = Object.fromEntries(overrides.routeNameOverrides);
+  if (!Object.keys(obj).length) return null;
+  const bytes = new TextEncoder().encode(JSON.stringify(obj));
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function decodeOverridesFromUrl(encoded) {
+  try {
+    const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const obj = JSON.parse(new TextDecoder().decode(bytes));
+    return {
+      routes: obj.r || null,
+      stops: obj.s || null,
+      cellOverrides: obj.c ? new Map(Object.entries(obj.c)) : null,
+      nameOverrides: obj.n ? new Map(Object.entries(obj.n)) : null,
+      routeNameOverrides: obj.rn ? new Map(Object.entries(obj.rn)) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function syncDataParam(encoded) {
+  const params = new URLSearchParams(location.search);
+  if (encoded) params.set('d', encoded);
+  else params.delete('d');
   history.replaceState(
     null,
     '',
@@ -397,24 +451,43 @@ function RouteSelector({ routes, onSelect, onClose }) {
   );
 }
 
-function DataTable({ diagramData, stopsData, servicesData, onDataChange }) {
-  const [tableRoutes, setTableRoutes] = useState(() =>
-    diagramData.routes.map((r) => r.routeId),
+function DataTable({
+  diagramData,
+  stopsData,
+  servicesData,
+  currentStopId,
+  appliedRoutes,
+  appliedStops,
+  appliedCells,
+  appliedNames,
+  appliedRouteNames,
+  onDataChange,
+}) {
+  const [tableRoutes, setTableRoutes] = useState(
+    () => appliedRoutes || diagramData.routes.map((r) => r.routeId),
   );
-  const [tableStops, setTableStops] = useState(() => diagramData.orderedStops);
-  const [cellOverrides, setCellOverrides] = useState(() => new Map());
-  const [nameOverrides, setNameOverrides] = useState(() => new Map());
-  const [routeNameOverrides, setRouteNameOverrides] = useState(() => new Map());
+  const [tableStops, setTableStops] = useState(
+    () => appliedStops || diagramData.orderedStops,
+  );
+  const [cellOverrides, setCellOverrides] = useState(
+    () => appliedCells || new Map(),
+  );
+  const [nameOverrides, setNameOverrides] = useState(
+    () => appliedNames || new Map(),
+  );
+  const [routeNameOverrides, setRouteNameOverrides] = useState(
+    () => appliedRouteNames || new Map(),
+  );
   const [showAddStop, setShowAddStop] = useState(false);
   const [showAddRoute, setShowAddRoute] = useState(false);
 
   useEffect(() => {
-    setTableRoutes(diagramData.routes.map((r) => r.routeId));
-    setTableStops(diagramData.orderedStops);
-    setCellOverrides(new Map());
-    setNameOverrides(new Map());
-    setRouteNameOverrides(new Map());
-  }, [diagramData]);
+    setTableRoutes(appliedRoutes || diagramData.routes.map((r) => r.routeId));
+    setTableStops(appliedStops || diagramData.orderedStops);
+    setCellOverrides(appliedCells || new Map());
+    setNameOverrides(appliedNames || new Map());
+    setRouteNameOverrides(appliedRouteNames || new Map());
+  }, [diagramData, appliedRoutes, appliedStops]);
 
   // For each rendered route, build the set of stop IDs it visits (forward journey).
   // Routes added from city data (not in diagramData) use their first sequence.
@@ -465,8 +538,49 @@ function DataTable({ diagramData, stopsData, servicesData, onDataChange }) {
   };
 
   const addRoute = (routeId) => {
-    if (!tableRoutes.includes(routeId))
-      setTableRoutes((prev) => [...prev, routeId]);
+    if (tableRoutes.includes(routeId)) {
+      setShowAddRoute(false);
+      return;
+    }
+
+    // Auto-extract relevant stops from the new route
+    const rd = servicesData[routeId];
+    const destId = rd && Object.keys(rd).find((k) => k !== 'name');
+    const newRouteSeq = destId ? (rd[destId][0] || []).map(String) : [];
+
+    // Collect all stops visited by existing table routes
+    const existingRouteStops = new Set();
+    for (const rid of tableRoutes) {
+      const set = routeStopSets[rid];
+      if (set) set.forEach((s) => existingRouteStops.add(s));
+    }
+
+    const tableStopSet = new Set(tableStops);
+    const stopsToAdd = [];
+
+    for (const sid of newRouteSeq) {
+      if (tableStopSet.has(sid)) continue;
+      // Add stops shared with existing routes
+      if (existingRouteStops.has(sid)) stopsToAdd.push(sid);
+    }
+
+    // Always add the terminal (last) stop
+    const terminal = newRouteSeq[newRouteSeq.length - 1];
+    if (
+      terminal &&
+      !tableStopSet.has(terminal) &&
+      !stopsToAdd.includes(terminal)
+    ) {
+      stopsToAdd.push(terminal);
+    }
+
+    setTableRoutes((prev) => [...prev, routeId]);
+    if (stopsToAdd.length > 0) {
+      setTableStops((prev) => [
+        ...prev,
+        ...stopsToAdd.filter((s) => !prev.includes(s)),
+      ]);
+    }
     setShowAddRoute(false);
   };
 
@@ -485,6 +599,13 @@ function DataTable({ diagramData, stopsData, servicesData, onDataChange }) {
     setCellOverrides(new Map());
     setNameOverrides(new Map());
     setRouteNameOverrides(new Map());
+    onDataChange({
+      routes: [],
+      stops: [],
+      cellOverrides: new Map(),
+      nameOverrides: new Map(),
+      routeNameOverrides: new Map(),
+    });
   };
 
   const displayStopName = (stopId) =>
@@ -493,12 +614,59 @@ function DataTable({ diagramData, stopsData, servicesData, onDataChange }) {
   const displayRouteName = (routeId) =>
     routeNameOverrides.get(routeId) ?? routeId;
 
+  const effectiveOrigin = currentStopId;
   const availableRoutes = Object.keys(servicesData)
-    .filter((id) => !tableRoutes.includes(id))
+    .filter((id) => {
+      if (tableRoutes.includes(id)) return false;
+      const rd = servicesData[id];
+      if (!rd) return false;
+      return Object.entries(rd).some(
+        ([k, seqs]) =>
+          k !== 'name' &&
+          seqs.some(
+            (seq) =>
+              seq.includes(effectiveOrigin) ||
+              seq.includes(parseInt(effectiveOrigin, 10)),
+          ),
+      );
+    })
     .map((id) => ({ routeId: id, routeName: servicesData[id]?.name }));
 
   return (
     <div class="data-table-wrapper">
+      <div class="data-table-toolbar">
+        <div class="data-table-add-wrapper">
+          <button
+            class="data-table-add-btn"
+            onClick={() => setShowAddRoute((v) => !v)}
+            disabled={availableRoutes.length === 0}
+          >
+            + Add Route
+          </button>
+          {showAddRoute && (
+            <RouteSelector
+              routes={availableRoutes}
+              onSelect={addRoute}
+              onClose={() => setShowAddRoute(false)}
+            />
+          )}
+        </div>
+        <div class="data-table-add-wrapper">
+          <button
+            class="data-table-add-btn"
+            onClick={() => setShowAddStop((v) => !v)}
+          >
+            + Add Stop
+          </button>
+          {showAddStop && (
+            <StopSelector
+              stopsData={stopsData}
+              onSelect={addStop}
+              onClose={() => setShowAddStop(false)}
+            />
+          )}
+        </div>
+      </div>
       <div class="data-table-scroll">
         <table class="data-table">
           <thead>
@@ -581,39 +749,8 @@ function DataTable({ diagramData, stopsData, servicesData, onDataChange }) {
         </table>
       </div>
       <div class="data-table-actions">
-        <div class="data-table-add-wrapper">
-          <button
-            class="data-table-add-btn"
-            onClick={() => setShowAddStop((v) => !v)}
-          >
-            + Stop
-          </button>
-          {showAddStop && (
-            <StopSelector
-              stopsData={stopsData}
-              onSelect={addStop}
-              onClose={() => setShowAddStop(false)}
-            />
-          )}
-        </div>
-        <div class="data-table-add-wrapper">
-          <button
-            class="data-table-add-btn"
-            onClick={() => setShowAddRoute((v) => !v)}
-            disabled={availableRoutes.length === 0}
-          >
-            + Route
-          </button>
-          {showAddRoute && (
-            <RouteSelector
-              routes={availableRoutes}
-              onSelect={addRoute}
-              onClose={() => setShowAddRoute(false)}
-            />
-          )}
-        </div>
         <button class="expert-apply-btn" onClick={handleApply}>
-          Apply
+          Apply Changes
         </button>
         <button class="expert-reset-btn" onClick={handleReset}>
           Reset
@@ -629,6 +766,12 @@ function ExpertPanel({
   diagramData,
   stopsData,
   servicesData,
+  currentStopId,
+  appliedRoutes,
+  appliedStops,
+  appliedCells,
+  appliedNames,
+  appliedRouteNames,
   onThemeChange,
   onDataChange,
 }) {
@@ -671,6 +814,12 @@ function ExpertPanel({
           diagramData={diagramData}
           stopsData={stopsData}
           servicesData={servicesData}
+          currentStopId={currentStopId}
+          appliedRoutes={appliedRoutes}
+          appliedStops={appliedStops}
+          appliedCells={appliedCells}
+          appliedNames={appliedNames}
+          appliedRouteNames={appliedRouteNames}
           onDataChange={onDataChange}
         />
       </div>
@@ -834,7 +983,6 @@ export default function BusDiagram() {
   const [cellOverrides, setCellOverrides] = useState(null); // Map<"routeId:stopId", boolean>
   const [nameOverrides, setNameOverrides] = useState(null); // Map<stopId, displayName>
   const [routeNameOverrides, setRouteNameOverrides] = useState(null); // Map<routeId, displayName>
-
   const [showStopSelector, setShowStopSelector] = useState(false);
   const [showMapPicker, setShowMapPicker] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -876,11 +1024,6 @@ export default function BusDiagram() {
       setLoading(true);
       setError(null);
       setDiagramData(null);
-      setRouteOverrides(null);
-      setStopOverrides(null);
-      setCellOverrides(null);
-      setNameOverrides(null);
-      setRouteNameOverrides(null);
 
       let resolvedStopId = location.hash.slice(1);
       const route = getRoute();
@@ -892,6 +1035,12 @@ export default function BusDiagram() {
       if (!resolvedStopId) {
         setShowMapPicker(true);
         setStopId(null);
+        setRouteOverrides(null);
+        setStopOverrides(null);
+        setCellOverrides(null);
+        setNameOverrides(null);
+        setRouteNameOverrides(null);
+        syncDataParam(null);
         setLoading(false);
         return;
       }
@@ -926,7 +1075,24 @@ export default function BusDiagram() {
         return;
       }
 
+      // Read data overrides from URL param
+      const dParam = new URLSearchParams(location.search).get('d');
+      const urlOverrides = dParam ? decodeOverridesFromUrl(dParam) : null;
+
       setDiagramData(result);
+      if (urlOverrides) {
+        setRouteOverrides(urlOverrides.routes);
+        setStopOverrides(urlOverrides.stops);
+        setCellOverrides(urlOverrides.cellOverrides);
+        setNameOverrides(urlOverrides.nameOverrides);
+        setRouteNameOverrides(urlOverrides.routeNameOverrides);
+      } else {
+        setRouteOverrides(null);
+        setStopOverrides(null);
+        setCellOverrides(null);
+        setNameOverrides(null);
+        setRouteNameOverrides(null);
+      }
       setLoading(false);
     };
 
@@ -1040,6 +1206,7 @@ export default function BusDiagram() {
       routes: effectiveRoutes,
       orderedStops: effectiveStops,
       city,
+      poisData: cityData?.poisData || [],
     }).then((node) => {
       if (!cancelled) svgNodeRef.current = node;
     });
@@ -1155,6 +1322,12 @@ export default function BusDiagram() {
           diagramData={diagramData}
           stopsData={cityData.stopsData}
           servicesData={cityData.servicesData}
+          currentStopId={stopId}
+          appliedRoutes={routeOverrides}
+          appliedStops={stopOverrides}
+          appliedCells={cellOverrides}
+          appliedNames={nameOverrides}
+          appliedRouteNames={routeNameOverrides}
           onThemeChange={() => setThemeRenderKey((k) => k + 1)}
           onDataChange={({
             routes,
@@ -1163,11 +1336,60 @@ export default function BusDiagram() {
             nameOverrides: no,
             routeNameOverrides: rno,
           }) => {
-            setRouteOverrides(routes.length > 0 ? routes : null);
-            setStopOverrides(stops.length > 0 ? stops : null);
-            setCellOverrides(co?.size > 0 ? co : null);
-            setNameOverrides(no?.size > 0 ? no : null);
-            setRouteNameOverrides(rno?.size > 0 ? rno : null);
+            const newRoutes = routes.length > 0 ? routes : null;
+            const newCells = co?.size > 0 ? co : null;
+            const newNames = no?.size > 0 ? no : null;
+            const newRouteNames = rno?.size > 0 ? rno : null;
+            setRouteOverrides(newRoutes);
+            setCellOverrides(newCells);
+            setNameOverrides(newNames);
+            setRouteNameOverrides(newRouteNames);
+
+            let effectiveStops = stops.length > 0 ? stops : null;
+
+            if (newRoutes && cityData && stopId) {
+              const routeObjects = newRoutes
+                .map((id) => {
+                  const inDiagram = diagramData.routes.find(
+                    (r) => r.routeId === id,
+                  );
+                  if (inDiagram) return inDiagram;
+                  const rd = cityData.servicesData[id];
+                  if (!rd) return null;
+                  const destId = Object.keys(rd).find((k) => k !== 'name');
+                  if (!destId) return null;
+                  const seq = (rd[destId][0] || []).map(String);
+                  return {
+                    routeId: id,
+                    routeName: rd.name,
+                    destinationStopId: destId,
+                    stopSequence: rd[destId][0] || [],
+                    seqForGrouping: seq,
+                    tripCount: 0,
+                  };
+                })
+                .filter(Boolean);
+
+              const recomputedStops = computeStopsForRoutes(
+                routeObjects,
+                stopId,
+                cityData.rankingData,
+                stopsRef.current,
+              );
+              effectiveStops = recomputedStops;
+            }
+
+            setStopOverrides(effectiveStops);
+
+            // Sync data overrides to URL
+            const encoded = encodeOverridesToUrl({
+              routes,
+              stops: effectiveStops || [],
+              cellOverrides: co,
+              nameOverrides: no,
+              routeNameOverrides: rno,
+            });
+            syncDataParam(encoded);
           }}
         />
       )}

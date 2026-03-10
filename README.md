@@ -33,7 +33,6 @@ Refer to [DATA.md](DATA.md) for more details on the data sources and processing 
 ## TODO
 
 - Bus Diagram
-    - Tagging metro/station/ksrtc/railways/airport on stops
     - Enhance design and rendering of stop diagrams on `diagram/` page
 - User Experience
     - Show stop suffix in title of arrivals page

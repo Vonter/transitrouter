@@ -19,3 +19,4 @@ data/**/schedule
 data/**/*.zip
 data/parse.log*
 **/__pycache__
+scripts/output

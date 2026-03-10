@@ -66,9 +66,9 @@ export const getAllStopsFromRoutes = (routes, currentStopId) => {
 
   routes.forEach((route) => {
     const currentIndex = findStopIndex(route.stopSequence, currentStopId, norm);
-    if (currentIndex === -1) return;
+    const startIdx = currentIndex === -1 ? 0 : currentIndex;
 
-    route.stopSequence.slice(currentIndex).forEach((stopId, idx) => {
+    route.stopSequence.slice(startIdx).forEach((stopId, idx) => {
       const stopIdStr = String(stopId);
       if (!stopPositions.has(stopIdStr))
         stopPositions.set(stopIdStr, new Set());
@@ -211,6 +211,89 @@ export const createStopPositionMap = (
   });
 
   return stopPositionMap;
+};
+
+// ── Route grouping by common forward stops ───────────────────────────────────
+
+// Groups routes that share identical forward major-stop sequences into a single
+// "route group".  Each group is rendered as one horizontal line in the diagram.
+// Returns an array of { routes, forwardStops } sorted by group size (largest first).
+export const groupRoutesByForwardStops = (
+  routes,
+  currentStopId,
+  orderedStops,
+) => {
+  const norm = normalizeStopId(currentStopId);
+  const orderedSet = new Set(orderedStops);
+
+  const routeForwardStops = routes.map((route) => {
+    const curIdx = findStopIndex(route.stopSequence, currentStopId, norm);
+    const startIdx = curIdx === -1 ? 0 : curIdx;
+    return route.stopSequence
+      .slice(startIdx)
+      .map(String)
+      .filter((s) => orderedSet.has(s));
+  });
+
+  const groupMap = new Map();
+  routes.forEach((route, i) => {
+    const key = routeForwardStops[i].join(',');
+    if (!groupMap.has(key)) {
+      groupMap.set(key, { routes: [], forwardStops: routeForwardStops[i] });
+    }
+    groupMap.get(key).routes.push(route);
+  });
+
+  return Array.from(groupMap.values()).sort(
+    (a, b) => b.routes.length - a.routes.length,
+  );
+};
+
+export const orderGroupsBySimilarity = (routeGroups) => {
+  if (routeGroups.length <= 2) return routeGroups;
+
+  const stopSets = routeGroups.map((g) => new Set(g.forwardStops));
+  const similarity = (a, b) => {
+    let shared = 0;
+    for (const s of a) if (b.has(s)) shared++;
+    return shared;
+  };
+
+  const used = new Set();
+  const ordered = [];
+  const idxOf = [];
+
+  let best = 0;
+  for (let i = 1; i < routeGroups.length; i++) {
+    if (routeGroups[i].routes.length > routeGroups[best].routes.length)
+      best = i;
+  }
+  ordered.push(routeGroups[best]);
+  idxOf.push(best);
+  used.add(best);
+
+  while (ordered.length < routeGroups.length) {
+    const lastSet = stopSets[idxOf[idxOf.length - 1]];
+    let nextIdx = -1;
+    let maxSim = -1;
+    for (let i = 0; i < routeGroups.length; i++) {
+      if (used.has(i)) continue;
+      const sim = similarity(lastSet, stopSets[i]);
+      if (
+        sim > maxSim ||
+        (sim === maxSim &&
+          routeGroups[i].routes.length > routeGroups[nextIdx].routes.length)
+      ) {
+        maxSim = sim;
+        nextIdx = i;
+      }
+    }
+    ordered.push(routeGroups[nextIdx]);
+    idxOf.push(nextIdx);
+    used.add(nextIdx);
+  }
+
+  return ordered;
 };
 
 // ── Route ordering helpers ──────────────────────────────────────────────────────

@@ -489,7 +489,16 @@ body {
 /* ── Data table ─────────────────────────────────────────────────────────────── */
 
 .expert-data {
-  padding: 16px;
+  padding: 18px 16px;
+}
+
+.expert-data .expert-section-header {
+  margin-bottom: 12px;
+}
+
+.expert-data .expert-section-title {
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
 }
 
 .data-table-wrapper {
@@ -628,14 +637,36 @@ body {
   background: rgba(192,57,43,0.07);
 }
 
+.data-table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+  margin-bottom: 8px;
+}
+
 .data-table-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(0,0,0,0.06);
+  margin-top: 2px;
 }
 
-.data-table-actions .expert-apply-btn { flex: 1; }
+.data-table-actions .expert-apply-btn {
+  flex: 1;
+  padding: 9px 16px;
+  font-size: 0.84rem;
+  border-radius: 6px;
+}
+
+.data-table-actions .expert-reset-btn {
+  padding: 8px 14px;
+  font-size: 0.78rem;
+  border-radius: 6px;
+}
 
 /* ── Editable stop labels ───────────────────────────────────────────────────── */
 
@@ -676,19 +707,27 @@ body {
 }
 
 .data-table-add-btn {
-  padding: 3px 9px;
-  border: 1px solid rgba(27,77,169,0.3);
-  border-radius: 4px;
-  background: #fff;
-  font-size: 0.74rem;
+  padding: 5px 12px;
+  border: 1.5px dashed rgba(27,77,169,0.35);
+  border-radius: 6px;
+  background: rgba(27,77,169,0.03);
+  font-size: 0.76rem;
+  font-weight: 600;
   color: #1b4da9;
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.1s;
+  transition: all 0.12s;
 }
 
-.data-table-add-btn:hover { background: #1b4da9; border-color: #1b4da9; color: #fff; }
-.data-table-add-btn:disabled { opacity: 0.4; cursor: default; }
+.data-table-add-btn:hover {
+  background: #1b4da9;
+  border-color: #1b4da9;
+  border-style: solid;
+  color: #fff;
+}
+
+.data-table-add-btn:disabled { opacity: 0.35; cursor: default; }
+.data-table-add-btn:disabled:hover { background: rgba(27,77,169,0.03); color: #1b4da9; border-style: dashed; }
 
 /* ── Route selector dropdown ───────────────────────────────────────────────── */
 

@@ -17,6 +17,7 @@ SCRIPTS = [
     ('schedule.py', ['--city']),
     ('firstlast.py', ['--city']),
     ('ranking.py', ['--city']),
+    ('pois.py', ['--city']),
 ]
 
 LOG_FILE = 'parse.log'

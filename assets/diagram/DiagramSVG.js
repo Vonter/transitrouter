@@ -5,10 +5,9 @@ import bmtcSvgUrl from 'url:../images/bmtc.svg';
 import ksrtcSvgUrl from 'url:../images/ksrtc.svg';
 import railwaysSvgUrl from 'url:../images/railways.svg';
 import {
-  createStopPositionMap,
   getStopName,
-  normalizeStopId,
-  matchesStop,
+  groupRoutesByForwardStops,
+  orderGroupsBySimilarity,
 } from './algorithms';
 import {
   SVG_WIDTH,
@@ -48,7 +47,6 @@ import {
   ROUTE_AREA_END_PCT,
   ROUTE_LINE_MIN_EXTEND,
   STOP_SPACING,
-  MAX_STOP_STEP_PCT,
   LABEL_AREA_END_X,
   LABEL_GAP,
   LABEL_BOX_H,
@@ -74,8 +72,6 @@ import {
   LABEL_HORIZ_GAP,
   LABEL_LINE_SPACING_EXTRA,
   LABEL_ANCHOR_CLAMP,
-  BRANCH_STROKE_W,
-  MIN_SHARED_FOR_BRANCH,
   INFO_PANEL_H,
   LEGEND_INNER_W,
   LEGEND_VERT_PAD,
@@ -157,6 +153,44 @@ function insertInlineSvg(parent, svgInfo, x, y, targetW, targetH) {
       svgNode.appendChild(document.importNode(child, true));
   }
   return nested;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// POI proximity helpers
+// ══════════════════════════════════════════════════════════════════════════════
+
+const POI_RADIUS_M = 500;
+
+function haversineDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function buildStopPoiMap(stopsData, poisData) {
+  const stopPoiTypes = {};
+  if (!poisData || poisData.length === 0) return stopPoiTypes;
+  for (const [stopId, stopArr] of Object.entries(stopsData)) {
+    const [sLon, sLat] = stopArr;
+    if (sLon == null || sLat == null) continue;
+    const poiMap = new Map();
+    for (const poi of poisData) {
+      if (haversineDistance(sLat, sLon, poi.lat, poi.lon) <= POI_RADIUS_M) {
+        if (!poiMap.has(poi.type)) {
+          poiMap.set(poi.type, { type: poi.type, color: poi.color || '' });
+        } else if (poi.color && !poiMap.get(poi.type).color) {
+          poiMap.get(poi.type).color = poi.color;
+        }
+      }
+    }
+    if (poiMap.size > 0) stopPoiTypes[stopId] = poiMap;
+  }
+  return stopPoiTypes;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -281,24 +315,6 @@ function packClusterLabels(cluster) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Route clustering by terminal stop — each unique terminal gets its own
-// cluster/route line, guaranteeing exactly one terminal icon per line.
-// ══════════════════════════════════════════════════════════════════════════════
-
-function clusterRoutesByTerminal(routes) {
-  const groups = new Map();
-  routes.forEach((route) => {
-    const seq = route.seqForGrouping ?? route.stopSequence ?? [];
-    const terminal = String(
-      seq[seq.length - 1] ?? route.destinationStopId ?? 'unknown',
-    );
-    if (!groups.has(terminal)) groups.set(terminal, []);
-    groups.get(terminal).push(route);
-  });
-  return [...groups.values()].sort((a, b) => b.length - a.length);
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
 // Stop label overlap avoidance — assigns each label to an above or below row
 // so that labels don't overlap after ±30° rotation.  Labels alternate between
 // above and below to distribute them evenly on both sides of the stop icons.
@@ -330,7 +346,8 @@ function layoutStopLabels(labelData) {
     const longestLineLen = item.lines
       ? Math.max(...item.lines.map((l) => l.length))
       : item.name.length;
-    const textW = longestLineLen * LABEL_CHAR_WIDTH;
+    const iconW = (item.poiIconCount || 0) * (LABEL_FONT_SIZE + 2);
+    const textW = longestLineLen * LABEL_CHAR_WIDTH + iconW;
     const hSpan = textW * COS;
     const start = item.x;
 
@@ -341,70 +358,6 @@ function layoutStopLabels(labelData) {
     tryPlace(MAX_ROWS, start, hSpan);
     return { ...item, row: MAX_ROWS, below: false };
   });
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Branch detection — finds pairs of clusters that share stops and should be
-// connected with a vertical branch-point connector.
-// ══════════════════════════════════════════════════════════════════════════════
-
-function findClusterBranches(clusters, orderedStops, stopPosMap) {
-  if (clusters.length <= 1) return [];
-
-  // Build per-cluster stop sets
-  const clusterStops = clusters.map((cluster) => {
-    const stops = new Set();
-    cluster.forEach((route) => {
-      (route.seqForGrouping || route.stopSequence)
-        .map(String)
-        .forEach((s) => stops.add(s));
-    });
-    return stops;
-  });
-
-  const branches = []; // { parentIdx, childIdx, branchStopId }
-
-  for (let child = 1; child < clusters.length; child++) {
-    let bestParent = -1;
-    let bestBranchStop = null;
-    let bestShared = 0;
-
-    for (let parent = 0; parent < child; parent++) {
-      let shared = 0;
-      let lastShared = null;
-
-      for (const stop of orderedStops) {
-        if (
-          clusterStops[child].has(stop) &&
-          clusterStops[parent].has(stop) &&
-          stopPosMap[stop]
-        ) {
-          shared++;
-          lastShared = stop;
-        }
-      }
-
-      if (shared > bestShared) {
-        bestShared = shared;
-        bestParent = parent;
-        bestBranchStop = lastShared;
-      }
-    }
-
-    if (
-      bestParent !== -1 &&
-      bestShared >= MIN_SHARED_FOR_BRANCH &&
-      bestBranchStop
-    ) {
-      branches.push({
-        parentIdx: bestParent,
-        childIdx: child,
-        branchStopId: bestBranchStop,
-      });
-    }
-  }
-
-  return branches;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -568,7 +521,7 @@ function drawHeader(
 
   // ── Stop name + "Towards" suffix — read directly from stops data ─────────────
   // Shown as a subtitle beneath the stop name in the same font.
-  const towardsLine = '(' + towardsSuffix + ')' || null;
+  const towardsLine = towardsSuffix ? '(' + towardsSuffix + ')' : null;
 
   if (kannadaName) {
     g.append('text')
@@ -690,159 +643,118 @@ function drawRouteDiagram(
   yBase,
   extraTopPad = 0,
   extraBottomPad = 0,
+  stopPoiTypes = {},
+  svgInfos = {},
 ) {
-  const clusters = clusterRoutesByTerminal(routes);
-  const nClusters = clusters.length;
-  if (nClusters === 0) return 0;
-
-  const stopPosMap = createStopPositionMap(
-    routes,
-    orderedStops,
-    currentStopId,
-    stopsData,
-    MAX_STOP_STEP_PCT,
+  const routeGroups = orderGroupsBySimilarity(
+    groupRoutesByForwardStops(routes, currentStopId, orderedStops),
   );
+  const nGroups = routeGroups.length;
+  if (nGroups === 0) return 0;
 
-  // Identify the last displayed stop for each route, keyed by cluster index.
-  // terminalClusterMap: stopId → Set<clusterIndex> so that a stop is only
-  // rendered as a terminal on the cluster rows whose routes actually end there,
-  // not on rows where it's merely an intermediate stop for a longer route.
-  const terminalClusterMap = new Map();
-  clusters.forEach((cluster, ci) => {
-    cluster.forEach((route) => {
-      const curNorm = normalizeStopId(currentStopId);
-      const curIdx = route.stopSequence.findIndex((id) =>
-        matchesStop(id, curNorm),
-      );
-      if (curIdx < 0) return;
-      const forwardStrs = new Set(route.stopSequence.slice(curIdx).map(String));
-      let lastInDiagram = null;
-      for (const sid of orderedStops) {
-        if (sid === currentStopId) continue;
-        if (forwardStrs.has(String(sid))) lastInDiagram = sid;
-      }
-      if (lastInDiagram) {
-        if (!terminalClusterMap.has(lastInDiagram))
-          terminalClusterMap.set(lastInDiagram, new Set());
-        terminalClusterMap.get(lastInDiagram).add(ci);
-      }
+  // Build per-group stop sets and identify which groups each stop belongs to
+  const stopGroupIndices = {};
+  routeGroups.forEach((group, gi) => {
+    group.forwardStops.forEach((sid) => {
+      if (sid === currentStopId) return;
+      (stopGroupIndices[sid] ??= new Set()).add(gi);
     });
   });
 
-  // Compute effective cluster spacing — must be tall enough to fit label rows,
-  // and scales to fill available space when there are few clusters.
+  // Identify terminal stop per group (last forward stop)
+  const terminalGroupMap = new Map();
+  routeGroups.forEach((group, gi) => {
+    const fs = group.forwardStops.filter((s) => s !== currentStopId);
+    if (fs.length > 0) {
+      const last = fs[fs.length - 1];
+      if (!terminalGroupMap.has(last)) terminalGroupMap.set(last, new Set());
+      terminalGroupMap.get(last).add(gi);
+    }
+  });
+
+  const displayedStops = orderedStops.filter(
+    (sid) => sid !== currentStopId && stopGroupIndices[sid]?.size > 0,
+  );
+
+  // Merge same-name stops: stops with identical names share one column.
+  const nameToRep = new Map();
+  const stopToRep = new Map();
+  displayedStops.forEach((sid) => {
+    const name = getStopName(sid, stopsData);
+    if (!nameToRep.has(name)) nameToRep.set(name, sid);
+    stopToRep.set(sid, nameToRep.get(name));
+  });
+
+  // DAG-based column assignment using representatives for same-name stops.
+  const displayedSet = new Set(displayedStops);
+  const repColumn = new Map();
+  displayedStops.forEach((sid) => repColumn.set(stopToRep.get(sid), 0));
+
+  let colChanged = true;
+  while (colChanged) {
+    colChanged = false;
+    routeGroups.forEach((group) => {
+      const fs = group.forwardStops.filter(
+        (s) => s !== currentStopId && displayedSet.has(s),
+      );
+      for (let i = 1; i < fs.length; i++) {
+        const repPrev = stopToRep.get(fs[i - 1]);
+        const repCur = stopToRep.get(fs[i]);
+        if (repPrev === repCur) continue;
+        const needed = repColumn.get(repPrev) + 1;
+        if (needed > repColumn.get(repCur)) {
+          repColumn.set(repCur, needed);
+          colChanged = true;
+        }
+      }
+    });
+  }
+
+  const stopColumn = new Map();
+  displayedStops.forEach((sid) =>
+    stopColumn.set(sid, repColumn.get(stopToRep.get(sid))),
+  );
+
+  const maxCol = Math.max(0, ...stopColumn.values());
+  const availableW = SVG_WIDTH * ROUTE_AREA_END_PCT - ROUTE_LINE_START_X;
+  const colSpacing =
+    maxCol > 0 ? Math.floor(availableW / (maxCol + 1)) : STOP_SPACING;
+
+  const stopXMap = {};
+  displayedStops.forEach((sid) => {
+    stopXMap[sid] = ROUTE_LINE_START_X + colSpacing * (stopColumn.get(sid) + 1);
+  });
+
+  // Compute group spacing (vertical distance between route group lines)
   const maxLabelRows = Math.max(
     1,
-    ...clusters.map((cluster) => {
-      const packed = packClusterLabels(cluster);
+    ...routeGroups.map((group) => {
+      const packed = packClusterLabels(group.routes);
       return Math.max(0, ...packed.map((p) => p.row)) + 1;
     }),
   );
+  const labelVerticalExtent = LABEL_MAX_DIST + LABEL_FONT_SIZE + 4;
   const minSpacing = Math.max(
     CLUSTER_SPACING,
     maxLabelRows * (LABEL_BOX_H + 2) + 6,
+    labelVerticalExtent,
   );
-  const effectiveClusterSpacing =
-    nClusters > 1
+  const effectiveGroupSpacing =
+    nGroups > 1
       ? Math.max(
           minSpacing,
           Math.min(
             MAX_CLUSTER_SPACING,
-            Math.round(TARGET_CLUSTER_SPAN / (nClusters - 1)),
+            Math.round(TARGET_CLUSTER_SPAN / (nGroups - 1)),
           ),
         )
       : minSpacing;
 
-  const clusterY = (i) =>
-    LABEL_SPACE + extraTopPad + i * effectiveClusterSpacing;
+  const groupY = (i) => LABEL_SPACE + extraTopPad + i * effectiveGroupSpacing;
 
   const naturalH =
-    LABEL_SPACE +
-    (nClusters - 1) * effectiveClusterSpacing +
-    DIAGRAM_BOTTOM_PAD;
+    LABEL_SPACE + (nGroups - 1) * effectiveGroupSpacing + DIAGRAM_BOTTOM_PAD;
   const totalH = naturalH + 2 * extraTopPad + extraBottomPad;
-
-  // Map each ordered stop to the set of cluster indices that use it
-  const stopClusters = {};
-  clusters.forEach((cluster, ci) => {
-    orderedStops.forEach((sid) => {
-      if (sid === currentStopId) return;
-      const norm = normalizeStopId(sid);
-      if (
-        cluster.some((r) => r.stopSequence.some((id) => matchesStop(id, norm)))
-      ) {
-        (stopClusters[sid] ??= new Set()).add(ci);
-      }
-    });
-  });
-
-  const displayedStops = orderedStops.filter(
-    (sid) => sid !== currentStopId && stopClusters[sid]?.size > 0,
-  );
-
-  // Grid layout — routes on the y-axis, stop sequence on the x-axis.
-  // Each stop's column = length of its longest predecessor chain through
-  // displayed stops on any route (topological depth in the DAG). This groups
-  // stops from different routes that are at the same sequence generation into
-  // the same column, and guarantees that consecutive displayed stops on any
-  // single route land in consecutive columns with no gaps.
-  const displayedSet = new Set(displayedStops);
-  const normCur = normalizeStopId(currentStopId);
-
-  // For each displayed stop, record the displayed stops that immediately
-  // precede it (skipping non-displayed stops) in every route's sequence.
-  const predecessors = {};
-  displayedStops.forEach((sid) => {
-    predecessors[sid] = new Set();
-  });
-  routes.forEach((route) => {
-    const curIdx = route.stopSequence.findIndex((id) =>
-      matchesStop(id, normCur),
-    );
-    if (curIdx < 0) return;
-    let prev = null;
-    for (const stopId of route.stopSequence.slice(curIdx + 1)) {
-      const sid = String(stopId);
-      if (displayedSet.has(sid)) {
-        if (prev !== null) predecessors[sid].add(prev);
-        prev = sid;
-      }
-    }
-  });
-
-  // Longest predecessor chain = column depth (memoised DFS).
-  const colDepth = {};
-  function computeColDepth(sid) {
-    if (colDepth[sid] !== undefined) return colDepth[sid];
-    colDepth[sid] = 0; // sentinel: prevents re-entry on cycles
-    let d = 0;
-    for (const pred of predecessors[sid])
-      d = Math.max(d, computeColDepth(pred) + 1);
-    return (colDepth[sid] = d);
-  }
-  displayedStops.forEach(computeColDepth);
-
-  // Compact the depths to consecutive 0-based column indices (removes holes
-  // that would appear if some depth values are skipped globally).
-  const uniqueDepths = [
-    ...new Set(displayedStops.map((sid) => colDepth[sid])),
-  ].sort((a, b) => a - b);
-  const depthToColIdx = Object.fromEntries(uniqueDepths.map((d, i) => [d, i]));
-
-  // Constant column spacing — spread stops evenly across the canvas width.
-  const numCols = uniqueDepths.length;
-  const availableW = SVG_WIDTH * ROUTE_AREA_END_PCT - ROUTE_LINE_START_X;
-  const effectiveSpacing =
-    numCols > 0
-      ? Math.max(STOP_SPACING, Math.floor(availableW / numCols))
-      : STOP_SPACING;
-
-  const stopXMap = {};
-  displayedStops.forEach((sid) => {
-    stopXMap[sid] =
-      ROUTE_LINE_START_X +
-      effectiveSpacing * (depthToColIdx[colDepth[sid]] + 1);
-  });
 
   const g = svg
     .append('g')
@@ -853,19 +765,19 @@ function drawRouteDiagram(
     .attr('height', totalH)
     .attr('fill', C.white);
 
-  const linesG = g.append('g').attr('id', 'cluster-lines');
+  const linesG = g.append('g').attr('id', 'group-lines');
   const pillsG = g.append('g').attr('id', 'stop-pills');
   const heroG = g.append('g').attr('id', 'current-stop-pill');
   const labelsG = g.append('g').attr('id', 'stop-labels');
 
-  // ── Cluster lines and route label boxes ──────────────────────────────────────
+  // ── Route group lines and route label boxes ─────────────────────────────────
 
-  clusters.forEach((cluster, ci) => {
-    const cy = clusterY(ci);
+  routeGroups.forEach((group, gi) => {
+    const gy = groupY(gi);
 
     let maxX = ROUTE_LINE_START_X + ROUTE_LINE_MIN_EXTEND;
-    orderedStops.forEach((sid) => {
-      if (!stopClusters[sid]?.has(ci)) return;
+    group.forwardStops.forEach((sid) => {
+      if (sid === currentStopId) return;
       const x = stopXMap[sid];
       if (x !== undefined) maxX = Math.max(maxX, x);
     });
@@ -873,18 +785,18 @@ function drawRouteDiagram(
     linesG
       .append('line')
       .attr('x1', ROUTE_LINE_START_X)
-      .attr('y1', cy)
+      .attr('y1', gy)
       .attr('x2', maxX)
-      .attr('y2', cy)
+      .attr('y2', gy)
       .attr('stroke', C.primary)
       .attr('stroke-width', 4)
       .attr('stroke-linecap', 'round');
 
-    // ── Route ID pills (left label area) ─────────────────────────────────────
-    const packed = packClusterLabels(cluster);
+    // Route ID label boxes (left side)
+    const packed = packClusterLabels(group.routes);
     const numRows = Math.max(0, ...packed.map((p) => p.row)) + 1;
     const totalLabelH = numRows * LABEL_BOX_H + (numRows - 1) * 2;
-    const labelStartY = cy - totalLabelH / 2;
+    const labelStartY = gy - totalLabelH / 2;
 
     packed.forEach(({ route, x, w, row }) => {
       const labelY = labelStartY + row * (LABEL_BOX_H + 2);
@@ -921,98 +833,91 @@ function drawRouteDiagram(
     });
   });
 
-  // ── Branch connectors — vertical line at the shared-stop fork point ──────────
+  // ── Merge same-name stops for pill rendering ────────────────────────────────
+  // Stops sharing a name (and thus X position) are drawn as one combined pill.
+  const mergedGroupIndices = {};
+  const mergedTerminalMap = new Map();
+  const drawnReps = new Set();
 
-  const branches = findClusterBranches(clusters, orderedStops, stopPosMap);
-  branches.forEach(({ parentIdx, childIdx, branchStopId }) => {
-    if (!stopXMap[branchStopId]) return;
-    const bx = stopXMap[branchStopId];
-    const py = clusterY(parentIdx);
-    const cy = clusterY(childIdx);
-
-    linesG
-      .append('line')
-      .attr('x1', bx)
-      .attr('y1', py)
-      .attr('x2', bx)
-      .attr('y2', cy)
-      .attr('stroke', C.primary)
-      .attr('stroke-width', BRANCH_STROKE_W)
-      .attr('stroke-linecap', 'round')
-      .attr('opacity', 0.5);
+  displayedStops.forEach((sid) => {
+    const rep = stopToRep.get(sid);
+    if (!mergedGroupIndices[rep]) mergedGroupIndices[rep] = new Set();
+    const gs = stopGroupIndices[sid];
+    if (gs) gs.forEach((gi) => mergedGroupIndices[rep].add(gi));
+    const tg = terminalGroupMap.get(sid);
+    if (tg) {
+      if (!mergedTerminalMap.has(rep)) mergedTerminalMap.set(rep, new Set());
+      tg.forEach((gi) => mergedTerminalMap.get(rep).add(gi));
+    }
   });
 
   // ── Stop marker pills ────────────────────────────────────────────────────────
-  // Shared stops (isCommon / clusterSet.size > 1) get a wider pill that spans
-  // all cluster rows they appear on, keeping them visually connected and
-  // horizontally aligned across route groups.
+  // All non-terminal stops get a uniform pill spanning their contiguous groups.
+  // Terminal stops → filled circle.
 
-  orderedStops.forEach((sid) => {
-    if (sid === currentStopId) return;
-    const clusterSet = stopClusters[sid];
-    if (!clusterSet || clusterSet.size === 0) return;
+  displayedStops.forEach((sid) => {
+    const rep = stopToRep.get(sid);
+    if (drawnReps.has(rep)) return;
+    drawnReps.add(rep);
+
+    const groupSet = mergedGroupIndices[rep];
+    if (!groupSet || groupSet.size === 0) return;
 
     const x = stopXMap[sid];
     if (x === undefined) return;
-    const sorted = Array.from(clusterSet).sort((a, b) => a - b);
+    const sorted = Array.from(groupSet).sort((a, b) => a - b);
     const segs = getContiguousSegments(sorted);
-    const terminalClusters = terminalClusterMap.get(sid);
-
+    const terminalGroups = mergedTerminalMap.get(rep);
     segs.forEach(([first, last]) => {
-      // Split the contiguous cluster segment into runs of the same marker type
-      // (terminal vs non-terminal) so each run can be drawn independently.
       const runs = [];
       let runStart = first;
-      let runIsTerminal = terminalClusters?.has(first) ?? false;
-      for (let ci = first + 1; ci <= last; ci++) {
-        const ciIsTerminal = terminalClusters?.has(ci) ?? false;
-        if (ciIsTerminal !== runIsTerminal) {
+      let runIsTerminal = terminalGroups?.has(first) ?? false;
+      for (let gi = first + 1; gi <= last; gi++) {
+        const giIsTerminal = terminalGroups?.has(gi) ?? false;
+        if (giIsTerminal !== runIsTerminal) {
           runs.push({
             start: runStart,
-            end: ci - 1,
+            end: gi - 1,
             isTerminal: runIsTerminal,
           });
-          runStart = ci;
-          runIsTerminal = ciIsTerminal;
+          runStart = gi;
+          runIsTerminal = giIsTerminal;
         }
       }
       runs.push({ start: runStart, end: last, isTerminal: runIsTerminal });
 
       runs.forEach(({ start, end, isTerminal }) => {
         if (isTerminal) {
-          // Filled blue circle; connect multi-row spans with a thin vertical line
           if (start !== end) {
             pillsG
               .append('line')
               .attr('x1', x)
-              .attr('y1', clusterY(start))
+              .attr('y1', groupY(start))
               .attr('x2', x)
-              .attr('y2', clusterY(end))
+              .attr('y2', groupY(end))
               .attr('stroke', C.primary)
               .attr('stroke-width', 2);
           }
-          for (let ci = start; ci <= end; ci++) {
+          for (let gi = start; gi <= end; gi++) {
             pillsG
               .append('circle')
               .attr('cx', x)
-              .attr('cy', clusterY(ci))
+              .attr('cy', groupY(gi))
               .attr('r', TERMINAL_RADIUS)
               .attr('fill', C.primary)
               .append('title')
               .text(getStopName(sid, stopsData));
           }
         } else {
-          // White pill spanning all non-terminal rows in this run
-          const pillW = PILL_W_SMALL;
-          const y1 = clusterY(start) - PILL_OVERHANG;
-          const y2 = clusterY(end) + PILL_OVERHANG;
+          const y1 = groupY(start) - PILL_OVERHANG;
+          const y2 = groupY(end) + PILL_OVERHANG;
           pillsG
             .append('rect')
-            .attr('x', x - pillW / 2)
+            .attr('x', x - PILL_W_SMALL / 2)
             .attr('y', y1)
-            .attr('width', pillW)
+            .attr('width', PILL_W_SMALL)
             .attr('height', y2 - y1)
-            .attr('rx', pillW / 2)
+            .attr('rx', PILL_W_SMALL / 2)
             .attr('fill', C.white)
             .attr('stroke', C.pillStroke)
             .attr('stroke-width', 1)
@@ -1023,10 +928,10 @@ function drawRouteDiagram(
     });
   });
 
-  // ── Current-stop pill (spans all cluster rows) ───────────────────────────────
+  // ── Current-stop pill (spans all group rows) ────────────────────────────────
 
-  const pillTop = clusterY(0) - CURRENT_PILL_TOP_PAD;
-  const pillBottom = clusterY(nClusters - 1) + PILL_OVERHANG;
+  const pillTop = groupY(0) - CURRENT_PILL_TOP_PAD;
+  const pillBottom = groupY(nGroups - 1) + PILL_OVERHANG;
   heroG
     .append('rect')
     .attr('x', CURRENT_PILL_X)
@@ -1041,30 +946,39 @@ function drawRouteDiagram(
     .text(getStopName(currentStopId, stopsData));
 
   // ── Stop labels — rotated, with overlap avoidance ────────────────────────────
+  // One label per contiguous pill segment so that separate pills for the same
+  // stop each get their own visible name.
 
-  // Collect one label per unique stop name using the global position map.
-  // For stops shared across clusters, anchor the label to the topmost cluster row.
-  const seenNames = new Set();
   const rawLabels = [];
+  const drawnLabelReps = new Set();
 
-  orderedStops.forEach((sid) => {
-    if (sid === currentStopId) return;
-    if (!stopXMap[sid] || !stopClusters[sid]) return;
+  displayedStops.forEach((sid) => {
+    const rep = stopToRep.get(sid);
+    if (drawnLabelReps.has(rep)) return;
+    drawnLabelReps.add(rep);
+
     const name = getStopName(sid, stopsData);
-    if (seenNames.has(name)) return;
-    seenNames.add(name);
     const x = stopXMap[sid];
-    const clusterArr = Array.from(stopClusters[sid]);
-    const topCluster = Math.min(...clusterArr);
-    const isTermStop = terminalClusterMap.get(sid)?.has(topCluster) ?? false;
-    const overhang = isTermStop ? TERMINAL_RADIUS : PILL_OVERHANG;
+    const groupSet = mergedGroupIndices[rep] || stopGroupIndices[sid];
+    if (!groupSet || groupSet.size === 0) return;
+
+    const sorted = Array.from(groupSet).sort((a, b) => a - b);
+    const segs = getContiguousSegments(sorted);
+    const terminalGroups = mergedTerminalMap.get(rep);
     const lines = splitLabelName(name);
-    rawLabels.push({
-      name,
-      lines,
-      x,
-      markerTopY: clusterY(topCluster) - overhang,
-      markerBottomY: clusterY(topCluster) + overhang,
+
+    segs.forEach(([first]) => {
+      const isTermStop = terminalGroups?.has(first) ?? false;
+      const overhang = isTermStop ? TERMINAL_RADIUS : PILL_OVERHANG;
+      rawLabels.push({
+        name,
+        lines,
+        x,
+        stopId: sid,
+        poiIconCount: stopPoiTypes[sid] ? stopPoiTypes[sid].size : 0,
+        markerTopY: groupY(first) - overhang,
+        markerBottomY: groupY(first) + overhang,
+      });
     });
   });
 
@@ -1072,22 +986,88 @@ function drawRouteDiagram(
 
   const layouted = layoutStopLabels(rawLabels);
 
-  // All labels sit above their stop marker and use the same rotation so the
-  // text direction is consistently bottom-left → top-right across the diagram.
-  // Multi-line labels stack their lines in the rotated frame: the last line is
-  // closest to the stop marker (dy=0) and each earlier line sits at a negative
-  // dy so it renders further from the marker (upper-left in SVG coordinates).
   const LABEL_LINE_SPACING = LABEL_FONT_SIZE + LABEL_LINE_SPACING_EXTRA;
-  layouted.forEach(({ name, lines, x, markerTopY, row }) => {
+  const POI_ICON_SIZE = LABEL_FONT_SIZE;
+  const POI_ICON_PAD = 2;
+
+  layouted.forEach(({ name, lines, x, markerTopY, row, stopId: sid }) => {
     const anchorY =
       markerTopY -
       Math.min(LABEL_ICON_GAP + row * LABEL_ROW_OFFSET, LABEL_ANCHOR_CLAMP);
     const labelLines = lines || [name];
     const numLines = labelLines.length;
-    const textEl = labelsG
+
+    const poiMap = sid ? stopPoiTypes[sid] : null;
+    const iconCount = poiMap ? poiMap.size : 0;
+    const textXOffset = iconCount * (POI_ICON_SIZE + POI_ICON_PAD);
+
+    const labelG = labelsG
       .append('g')
-      .attr('transform', `translate(${x},${anchorY}) rotate(${LABEL_ROT})`)
+      .attr('transform', `translate(${x},${anchorY}) rotate(${LABEL_ROT})`);
+
+    if (poiMap) {
+      const iconY = -(numLines - 1) * LABEL_LINE_SPACING - POI_ICON_SIZE + 1;
+      let iconX = 0;
+      const orderedTypes = ['metro', 'railway', 'bus', 'airport'];
+      for (const t of orderedTypes) {
+        if (!poiMap.has(t)) continue;
+        const poiInfo = poiMap.get(t);
+        const ig = labelG
+          .append('g')
+          .attr('transform', `translate(${iconX},${iconY})`);
+        if (t === 'metro') {
+          const s = POI_ICON_SIZE / 10;
+          const sg = ig.append('g').attr('transform', `scale(${s})`);
+          const bgColor = poiInfo.color || C.primary;
+          sg.append('rect')
+            .attr('x', 0.278)
+            .attr('y', 0.278)
+            .attr('width', 9.444)
+            .attr('height', 9.444)
+            .attr('rx', 0.833)
+            .attr('fill', bgColor);
+          sg.append('path').attr('d', PATH_METRO_LETTER).attr('fill', C.white);
+        } else if (t === 'railway') {
+          insertInlineSvg(
+            ig,
+            svgInfos.railSvgInfo,
+            0,
+            0,
+            POI_ICON_SIZE,
+            POI_ICON_SIZE,
+          );
+        } else if (t === 'bus') {
+          insertInlineSvg(
+            ig,
+            svgInfos.bmtcSvgInfo,
+            0,
+            0,
+            POI_ICON_SIZE,
+            POI_ICON_SIZE,
+          );
+        } else if (t === 'airport') {
+          const s = POI_ICON_SIZE / 10;
+          const sg = ig.append('g').attr('transform', `scale(${s})`);
+          sg.append('rect')
+            .attr('x', 0.278)
+            .attr('y', 0.278)
+            .attr('width', 9.444)
+            .attr('height', 9.444)
+            .attr('rx', 4.722)
+            .attr('fill', C.white)
+            .attr('stroke', C.primary)
+            .attr('stroke-width', 0.556);
+          sg.append('path')
+            .attr('d', PATH_AIRPORT_PLANE)
+            .attr('fill', C.primary);
+        }
+        iconX += POI_ICON_SIZE + POI_ICON_PAD;
+      }
+    }
+
+    const textEl = labelG
       .append('text')
+      .attr('x', textXOffset)
       .attr('text-anchor', 'start')
       .attr('dominant-baseline', 'auto')
       .attr('font-family', FONT)
@@ -1095,13 +1075,11 @@ function drawRouteDiagram(
       .attr('font-weight', 400)
       .attr('fill', C.labelMuted);
     labelLines.forEach((line, lineIdx) => {
-      // First tspan: shift up so all lines together are anchored at the bottom
-      // Subsequent tspans: step back down one line at a time
       const dy =
         lineIdx === 0
           ? -(numLines - 1) * LABEL_LINE_SPACING
           : LABEL_LINE_SPACING;
-      textEl.append('tspan').attr('x', 0).attr('dy', dy).text(line);
+      textEl.append('tspan').attr('x', textXOffset).attr('dy', dy).text(line);
     });
   });
 
@@ -1339,7 +1317,7 @@ function drawInfoPanel(svg, y, mapUri, qrUri, svgInfos = {}) {
 
 export async function renderDiagramSVG(
   container,
-  { stopId, stopsData, routes, orderedStops, city },
+  { stopId, stopsData, routes, orderedStops, city, poisData },
 ) {
   d3.select(container).selectAll('*').remove();
 
@@ -1347,35 +1325,37 @@ export async function renderDiagramSVG(
   const [lng, lat] = stopData;
 
   const hdrH = headerHeight(routes);
-  const clusters = clusterRoutesByTerminal(routes);
-  const nClusters = Math.max(clusters.length, 1);
+  const routeGroups = orderGroupsBySimilarity(
+    groupRoutesByForwardStops(routes, stopId, orderedStops),
+  );
+  const nGroups = Math.max(routeGroups.length, 1);
 
   const maxLabelRows = Math.max(
     1,
-    ...clusters.map((cluster) => {
-      const packed = packClusterLabels(cluster);
+    ...routeGroups.map((group) => {
+      const packed = packClusterLabels(group.routes);
       return Math.max(0, ...packed.map((p) => p.row)) + 1;
     }),
   );
+  const labelVerticalExtentOuter = LABEL_MAX_DIST + LABEL_FONT_SIZE + 4;
   const minSpacingOuter = Math.max(
     CLUSTER_SPACING,
     maxLabelRows * (LABEL_BOX_H + 2) + 6,
+    labelVerticalExtentOuter,
   );
-  const effectiveClusterSpacing =
-    nClusters > 1
+  const effectiveGroupSpacing =
+    nGroups > 1
       ? Math.max(
           minSpacingOuter,
           Math.min(
             MAX_CLUSTER_SPACING,
-            Math.round(TARGET_CLUSTER_SPAN / (nClusters - 1)),
+            Math.round(TARGET_CLUSTER_SPAN / (nGroups - 1)),
           ),
         )
       : minSpacingOuter;
 
   const naturalDiagramH =
-    LABEL_SPACE +
-    (nClusters - 1) * effectiveClusterSpacing +
-    DIAGRAM_BOTTOM_PAD;
+    LABEL_SPACE + (nGroups - 1) * effectiveGroupSpacing + DIAGRAM_BOTTOM_PAD;
   const extraTopPad = 0;
   const baseTotalH = hdrH + naturalDiagramH + INFO_PANEL_H;
   const extraBottomPad = Math.round(baseTotalH * EXTRA_BOTTOM_PCT);
@@ -1422,6 +1402,7 @@ export async function renderDiagramSVG(
   addDefs(svg);
 
   const svgInfos = { bmtcSvgInfo, ksrtcSvgInfo, railSvgInfo };
+  const stopPoiTypes = buildStopPoiMap(stopsData, poisData || []);
   drawHeader(svg, stopId, stopsData, routes, hdrH, bmtcSvgInfo, towardsSuffix);
   drawRouteDiagram(
     svg,
@@ -1432,6 +1413,8 @@ export async function renderDiagramSVG(
     hdrH,
     extraTopPad,
     extraBottomPad,
+    stopPoiTypes,
+    svgInfos,
   );
 
   const yInfoPanel = hdrH + routeDiagramH;

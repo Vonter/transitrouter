@@ -5,7 +5,8 @@
 import BLR_ROUTE_MAPPING from './blr-route-mapping.js';
 
 const BMTC_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
+  'User-Agent':
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
   Accept: 'application/json, text/plain, */*',
   'Content-Type': 'application/json',
   lan: 'en',
@@ -65,7 +66,10 @@ export async function onRequest(context) {
     return jsonResponse({ services }, 200, cacheHeaders);
   } catch (error) {
     console.error('BMTC API Function Error:', error);
-    return jsonResponse({ error: 'Failed to fetch arrival data', message: error.message }, 500);
+    return jsonResponse(
+      { error: 'Failed to fetch arrival data', message: error.message },
+      500,
+    );
   }
 }
 
@@ -83,7 +87,10 @@ async function fetchVehicleDataForRoute(routeId) {
       {
         method: 'POST',
         headers: BMTC_HEADERS,
-        body: JSON.stringify({ routeid: parseInt(routeId, 10), servicetypeid: 0 }),
+        body: JSON.stringify({
+          routeid: parseInt(routeId, 10),
+          servicetypeid: 0,
+        }),
       },
     );
 
@@ -96,9 +103,14 @@ async function fetchVehicleDataForRoute(routeId) {
       dir?.data?.forEach((station) =>
         station.vehicleDetails?.forEach((v) => {
           if (!v.centerlat || !v.centerlong) return;
-          const loc = { lat: parseFloat(v.centerlat), lng: parseFloat(v.centerlong) };
-          if (v.vehicleid && !vehicles.has(v.vehicleid)) vehicles.set(v.vehicleid, loc);
-          if (v.vehiclenumber && !vehicles.has(v.vehiclenumber)) vehicles.set(v.vehiclenumber, loc);
+          const loc = {
+            lat: parseFloat(v.centerlat),
+            lng: parseFloat(v.centerlong),
+          };
+          if (v.vehicleid && !vehicles.has(v.vehicleid))
+            vehicles.set(v.vehicleid, loc);
+          if (v.vehiclenumber && !vehicles.has(v.vehiclenumber))
+            vehicles.set(v.vehiclenumber, loc);
         }),
       );
     }
@@ -140,7 +152,11 @@ async function convertBMTCToServices(data) {
 
     const key = `${trip.routeno}-${trip.tostationname}`;
     if (!servicesMap.has(key)) {
-      servicesMap.set(key, { no: trip.routeno, destination: trip.tostationname, trips: [] });
+      servicesMap.set(key, {
+        no: trip.routeno,
+        destination: trip.tostationname,
+        trips: [],
+      });
     }
 
     const location =
