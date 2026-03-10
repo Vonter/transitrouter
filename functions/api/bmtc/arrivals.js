@@ -1,215 +1,106 @@
 /**
  * Cloudflare Pages Function for BMTC Live Arrival Data
- * Automatically deployed with your Pages project
- *
  * Endpoint: /api/bmtc/arrivals?stationid=20820
  */
 import BLR_ROUTE_MAPPING from './blr-route-mapping.js';
 
-export async function onRequest(context) {
-  const { request, env } = context;
+const BMTC_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
+  Accept: 'application/json, text/plain, */*',
+  'Content-Type': 'application/json',
+  lan: 'en',
+  deviceType: 'WEB',
+};
 
-  // Handle CORS preflight requests
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+function jsonResponse(body, status = 200, extra = {}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...CORS_HEADERS, ...extra },
+  });
+}
+
+export async function onRequest(context) {
+  const { request } = context;
+
   if (request.method === 'OPTIONS') {
-    return handleCORS();
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  // Only allow GET requests
   if (request.method !== 'GET') {
-    return new Response('Method not allowed', {
-      status: 405,
-      headers: getCORSHeaders(),
-    });
+    return jsonResponse({ error: 'Method not allowed' }, 405);
   }
 
   try {
-    // Get station ID from URL query parameter
-    const url = new URL(request.url);
-    const stationId = url.searchParams.get('stationid');
+    const stationId = new URL(request.url).searchParams.get('stationid');
 
     if (!stationId) {
-      return new Response(
-        JSON.stringify({ error: 'stationid parameter is required' }),
-        {
-          status: 400,
-          headers: {
-            'Content-Type': 'application/json',
-            ...getCORSHeaders(),
-          },
-        },
-      );
+      return jsonResponse({ error: 'stationid parameter is required' }, 400);
     }
 
-    // Fetch data from BMTC API
-    const bmtcResponse = await fetch(
+    const res = await fetch(
       'https://bmtcmobileapi.karnataka.gov.in/WebAPI/GetMobileTripsData',
       {
         method: 'POST',
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
-          Accept: 'application/json, text/plain, */*',
-          'Content-Type': 'application/json',
-          lan: 'en',
-          deviceType: 'WEB',
-        },
-        body: JSON.stringify({
-          stationid: parseInt(stationId),
-          triptype: 1,
-        }),
+        headers: BMTC_HEADERS,
+        body: JSON.stringify({ stationid: parseInt(stationId), triptype: 1 }),
       },
     );
 
-    if (!bmtcResponse.ok) {
-      throw new Error(`BMTC API returned ${bmtcResponse.status}`);
+    if (!res.ok) throw new Error(`BMTC API returned ${res.status}`);
+
+    const result = await res.json();
+    const cacheHeaders = { 'Cache-Control': 'public, max-age=10' };
+
+    if (!result.Issuccess || !result.data?.length) {
+      return jsonResponse({ services: [] }, 200, cacheHeaders);
     }
 
-    // Read the response body once and parse it
-    const result = await bmtcResponse.json();
-
-    // Check if API returned success
-    if (!result.Issuccess || !result.data || result.data.length === 0) {
-      return new Response(JSON.stringify({ services: [] }), {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Cache-Control': 'public, max-age=10',
-          ...getCORSHeaders(),
-        },
-      });
-    }
-
-    // Convert BMTC API response to transitrouter format
     const services = await convertBMTCToServices(result.data);
-
-    return new Response(JSON.stringify({ services }), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'public, max-age=10', // Cache for 10 seconds
-        ...getCORSHeaders(),
-      },
-    });
+    return jsonResponse({ services }, 200, cacheHeaders);
   } catch (error) {
     console.error('BMTC API Function Error:', error);
-    return new Response(
-      JSON.stringify({
-        error: 'Failed to fetch arrival data',
-        message: error.message,
-      }),
-      {
-        status: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          ...getCORSHeaders(),
-        },
-      },
-    );
+    return jsonResponse({ error: 'Failed to fetch arrival data', message: error.message }, 500);
   }
 }
 
-/**
- * Parse BMTC date string in DD-MM-YYYY HH:MM:SS format to JavaScript Date
- * BMTC API returns dates in IST timezone
- * @param {string} dateString - Date string in format "DD-MM-YYYY HH:MM:SS"
- * @returns {Date} JavaScript Date object in UTC
- */
+// Parse "DD-MM-YYYY HH:MM:SS" (IST) to a Date
 function parseBMTCDate(dateString) {
-  // Expected format: "31-10-2025 14:30:00" (DD-MM-YYYY HH:MM:SS in IST)
-  const parts = dateString.split(' ');
-  const dateParts = parts[0].split('-');
-  const timeParts = parts[1] ? parts[1].split(':') : ['0', '0', '0'];
-
-  const day = parseInt(dateParts[0], 10);
-  const month = parseInt(dateParts[1], 10) - 1; // JavaScript months are 0-indexed
-  const year = parseInt(dateParts[2], 10);
-  const hours = parseInt(timeParts[0], 10);
-  const minutes = parseInt(timeParts[1], 10);
-  const seconds = parseInt(timeParts[2], 10);
-
-  // Create date in ISO format with IST timezone offset
-  // Format: YYYY-MM-DDTHH:MM:SS+05:30
-  const isoString = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}+05:30`;
-
-  return new Date(isoString);
+  const [date, time = '00:00:00'] = dateString.split(' ');
+  const [dd, mm, yyyy] = date.split('-');
+  return new Date(`${yyyy}-${mm}-${dd}T${time}+05:30`);
 }
 
-/**
- * Fetch vehicle data for a route ID
- */
 async function fetchVehicleDataForRoute(routeId) {
   try {
-    const bmtcResponse = await fetch(
+    const res = await fetch(
       'https://bmtcmobileapi.karnataka.gov.in/WebAPI/SearchByRouteDetails_v4',
       {
         method: 'POST',
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
-          Accept: 'application/json, text/plain, */*',
-          'Content-Type': 'application/json',
-          lan: 'en',
-          deviceType: 'WEB',
-        },
-        body: JSON.stringify({
-          routeid: routeId,
-          servicetypeid: 0,
-        }),
+        headers: BMTC_HEADERS,
+        body: JSON.stringify({ routeid: parseInt(routeId, 10), servicetypeid: 0 }),
       },
     );
 
-    if (!bmtcResponse.ok) return null;
+    if (!res.ok) return null;
 
-    const result = await bmtcResponse.json();
-
-    // Extract vehicles from both directions
+    const result = await res.json();
     const vehicles = new Map();
 
-    // Process up direction
-    if (result.up?.data) {
-      result.up.data.forEach((station) => {
-        if (station.vehicleDetails) {
-          station.vehicleDetails.forEach((vehicle) => {
-            if (vehicle.vehicleid && vehicle.centerlat && vehicle.centerlong) {
-              vehicles.set(vehicle.vehicleid, {
-                vehicleId: vehicle.vehicleid,
-                vehicleNumber: vehicle.vehiclenumber,
-                location: {
-                  lat: parseFloat(vehicle.centerlat),
-                  lng: parseFloat(vehicle.centerlong),
-                },
-                heading: vehicle.heading,
-                routeNo: station.routeno,
-              });
-            }
-          });
-        }
-      });
-    }
-
-    // Process down direction
-    if (result.down?.data) {
-      result.down.data.forEach((station) => {
-        if (station.vehicleDetails) {
-          station.vehicleDetails.forEach((vehicle) => {
-            if (vehicle.vehicleid && vehicle.centerlat && vehicle.centerlong) {
-              // Only add if not already present (avoid duplicates)
-              if (!vehicles.has(vehicle.vehicleid)) {
-                vehicles.set(vehicle.vehicleid, {
-                  vehicleId: vehicle.vehicleid,
-                  vehicleNumber: vehicle.vehiclenumber,
-                  location: {
-                    lat: parseFloat(vehicle.centerlat),
-                    lng: parseFloat(vehicle.centerlong),
-                  },
-                  heading: vehicle.heading,
-                  routeNo: station.routeno,
-                });
-              }
-            }
-          });
-        }
-      });
+    for (const dir of [result.up, result.down]) {
+      dir?.data?.forEach((station) =>
+        station.vehicleDetails?.forEach((v) => {
+          if (!v.centerlat || !v.centerlong) return;
+          const loc = { lat: parseFloat(v.centerlat), lng: parseFloat(v.centerlong) };
+          if (v.vehicleid && !vehicles.has(v.vehicleid)) vehicles.set(v.vehicleid, loc);
+          if (v.vehiclenumber && !vehicles.has(v.vehiclenumber)) vehicles.set(v.vehiclenumber, loc);
+        }),
+      );
     }
 
     return vehicles;
@@ -219,153 +110,64 @@ async function fetchVehicleDataForRoute(routeId) {
   }
 }
 
-/**
- * Convert BMTC API response to transitrouter service format
- */
 async function convertBMTCToServices(data) {
-  const servicesMap = new Map();
   const now = new Date();
+  const MAX_MS = 90 * 60 * 1000;
 
-  let processedCount = 0;
-  let filteredCount = 0;
-
-  // First pass: collect unique routes that have GPS-enabled vehicles.
-  // Routes where all trips have devicestatusflag === 0 have no live location
-  // data, so skip the SearchRoute_v2 + SearchByRouteDetails_v4 round-trips
-  // for them entirely.
-  const uniqueRoutes = new Set();
-  const vehicleIds = new Map(); // Map vehicle_id to trip info
-
-  data.forEach((trip) => {
-    if (trip.vehicleid) {
-      vehicleIds.set(trip.vehicleid, {
-        routeNo: trip.routeno,
-        busNo: trip.busno,
-      });
-
-      if (trip.devicestatusflag === 1) {
-        uniqueRoutes.add(trip.routeno);
-      }
+  // Resolve unique route IDs for trips that have a GPS vehicle
+  const routeIds = new Map();
+  for (const trip of data) {
+    if (trip.vehicleid && !routeIds.has(trip.routeno)) {
+      const routeId = BLR_ROUTE_MAPPING[trip.routeno];
+      if (routeId) routeIds.set(trip.routeno, routeId);
     }
-  });
+  }
 
-  // Resolve route IDs from the bundled GTFS mapping (route_short_name -> route_id)
-  const routeIdMap = new Map();
-  uniqueRoutes.forEach((routeNo) => {
-    const routeId = BLR_ROUTE_MAPPING[routeNo];
-    if (routeId) routeIdMap.set(routeNo, routeId);
-  });
-
-  // Fetch vehicle data for all routes in parallel
-  const vehiclePromises = Array.from(routeIdMap.entries()).map(
-    async ([routeNo, routeId]) => {
+  // Fetch vehicle locations for all routes in parallel
+  const allVehicles = new Map();
+  await Promise.all(
+    Array.from(routeIds.values()).map(async (routeId) => {
       const vehicles = await fetchVehicleDataForRoute(routeId);
-      return { routeNo, vehicles };
-    },
+      vehicles?.forEach((loc, key) => allVehicles.set(key, loc));
+    }),
   );
 
-  const vehicleDataResults = await Promise.all(vehiclePromises);
-  const allVehicles = new Map();
-  vehicleDataResults.forEach(({ routeNo, vehicles }) => {
-    if (vehicles) {
-      vehicles.forEach((vehicle, vehicleId) => {
-        allVehicles.set(vehicleId, vehicle);
-      });
-    }
-  });
+  // Group trips into services
+  const servicesMap = new Map();
+  for (const trip of data) {
+    const duration_ms = parseBMTCDate(trip.arrivaltime) - now;
+    if (duration_ms < 0 || duration_ms > MAX_MS) continue;
 
-  // Second pass: process trips and attach vehicle data
-  data.forEach((trip, index) => {
-    const routeNo = trip.routeno;
-    const destination = trip.tostationname;
-
-    // Parse arrival time (BMTC API returns timestamps in DD-MM-YYYY format in IST timezone)
-    // Example: "31-10-2025 14:30:00" means 31st October 2025, 2:30 PM IST
-    const arrivalTime = parseBMTCDate(trip.arrivaltime);
-    const duration_ms = arrivalTime - now;
-
-    // Skip if bus has already arrived or is too far in the future (90 minutes)
-    if (duration_ms < 0 || duration_ms > 90 * 60 * 1000) {
-      filteredCount++;
-      return;
-    }
-
-    processedCount++;
-
-    const key = `${routeNo}-${destination}`;
-
+    const key = `${trip.routeno}-${trip.tostationname}`;
     if (!servicesMap.has(key)) {
-      servicesMap.set(key, {
-        no: routeNo,
-        destination: destination,
-        frequency: 0,
-        trips: [],
-      });
+      servicesMap.set(key, { no: trip.routeno, destination: trip.tostationname, trips: [] });
     }
 
-    const service = servicesMap.get(key);
+    const location =
+      (trip.vehicleid && allVehicles.get(trip.vehicleid)) ||
+      (trip.busno && allVehicles.get(trip.busno)) ||
+      null;
 
-    // Get vehicle location if available
-    let vehicleLocation = null;
-    if (trip.vehicleid && allVehicles.has(trip.vehicleid)) {
-      const vehicle = allVehicles.get(trip.vehicleid);
-      vehicleLocation = vehicle.location;
-    }
-
-    service.trips.push({
+    servicesMap.get(key).trips.push({
       duration_ms,
-      type: 'SD', // Default to single deck
-      load: trip.devicestatusflag === 1 ? 'SEA' : 'SDA', // SEA if tracking available
+      type: 'SD',
+      load: trip.devicestatusflag === 1 ? 'SEA' : 'SDA',
       feature: 'WAB',
       visit_number: 1,
       origin_code: trip.fromstationname,
       destination_code: trip.tostationname,
       vehicle_id: trip.vehicleid,
       bus_no: trip.busno,
-      location: vehicleLocation, // Add vehicle location if available
+      location,
     });
-    service.frequency++;
-  });
+  }
 
-  // Convert to array format expected by the client
-  const services = Array.from(servicesMap.values()).map((service) => {
-    // Sort trips by arrival time
-    service.trips.sort((a, b) => a.duration_ms - b.duration_ms);
-
-    const result = {
-      no: service.no,
-      destination: service.destination,
-      frequency: service.frequency,
-    };
-
-    // Assign next, next2, next3
-    if (service.trips.length > 0) result.next = service.trips[0];
-    if (service.trips.length > 1) result.next2 = service.trips[1];
-    if (service.trips.length > 2) result.next3 = service.trips[2];
-
-    return result;
-  });
-
-  return services;
-}
-
-/**
- * Get CORS headers
- */
-function getCORSHeaders() {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  };
-}
-
-/**
- * Handle CORS preflight requests
- */
-function handleCORS() {
-  return new Response(null, {
-    status: 204,
-    headers: getCORSHeaders(),
+  return Array.from(servicesMap.values()).map(({ no, destination, trips }) => {
+    trips.sort((a, b) => a.duration_ms - b.duration_ms);
+    const service = { no, destination, frequency: trips.length };
+    if (trips[0]) service.next = trips[0];
+    if (trips[1]) service.next2 = trips[1];
+    if (trips[2]) service.next3 = trips[2];
+    return service;
   });
 }
