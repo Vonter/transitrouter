@@ -62,7 +62,7 @@ export async function onRequest(context) {
   return new Response(JSON.stringify(manifest, null, 2), {
     headers: {
       'Content-Type': 'application/manifest+json',
-      'Cache-Control': 'no-store',
+      'Cache-Control': 'public, max-age=3600',
     },
   });
 }
