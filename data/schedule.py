@@ -34,6 +34,21 @@ def build_route_lookup(routes_df: pl.DataFrame) -> Dict[str, str]:
     ))
 
 
+def build_short_name_lookup(routes_df: pl.DataFrame) -> Dict[str, str]:
+    """Build a dictionary mapping route_id to route_short_name for fast lookup."""
+    if 'route_short_name' not in routes_df.columns:
+        return {}
+    rows = routes_df.select([
+        'route_id',
+        pl.col('route_short_name').fill_null('').cast(pl.Utf8)
+    ])
+    return {
+        row['route_id']: row['route_short_name']
+        for row in rows.iter_rows(named=True)
+        if row['route_short_name']
+    }
+
+
 def compute_directions_from_names(trips_df: pl.DataFrame, route_lookup: Dict[str, str]) -> List[str]:
     """Compute direction_id from route names containing UP/DOWN."""
     def get_direction(route_id):
@@ -250,6 +265,10 @@ def process_schedules(gtfs_paths: list[str], output_dir: str, min_trips: int = D
     trips_df = gtfs_data['trips']
     stop_times_df = gtfs_data['stop_times']
     
+    # Build route_id -> route_short_name lookup
+    print("Building route short name lookup...")
+    short_name_lookup = build_short_name_lookup(routes_df)
+
     # Prepare trips with standardized directions
     print("Processing trip directions...")
     trips_df = prepare_trips_with_directions(trips_df, routes_df)
@@ -365,7 +384,7 @@ def process_schedules(gtfs_paths: list[str], output_dir: str, min_trips: int = D
             sorted_trips = sorted(set(data['trips']))  # Remove duplicates and sort
             
             services.append({
-                "no": route_id,
+                "no": short_name_lookup.get(route_id, route_id),
                 "origin": data['origin'],
                 "destination": data['destination'],
                 "trips": sorted_trips,
