@@ -35,6 +35,14 @@ export const CITY_CONFIGS = {
       enabled: true,
       apiPath: '/api/bmtc/vehicles',
     },
+    stopRoutes: {
+      enabled: true,
+      apiPath: '/api/bmtc/stop-routes',
+    },
+    stopVehicles: {
+      enabled: true,
+      apiPath: '/api/bmtc/stop-vehicles',
+    },
     normalizeNames: {
       enabled: true,
       removeChars: ['-', ' '],

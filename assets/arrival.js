@@ -377,6 +377,86 @@ const fetchLiveArrivalData = async (stationId, signal) => {
   }
 };
 
+const fetchLiveStopRoutes = async (stationId, signal) => {
+  const apiPath =
+    cityConfig?.stopRoutes?.apiPath || cityConfig?.liveArrivals?.apiPath;
+  if (!apiPath) return null;
+  try {
+    const response = await fetch(
+      `${getApiUrl(apiPath)}?stationid=${stationId}`,
+      { signal },
+    );
+    if (!response.ok) {
+      console.error(`Stop routes API error for ${city}:`, response.status);
+      return null;
+    }
+    const result = await response.json();
+    return result.services?.length > 0 ? result.services : null;
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      console.error(`Stop routes API error for ${city}:`, error);
+    }
+    return null;
+  }
+};
+
+const fetchAndMergeVehicles = async (services, signal) => {
+  const apiPath = cityConfig?.stopVehicles?.apiPath;
+  if (!apiPath || !services?.length) return null;
+
+  const serviceNumbers = [
+    ...new Set(services.map((s) => s.no).filter(Boolean)),
+  ];
+  if (serviceNumbers.length === 0) return null;
+
+  try {
+    const routes = serviceNumbers.map(encodeURIComponent).join(',');
+    const response = await fetch(
+      `${getApiUrl(apiPath)}?routes=${routes}`,
+      signal ? { signal } : undefined,
+    );
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!data?.vehicles?.length) return null;
+
+    const vehicleLookup = new Map();
+    for (const v of data.vehicles) {
+      if (typeof v.lat !== 'number' || typeof v.lng !== 'number') continue;
+      if (v.lat === 0 && v.lng === 0) continue;
+      const loc = { lat: v.lat, lng: v.lng };
+      if (v.vehicleId) vehicleLookup.set(String(v.vehicleId), loc);
+      if (v.vehicleNumber) vehicleLookup.set(String(v.vehicleNumber), loc);
+    }
+
+    if (vehicleLookup.size === 0) return null;
+
+    return services.map((service) => {
+      const enrichTrip = (trip) => {
+        if (!trip || trip.location) return trip;
+        const loc =
+          (trip.vehicle_id && vehicleLookup.get(String(trip.vehicle_id))) ||
+          (trip.bus_no && vehicleLookup.get(String(trip.bus_no))) ||
+          null;
+        return loc ? { ...trip, location: loc } : trip;
+      };
+      return {
+        ...service,
+        next: enrichTrip(service.next),
+        next2: enrichTrip(service.next2),
+        next3: enrichTrip(service.next3),
+        ...(service.arrivals
+          ? { arrivals: service.arrivals.map(enrichTrip) }
+          : {}),
+      };
+    });
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      console.error('Error fetching stop vehicles:', error);
+    }
+    return null;
+  }
+};
+
 // Route matching and rendering
 // Find polylines passing through a stop and match by route name
 const findMatchingPolyline = (
@@ -1077,6 +1157,7 @@ function ArrivalTimes() {
       fetchAbortControllerRef.current.abort();
     }
     fetchAbortControllerRef.current = new AbortController();
+    const { signal } = fetchAbortControllerRef.current;
 
     if (!cityConfig?.liveArrivals?.enabled) {
       fetchScheduleFallback(id);
@@ -1087,12 +1168,10 @@ function ArrivalTimes() {
       setTimeout(() => reject(new Error('TIMEOUT')), 10000);
     });
 
-    const liveApiPromise = fetchLiveArrivalData(
-      id,
-      fetchAbortControllerRef.current.signal,
-    );
+    // Phase 1: Fetch routes/ETAs (fast, no vehicle positions)
+    const stopRoutesPromise = fetchLiveStopRoutes(id, signal);
 
-    Promise.race([liveApiPromise, timeoutPromise])
+    Promise.race([stopRoutesPromise, timeoutPromise])
       .then((liveServices) => {
         if (liveServices?.length > 0) {
           const filtered = liveServices
@@ -1100,9 +1179,18 @@ function ArrivalTimes() {
             .filter((s) => s.next || (s.arrivals && s.arrivals.length > 0));
           setFetchServicesStatus('online');
           setFetchServicesError(false);
-          setServices(filtered.length > 0 ? filtered : liveServices);
+          const servicesForState =
+            filtered.length > 0 ? filtered : liveServices;
+          setServices(servicesForState);
           isFirstFetchRef.current = false;
           scheduleRetry(id);
+
+          // Phase 2: Fetch vehicle positions (non-blocking)
+          fetchAndMergeVehicles(servicesForState, signal)
+            .then((enriched) => {
+              if (enriched) setServices(enriched);
+            })
+            .catch(() => {});
         } else {
           console.log('Live API returned no data');
           setFetchServicesError(false);
@@ -1115,25 +1203,32 @@ function ArrivalTimes() {
           return;
         }
         if (error.message === 'TIMEOUT') {
-          console.log('Live API timeout (1s), falling back to static schedule');
+          console.log('Live API timeout, falling back to static schedule');
         } else {
           console.log('Live API error, falling back to static schedule');
         }
         setFetchServicesError(true);
         fetchScheduleFallback(id);
 
-        // Continue waiting for live API in background
-        liveApiPromise
+        // Continue waiting for stop routes API in background
+        stopRoutesPromise
           .then((liveServices) => {
             if (liveServices?.length > 0) {
               console.log(
-                'Live API response received, updating with live data',
+                'Stop routes response received, updating with live data',
               );
               setFetchServicesStatus('online');
               setFetchServicesError(false);
               setServices(liveServices);
               isFirstFetchRef.current = false;
               scheduleRetry(id);
+
+              // Phase 2 for the background result
+              fetchAndMergeVehicles(liveServices, signal)
+                .then((enriched) => {
+                  if (enriched) setServices(enriched);
+                })
+                .catch(() => {});
             }
           })
           .catch(() => {});

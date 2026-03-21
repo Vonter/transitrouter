@@ -2510,7 +2510,10 @@ const App = () => {
         const dpr = window.devicePixelRatio || 1;
         const img = new Image();
         img.onload = () => {
-          map.addImage(name, img, { pixelRatio: (size / img.naturalWidth) * dpr, ...opts });
+          map.addImage(name, img, {
+            pixelRatio: (size / img.naturalWidth) * dpr,
+            ...opts,
+          });
           resolve();
         };
         img.onerror = reject;
@@ -2550,11 +2553,15 @@ const App = () => {
         },
         paint: {
           'line-color': [
-              'case',
-              ['any', ['==', ['get', 'line_color'], '#ffff00'], ['==', ['get', 'line_color'], 'yellow']],
-              '#FFEA00',
-              ['to-color', ['get', 'line_color']],
+            'case',
+            [
+              'any',
+              ['==', ['get', 'line_color'], '#ffff00'],
+              ['==', ['get', 'line_color'], 'yellow'],
             ],
+            '#FFEA00',
+            ['to-color', ['get', 'line_color']],
+          ],
           'line-width': [
             'interpolate',
             ['linear'],
@@ -2620,19 +2627,31 @@ const App = () => {
       paint: {
         'icon-color': [
           'case',
-          ['any', ['==', ['get', 'station_colors'], '#ffff00'], ['==', ['get', 'station_colors'], 'yellow']],
+          [
+            'any',
+            ['==', ['get', 'station_colors'], '#ffff00'],
+            ['==', ['get', 'station_colors'], 'yellow'],
+          ],
           '#FFEA00',
           ['to-color', ['get', 'station_colors']],
         ],
         'text-color': [
           'case',
-          ['any', ['==', ['get', 'station_colors'], '#ffff00'], ['==', ['get', 'station_colors'], 'yellow']],
+          [
+            'any',
+            ['==', ['get', 'station_colors'], '#ffff00'],
+            ['==', ['get', 'station_colors'], 'yellow'],
+          ],
           '#FFEA00',
           ['to-color', ['get', 'station_colors']],
         ],
         'text-halo-color': [
           'case',
-          ['any', ['==', ['get', 'station_colors'], '#ffff00'], ['==', ['get', 'station_colors'], 'yellow']],
+          [
+            'any',
+            ['==', ['get', 'station_colors'], '#ffff00'],
+            ['==', ['get', 'station_colors'], 'yellow'],
+          ],
           '#555',
           ['==', ['get', 'station_colors'], '#00ffff'], // aqua/cyan
           '#666',

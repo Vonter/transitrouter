@@ -1040,7 +1040,10 @@ function drawRouteDiagram(
           const s = POI_ICON_SIZE / 40;
           const sg = ig.append('g').attr('transform', `scale(${s})`);
           const rawColor = poiInfo.color || C.primary;
-          const bgColor = rawColor === '#ffff00' || rawColor === 'yellow' ? '#FFEA00' : rawColor;
+          const bgColor =
+            rawColor === '#ffff00' || rawColor === 'yellow'
+              ? '#FFEA00'
+              : rawColor;
           sg.append('rect')
             .attr('x', 0.278)
             .attr('y', 0.278)

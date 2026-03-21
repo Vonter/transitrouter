@@ -144,6 +144,95 @@ export function formatArrivalTime(durationMs) {
 }
 
 /**
+ * Fetch upcoming routes/services at a stop (Phase 1 of two-phase fetch).
+ * Returns arrival ETAs without waiting for vehicle positions.
+ * @param {string} apiPath - The arrivals API path from city config
+ * @param {string|number} stationId - The station/stop ID
+ * @param {AbortSignal} [signal] - Optional AbortSignal for cancellation
+ * @returns {Promise<{services: Array, servicesArrivals: Object}|null>}
+ */
+export async function fetchStopRoutes(apiPath, stationId, signal) {
+  if (!apiPath || !stationId) return null;
+
+  try {
+    const url = `${getApiUrl(apiPath)}?stationid=${stationId}`;
+    const response = await fetch(url, signal ? { signal } : undefined);
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch arrivals: ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data?.services?.length) return null;
+
+    const services = data.services
+      .map(filterStaleArrivalsFromService)
+      .filter((s) => s.next || (s.arrivals && s.arrivals.length > 0));
+
+    const servicesArrivals = {};
+    services.forEach((service) => {
+      if (
+        service.next &&
+        (!servicesArrivals[service.no] ||
+          servicesArrivals[service.no] > service.next.duration_ms)
+      ) {
+        servicesArrivals[service.no] = service.next.duration_ms;
+      }
+    });
+
+    return { services, servicesArrivals };
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    console.error('Error fetching stop routes:', error);
+    return null;
+  }
+}
+
+/**
+ * Fetch vehicle positions for all routes at a stop (Phase 2 of two-phase fetch).
+ * Uses the batched stop-vehicles endpoint to get positions in a single request.
+ * @param {string} vehiclesApiPath - The stop-vehicles API path from city config
+ * @param {Array<string>} serviceNumbers - Service numbers to fetch vehicles for
+ * @param {AbortSignal} [signal] - Optional AbortSignal for cancellation
+ * @returns {Promise<Array<{no: string, lat: number, lng: number}>>}
+ */
+export async function fetchStopVehicles(
+  vehiclesApiPath,
+  serviceNumbers,
+  signal,
+) {
+  if (!vehiclesApiPath || !serviceNumbers?.length) return [];
+
+  try {
+    const routes = serviceNumbers.map(encodeURIComponent).join(',');
+    const url = `${getApiUrl(vehiclesApiPath)}?routes=${routes}`;
+    const response = await fetch(url, signal ? { signal } : undefined);
+    if (!response.ok) return [];
+    const data = await response.json();
+    if (!data?.vehicles?.length) return [];
+
+    return data.vehicles
+      .filter(
+        (v) =>
+          typeof v.lat === 'number' &&
+          typeof v.lng === 'number' &&
+          !(v.lat === 0 && v.lng === 0),
+      )
+      .flatMap((v) =>
+        (v.routeNames || []).map((no) => ({
+          no,
+          lat: v.lat,
+          lng: v.lng,
+        })),
+      );
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    console.error('Error fetching stop vehicles:', error);
+    return [];
+  }
+}
+
+/**
  * Check if arrival data is fresh (less than 5 minutes old based on first arrival)
  * @param {Object} arrivalsData - The API response containing services
  * @returns {boolean} True if data appears fresh

@@ -6,78 +6,20 @@ import {
   useCallback,
   useMemo,
 } from 'preact/hooks';
-import CheapRuler from 'cheap-ruler';
-const ruler = new CheapRuler(1.3);
 import { useTranslation } from 'react-i18next';
 
 import Fuse from 'fuse.js';
-import { encode } from '../utils/specialID';
 import getRoute from '../utils/getRoute';
 import { setRafInterval, clearRafInterval } from '../utils/rafInterval';
 import { timeDisplay, sortServices } from '../utils/bus';
-import { getConfigForCity, getApiUrl } from '../city-config';
+import { getConfigForCity } from '../city-config';
 import fetchCache from '../utils/fetchCache';
-import { filterStaleArrivalsFromService } from '../utils/fetchArrivals';
+import {
+  filterStaleArrivalsFromService,
+  fetchStopRoutes,
+} from '../utils/fetchArrivals';
 
 import ArrivalTimeText from './ArrivalTimeText';
-
-import busTinyImagePath from '../images/bus-tiny-map.png';
-
-const setupBusesStopLayerOnce = (map) => {
-  if (!map) return;
-  if (!map.getSource('buses-stop')) {
-    map.addSource('buses-stop', {
-      type: 'geojson',
-      tolerance: 10,
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-
-    if (!map.hasImage('bus-tiny')) {
-      map.loadImage(busTinyImagePath, (e, img) => {
-        if (!map.hasImage('bus-tiny')) map.addImage('bus-tiny', img);
-      });
-    }
-
-    map.addLayer({
-      id: 'buses-stop',
-      type: 'symbol',
-      source: 'buses-stop',
-      minzoom: 11,
-      layout: {
-        'icon-image': 'bus-tiny',
-        'icon-allow-overlap': true,
-        'icon-ignore-placement': true,
-        'icon-size': ['step', ['zoom'], 0.4, 15, 0.5, 16, 0.6],
-        'text-field': ['step', ['zoom'], '', 15, ['get', 'number']],
-        'text-optional': true,
-        'text-size': 14,
-        // 'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Regular'],
-        'text-font': ['Noto Sans Regular'],
-        'text-variable-anchor': ['left', 'right', 'bottom', 'top'],
-        'text-justify': 'auto',
-        'text-padding': ['step', ['zoom'], 4, 15, 6, 16, 8],
-      },
-      paint: {
-        'text-color': '#00454d',
-        'text-halo-color': '#fff',
-        'text-halo-width': 2,
-      },
-    });
-  }
-};
-
-const removeMapBuses = (map) => {
-  if (!map) return;
-  map.getSource('buses-stop')?.setData({
-    type: 'FeatureCollection',
-    features: [],
-  });
-};
-
-const timeout = (n) => new Promise((f) => setTimeout(f, n));
 
 export default function BusServicesArrival({
   services,
@@ -99,7 +41,6 @@ export default function BusServicesArrival({
   const [hasError, setHasError] = useState(false);
   const [servicesArrivals, setServicesArrivals] = useState({});
   const [servicesIssues, setServicesIssues] = useState([]);
-  const [liveBusCount, setLiveBusCount] = useState(0);
   const [oneServiceHasMultipleDirections, setOneServiceHasMultipleDirections] =
     useState(false);
   const [scheduleData, setScheduleData] = useState(null);
@@ -179,20 +120,20 @@ export default function BusServicesArrival({
   }, [services, destFilter, destFilterExact, stopData, destFuse]);
 
   const controllerRef = useRef(null);
-  const renderStopsTimeout = useRef();
   const fetchServices = useCallback(async () => {
     setIsLoading(true);
     setHasError(false);
     onLoadingChange?.(true);
     controllerRef.current = new AbortController();
+    const { signal } = controllerRef.current;
 
     try {
-      // Get city config to find the arrivals API path
       const cityConfig = getConfigForCity(route.city);
-      const arrivalsApiPath = cityConfig?.liveArrivals?.apiPath;
+      const stopRoutesApiPath = cityConfig?.stopRoutes?.apiPath;
+      const arrivalsApiPath =
+        stopRoutesApiPath || cityConfig?.liveArrivals?.apiPath;
 
       if (!arrivalsApiPath) {
-        // No API path configured, skip live arrivals
         setIsLoading(false);
         setHasError(false);
         onErrorChange?.(false);
@@ -200,39 +141,18 @@ export default function BusServicesArrival({
         return;
       }
 
-      const apiUrl = `${getApiUrl(arrivalsApiPath)}?stationid=${id}`;
+      // Phase 1: Fetch routes/ETAs and render immediately
+      const routeData = await fetchStopRoutes(arrivalsApiPath, id, signal);
 
-      const response = await fetch(apiUrl, {
-        signal: controllerRef.current.signal,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch arrivals: ${response.status}`);
-      }
-
-      const results = await response.json();
-
-      if (results && results.services && results.services.length > 0) {
-        const servicesArrivals = {};
-        const services = results.services
-          .map(filterStaleArrivalsFromService)
-          .filter((s) => s.next || (s.arrivals && s.arrivals.length > 0));
-        services.forEach((service) => {
-          if (
-            service.next &&
-            (!servicesArrivals[service.no] ||
-              servicesArrivals[service.no] > service.next.duration_ms) // if there is a service with multiple directions, we only want the one with the shortest duration
-          ) {
-            servicesArrivals[service.no] = service.next.duration_ms;
-          }
-        });
+      if (routeData) {
+        const { services, servicesArrivals } = routeData;
         setServicesArrivals(servicesArrivals);
         setIsLoading(false);
         setHasError(false);
         onErrorChange?.(false);
         onLoadingChange?.(false);
 
-        // check for issues (duplicate services, multiple visits)
+        // Check for issues (duplicate services, multiple visits)
         const servicesWithIssues = [];
         services.forEach((service, i) => {
           const hasDuplicateServices =
@@ -250,109 +170,7 @@ export default function BusServicesArrival({
           }
         });
         setServicesIssues(servicesWithIssues);
-
-        const hasIssues = servicesWithIssues.length > 0;
-        setOneServiceHasMultipleDirections(hasIssues);
-
-        if (showBusesOnMap) {
-          setupBusesStopLayerOnce(map);
-          renderStopsTimeout.current = setTimeout(
-            () => {
-              const servicesWithCoords = services.filter(
-                (s) => s.no && s.next.lat > 0,
-              );
-              setLiveBusCount(servicesWithCoords.length);
-              const pointMargin = 100;
-              const servicesWithFixedCoordsPromises = servicesWithCoords.map(
-                async (s) => {
-                  await timeout(0); // Forces this to be async
-                  const coords = [s.next.lng, s.next.lat];
-                  const point = map.project(coords);
-                  let shortestDistance = Infinity;
-                  let nearestCoords;
-                  if (point.x && point.y) {
-                    // Query with filter to reduce post-processing
-                    // Note: We can't filter by sourceLayer directly in queryRenderedFeatures,
-                    // but we can use a more efficient filter function
-                    const features = map
-                      .queryRenderedFeatures(
-                        [
-                          [point.x - pointMargin, point.y - pointMargin],
-                          [point.x + pointMargin, point.y + pointMargin],
-                        ],
-                        {
-                          validate: false,
-                          // Filter early to reduce iteration
-                          filter: [
-                            'all',
-                            ['==', ['geometry-type'], 'LineString'],
-                            ['!=', ['get', 'class'], 'path'],
-                          ],
-                        },
-                      )
-                      .filter((f) => {
-                        // Additional filtering that can't be done in MapLibre filter
-                        return (
-                          f.sourceLayer === 'road' &&
-                          f.layer.type === 'line' &&
-                          !/(pedestrian|sidewalk|steps)/.test(f.layer.id)
-                        );
-                      });
-                    features.forEach((f) => {
-                      const nearestPoint = ruler.pointOnLine(
-                        f.geometry.coordinates,
-                        coords,
-                      );
-                      if (nearestPoint.t) {
-                        const distance = ruler.distance(
-                          coords,
-                          nearestPoint.point,
-                        );
-                        if (distance < shortestDistance) {
-                          shortestDistance = distance;
-                          nearestCoords = nearestPoint.point;
-                        }
-                      }
-                    });
-                    if (nearestCoords && shortestDistance * 1000 < 10) {
-                      // Only within 10m
-                      console.log(
-                        `Fixed bus position: ${s.no} - ${(
-                          shortestDistance * 1000
-                        ).toFixed(3)}m`,
-                      );
-                      s.next = {
-                        lng: nearestCoords[0],
-                        lat: nearestCoords[1],
-                      };
-                    }
-                  }
-                  return s;
-                },
-              );
-              requestAnimationFrame(async () => {
-                const servicesWithFixedCoords = await Promise.all(
-                  servicesWithFixedCoordsPromises,
-                );
-                map.getSource('buses-stop').setData({
-                  type: 'FeatureCollection',
-                  features: servicesWithFixedCoords.map((s) => ({
-                    type: 'Feature',
-                    id: encode(s.no),
-                    properties: {
-                      number: s.no,
-                    },
-                    geometry: {
-                      type: 'Point',
-                      coordinates: [s.next.lng, s.next.lat],
-                    },
-                  })),
-                });
-              });
-            },
-            map.loaded() ? 0 : 1000,
-          );
-        }
+        setOneServiceHasMultipleDirections(servicesWithIssues.length > 0);
       }
     } catch (error) {
       if (error.name !== 'AbortError') {
@@ -394,10 +212,8 @@ export default function BusServicesArrival({
     return () => {
       clearRafInterval(intervalID);
       controllerRef.current?.abort();
-      clearTimeout(renderStopsTimeout.current);
-      removeMapBuses(map);
     };
-  }, [id, active, showBusesOnMap]);
+  }, [id, active]);
 
   // Expose cancel function via ref
   useEffect(() => {
@@ -653,14 +469,6 @@ export default function BusServicesArrival({
             </>
           )}
         </>
-      )}
-
-      {showBusesOnMap && liveBusCount > 0 && (
-        <p style={{ marginTop: 5, fontSize: '.8em' }}>
-          <span class="live">{t('common.live')}</span>{' '}
-          <img src={busTinyImagePath} width="16" alt="" />{' '}
-          {t('stop.liveBusTrack', { count: liveBusCount })}
-        </p>
       )}
     </>
   );
