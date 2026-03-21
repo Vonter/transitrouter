@@ -3,9 +3,9 @@ import { test, expect } from '@playwright/test';
 const ROUTES = [
   { path: '/', marker: '#map', name: 'Main Page' },
   { path: '/arrival/#08057', marker: '#arrivals', name: 'Arrival Page' },
-  { path: '/first-last/', marker: '#firstlast', name: 'First/Last Page' },
+  { path: '/beta/first-last/', marker: '#firstlast', name: 'First/Last Page' },
   { path: '/diagram/', marker: 'main', name: 'Diagram Page' },
-  { path: '/visualization/', marker: '#map', name: 'Visualization Page' },
+  { path: '/beta/visualization/', marker: '#map', name: 'Visualization Page' },
 ];
 
 const HASH_ROUTES = [

@@ -26,7 +26,7 @@ const headers = [
     ],
   },
   {
-    path: '/first-last/',
+    path: '/beta/first-last/',
     files: [/^firstlast\..+js$/, /^firstlast\..+css$/],
   },
   {
@@ -34,7 +34,7 @@ const headers = [
     files: [/^diagram\..+js$/, /^diagram\..+css$/],
   },
   {
-    path: '/visualization/',
+    path: '/beta/visualization/',
     files: [/^visualization\..+js$/],
   },
   {
@@ -45,12 +45,13 @@ const headers = [
 
 let content = '';
 headers.forEach((h) => {
-  content += h.path + '\n';
-  files.forEach((f) => {
-    if (h.files.some((r) => r.test(f))) {
-      content += `  Link: </${f}>; rel=preload; as=${type(f)}\n`;
-    }
-  });
+  const links = files
+    .filter((f) => h.files.some((r) => r.test(f)))
+    .map((f) => `  Link: </${f}>; rel=preload; as=${type(f)}\n`)
+    .join('');
+  if (links) {
+    content += h.path + '\n' + links;
+  }
 });
 
 // Headers for assets, 1 month, 1 week

@@ -1,7 +1,6 @@
 import './i18n';
 
-const isDark = document.documentElement.classList.contains('dark');
-
+import { mapStyle, C, routeLineGradient } from './utils/theme';
 import { getCurrentCity } from './config';
 import { getConfigForCity, getApiUrl } from './city-config';
 import { normalizeName } from './utils/normalizeNames';
@@ -1181,14 +1180,12 @@ function ArrivalTimes() {
             .filter((s) => s.next || (s.arrivals && s.arrivals.length > 0));
           setFetchServicesStatus('online');
           setFetchServicesError(false);
-          const servicesForState =
-            filtered.length > 0 ? filtered : liveServices;
-          setServices(servicesForState);
+          setServices(filtered);
           isFirstFetchRef.current = false;
           scheduleRetry(id);
 
           // Phase 2: Fetch vehicle positions (non-blocking)
-          fetchAndMergeVehicles(servicesForState, signal)
+          fetchAndMergeVehicles(filtered, signal)
             .then((enriched) => {
               if (enriched) setServices(enriched);
             })
@@ -1196,6 +1193,7 @@ function ArrivalTimes() {
         } else {
           console.log('Live API returned no data');
           setFetchServicesError(false);
+          fetchScheduleFallback(id);
         }
       })
       .catch((error) => {
@@ -1219,14 +1217,19 @@ function ArrivalTimes() {
               console.log(
                 'Stop routes response received, updating with live data',
               );
+              const filtered = liveServices
+                .map(filterStaleArrivalsFromService)
+                .filter(
+                  (s) => s.next || (s.arrivals && s.arrivals.length > 0),
+                );
               setFetchServicesStatus('online');
               setFetchServicesError(false);
-              setServices(liveServices);
+              setServices(filtered);
               isFirstFetchRef.current = false;
               scheduleRetry(id);
 
               // Phase 2 for the background result
-              fetchAndMergeVehicles(liveServices, signal)
+              fetchAndMergeVehicles(filtered, signal)
                 .then((enriched) => {
                   if (enriched) setServices(enriched);
                 })
@@ -1257,7 +1260,7 @@ function ArrivalTimes() {
       'ontouchstart' in window || navigator.maxTouchPoints > 0;
     const map = new maplibregl.Map({
       container: mapContainer.current,
-      style: isDark ? '/data/style-dark.json' : '/data/style.json',
+      style: mapStyle,
       center: [lng, lat],
       zoom: 13,
       renderWorldCopies: false,
@@ -1323,9 +1326,9 @@ function ArrivalTimes() {
             'text-optional': true,
           },
           paint: {
-            'text-color': isDark ? '#ff4d6d' : '#f01b48',
+            'text-color': C.stopRed,
             'text-halo-width': 1,
-            'text-halo-color': isDark ? '#000' : '#fff',
+            'text-halo-color': C.textHalo,
           },
         });
 
@@ -1343,18 +1346,8 @@ function ArrivalTimes() {
             source: 'routes-pinned',
             layout: { 'line-cap': 'round' },
             paint: {
-              'line-color': isDark ? '#c0c0c0' : '#1a1a1a',
-              'line-gradient': [
-                'interpolate',
-                ['linear'],
-                ['line-progress'],
-                0,
-                isDark ? '#c0c0c0' : '#1a1a1a',
-                0.5,
-                isDark ? '#e0e0e0' : '#666666',
-                1,
-                isDark ? '#c0c0c0' : '#1a1a1a',
-              ],
+              'line-color': C.routeLine,
+              'line-gradient': routeLineGradient,
               'line-opacity': [
                 'interpolate',
                 ['linear'],
@@ -1403,7 +1396,7 @@ function ArrivalTimes() {
                 20,
                 8,
               ],
-              'circle-color': isDark ? '#c0c0c0' : '#1a1a1a',
+              'circle-color': C.routeLine,
               'circle-stroke-width': [
                 'interpolate',
                 ['linear'],
@@ -1413,7 +1406,7 @@ function ArrivalTimes() {
                 16,
                 1.5,
               ],
-              'circle-stroke-color': isDark ? '#1a1a1a' : '#ffffff',
+              'circle-stroke-color': C.stopCircleBg,
             },
           },
           'stop-highlight-icon',
@@ -1436,8 +1429,8 @@ function ArrivalTimes() {
               'text-max-width': 10,
             },
             paint: {
-              'text-color': isDark ? '#e0e0e0' : '#1a1a1a',
-              'text-halo-color': isDark ? '#000' : '#ffffff',
+              'text-color': C.text,
+              'text-halo-color': C.textHalo,
               'text-halo-width': 1.5,
             },
           },
@@ -1480,8 +1473,8 @@ function ArrivalTimes() {
             'text-padding': 4,
           },
           paint: {
-            'text-color': isDark ? '#e0e0e0' : '#000',
-            'text-halo-color': isDark ? '#000' : '#fff',
+            'text-color': C.text,
+            'text-halo-color': C.textHalo,
             'text-halo-width': 2,
           },
         });
@@ -1702,8 +1695,16 @@ function ArrivalTimes() {
       groups[key].frequency += service.frequency || 0;
     });
 
+    // Only keep groups that have at least one bus within maxArrivalTime
+    const withUpcoming = Object.values(groups).filter((g) =>
+      g.buses.some(
+        (b) =>
+          typeof b?.duration_ms === 'number' && b.duration_ms <= maxArrivalTime,
+      ),
+    );
+
     // Use pre-computed Set for O(1) isPinned checks
-    const sorted = Object.values(groups).sort((a, b) => {
+    const sorted = withUpcoming.sort((a, b) => {
       const aPinned = isPinnedSet(a.no, pinnedSet);
       const bPinned = isPinnedSet(b.no, pinnedSet);
       if (aPinned !== bPinned) return aPinned ? -1 : 1;
@@ -2109,7 +2110,15 @@ function ArrivalTimes() {
         </div>
       )}
       <table>
-        {services ? (
+        {services && !cityConfig?.liveArrivals?.enabled ? (
+          <tbody>
+            <tr>
+              <td class="blank">
+                Live arrival data is not available for this city.
+              </td>
+            </tr>
+          </tbody>
+        ) : services ? (
           (() => {
             const renderGroupRow = (group) => {
               const { no, destination, buses } = group;
@@ -2219,15 +2228,6 @@ function ArrivalTimes() {
                       <Fragment key={`${stopName}-eta`}>
                         {renderStopHeader(stopName)}
                         {withETA.map(renderGroupRow)}
-                      </Fragment>
-                    ) : null;
-                  })}
-                  {matchingStopGroups.map(({ stopName, groups }) => {
-                    const withoutETA = groups.filter((g) => !groupHasETA(g));
-                    return withoutETA.length > 0 ? (
-                      <Fragment key={`${stopName}-noeta`}>
-                        {renderStopHeader(stopName)}
-                        {withoutETA.map(renderGroupRow)}
                       </Fragment>
                     ) : null;
                   })}

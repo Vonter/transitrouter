@@ -2,15 +2,15 @@ import maplibregl from 'maplibre-gl';
 import MapboxLayer from '@deck.gl/mapbox/dist/mapbox-layer';
 import SolidPolygonLayer from '@deck.gl/layers/dist/solid-polygon-layer/solid-polygon-layer';
 import PathLayer from '@deck.gl/layers/dist/path-layer/path-layer';
-import { sortServices } from '../assets/utils/bus';
-import fetchCache from '../assets/utils/fetchCache';
+import { sortServices } from '../../assets/utils/bus';
+import fetchCache from '../../assets/utils/fetchCache';
 import {
   AVAILABLE_CITIES,
   DEFAULT_CITY,
   getConfigForCity,
-} from '../assets/config';
+} from '../../assets/config';
 
-// Detect city from URL path (e.g., /visualization/?city=blr or /blr/visualization/)
+// Detect city from URL path (e.g., /beta/visualization/?city=blr or /blr/beta/visualization/)
 const urlParams = new URLSearchParams(window.location.search);
 const pathSegments = window.location.pathname.split('/').filter(Boolean);
 const cityFromQuery = urlParams.get('city');

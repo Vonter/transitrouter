@@ -571,6 +571,7 @@
       "minzoom": 10,
       "filter": ["match", ["geometry-type"], ["LineString", "MultiLineString"], true, false],
       "layout": {
+        "visibility": "none",
         "symbol-placement": "line",
         "symbol-spacing": 350,
         "text-field": [

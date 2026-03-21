@@ -3,7 +3,9 @@ body {
     Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
   padding: 0;
   margin: 0;
+  color: #000;
   background-color: #f7f7f7;
+  color-scheme: light;
 }
 
 *,
@@ -1024,6 +1026,17 @@ html.dark {
   .live-data-loading {
     border-color: #e0e0e0;
     border-top-color: transparent;
+  }
+
+  .maplibregl-ctrl.maplibregl-ctrl-attrib {
+    background-color: rgba(30, 30, 30, 0.7);
+    color: #ccc;
+  }
+  .maplibregl-ctrl-attrib-button {
+    filter: invert(1);
+  }
+  .maplibregl-ctrl-attrib a {
+    color: #4da3ff;
   }
 
   @media (min-width: 720px) {

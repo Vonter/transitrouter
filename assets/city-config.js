@@ -210,11 +210,12 @@ export const isDevelopmentMode = () => {
 
 /**
  * Gets the base URL for API calls
- * In development (localhost), returns http://localhost:8788
+ * In development (localhost), uses the current origin so it works
+ * with whatever port wrangler is running on
  * In production, returns empty string (uses relative paths)
  */
 export const getApiBaseUrl = () => {
-  return isDevelopmentMode() ? 'http://localhost:8788' : '';
+  return isDevelopmentMode() ? window.location.origin : '';
 };
 
 /**

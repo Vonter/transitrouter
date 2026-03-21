@@ -927,6 +927,7 @@
         false
       ],
       "layout": {
+        "visibility": "none",
         "symbol-placement": "line",
         "symbol-spacing": 350,
         "text-field": [

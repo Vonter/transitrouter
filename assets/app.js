@@ -1,6 +1,14 @@
 import './i18n';
 
 import {
+  isDark,
+  mapStyle,
+  C,
+  routeLineGradient,
+  stationTextColor,
+  stationIconColor,
+} from './utils/theme';
+import {
   getCurrentCity,
   getCityInfo,
   getCityBounds,
@@ -176,8 +184,6 @@ function initPopoverDrag(popoverEl, onDismiss) {
   document.addEventListener('touchcancel', onEnd);
 }
 
-const isDark = document.documentElement.classList.contains('dark');
-
 // City drawer functionality
 const createCityDrawer = () => {
   const overlay = document.createElement('div');
@@ -202,6 +208,7 @@ const createCityDrawer = () => {
 
   const citiesLabel = document.createElement('p');
   citiesLabel.className = 'drawer-cities-label';
+  citiesLabel.textContent = 'Regions';
   citiesSection.appendChild(citiesLabel);
 
   const cityList = document.createElement('ul');
@@ -236,27 +243,32 @@ const createCityDrawer = () => {
   drawer.appendChild(divider);
   drawer.appendChild(citiesSection);
 
-  // Theme toggle inside drawer
-  const themeDivider = document.createElement('hr');
-  themeDivider.className = 'drawer-divider';
-  drawer.appendChild(themeDivider);
+  // Settings section
+  const settingsDivider = document.createElement('hr');
+  settingsDivider.className = 'drawer-divider';
+  drawer.appendChild(settingsDivider);
+
+  const settingsLabel = document.createElement('p');
+  settingsLabel.className = 'drawer-cities-label';
+  settingsLabel.textContent = 'Settings';
+  drawer.appendChild(settingsLabel);
 
   const themeSection = document.createElement('div');
   themeSection.className = 'drawer-theme';
   const themeLabel = document.createElement('span');
   themeLabel.className = 'drawer-theme-label';
-  themeLabel.textContent = 'Dark mode';
+  themeLabel.textContent = 'Dark Mode';
   const track = document.createElement('div');
   track.className = 'theme-toggle-track';
   track.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
   track.setAttribute('role', 'switch');
   track.setAttribute('aria-checked', String(isDark));
-  track.setAttribute('aria-label', 'Dark mode');
+  track.setAttribute('aria-label', 'Dark Mode');
   track.tabIndex = 0;
   track.innerHTML =
     '<span class="theme-toggle-icons">' +
-      '<svg class="theme-toggle-sun" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="4"/><path d="M10 1v2m0 14v2M3.5 3.5l1.4 1.4m10.2 10.2l1.4 1.4M1 10h2m14 0h2M3.5 16.5l1.4-1.4m10.2-10.2l1.4-1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>' +
-      '<svg class="theme-toggle-moon" viewBox="0 0 20 20" fill="currentColor"><path d="M17.3 13.3A8 8 0 0 1 6.7 2.7a8 8 0 1 0 10.6 10.6z"/></svg>' +
+    '<svg class="theme-toggle-sun" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="4"/><path d="M10 1v2m0 14v2M3.5 3.5l1.4 1.4m10.2 10.2l1.4 1.4M1 10h2m14 0h2M3.5 16.5l1.4-1.4m10.2-10.2l1.4-1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>' +
+    '<svg class="theme-toggle-moon" viewBox="0 0 20 20" fill="currentColor"><path d="M17.3 13.3A8 8 0 0 1 6.7 2.7a8 8 0 1 0 10.6 10.6z"/></svg>' +
     '</span>' +
     '<span class="theme-toggle-thumb"></span>';
   const toggleTheme = () => {
@@ -265,7 +277,12 @@ const createCityDrawer = () => {
     location.reload();
   };
   track.onclick = toggleTheme;
-  track.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleTheme(); } };
+  track.onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleTheme();
+    }
+  };
   themeSection.appendChild(themeLabel);
   themeSection.appendChild(track);
   drawer.appendChild(themeSection);
@@ -2536,7 +2553,7 @@ const App = () => {
 
     map = window._map = new maplibregl.Map({
       container: 'map',
-      style: isDark ? '/data/style-dark.json' : '/data/style.json',
+      style: mapStyle,
       renderWorldCopies: false,
       boxZoom: false,
       minZoom: 4,
@@ -2696,7 +2713,7 @@ const App = () => {
             22,
             6,
           ],
-          'line-opacity': isDark ? 0.8 : 0.5,
+          'line-opacity': C.routeLineOpacity,
         },
       },
       labelLayerId,
@@ -2717,7 +2734,7 @@ const App = () => {
           'line-cap': 'round',
         },
         paint: {
-          'line-color': isDark ? '#1a1a1a' : '#fff',
+          'line-color': C.stopCircleBg,
           'line-width': ['interpolate', ['linear'], ['zoom'], 16, 9, 22, 12],
           'line-opacity': 0.5,
         },
@@ -2748,79 +2765,13 @@ const App = () => {
         'text-optional': true,
       },
       paint: {
-        'icon-color': [
-          'case',
-          [
-            'any',
-            ['==', ['get', 'station_colors'], '#ffff00'],
-            ['==', ['get', 'station_colors'], 'yellow'],
-          ],
-          '#FFEA00',
-          ['to-color', ['get', 'station_colors']],
-        ],
-        'text-color': isDark
-          ? [
-              'case',
-              [
-                'any',
-                ['==', ['get', 'station_colors'], '#ffff00'],
-                ['==', ['get', 'station_colors'], 'yellow'],
-              ],
-              '#FFEA00',
-              // Brighten purple/violet shades
-              ['==', ['get', 'station_colors'], 'purple'],
-              '#c084fc',
-              ['==', ['get', 'station_colors'], '#800080'],
-              '#c084fc',
-              ['==', ['get', 'station_colors'], '#5301a4'],
-              '#a855f7',
-              ['==', ['get', 'station_colors'], '#7b2fbe'],
-              '#c084fc',
-              ['==', ['get', 'station_colors'], '#9b59b6'],
-              '#c084fc',
-              ['==', ['get', 'station_colors'], '#ee82ee'],
-              '#f0abfc',
-              ['==', ['get', 'station_colors'], 'violet'],
-              '#f0abfc',
-              // Brighten green shades
-              ['==', ['get', 'station_colors'], 'green'],
-              '#4ade80',
-              ['==', ['get', 'station_colors'], '#008000'],
-              '#4ade80',
-              ['==', ['get', 'station_colors'], '#009933'],
-              '#4ade80',
-              ['==', ['get', 'station_colors'], '#00a650'],
-              '#4ade80',
-              ['==', ['get', 'station_colors'], '#009b3a'],
-              '#4ade80',
-              ['==', ['get', 'station_colors'], '#00843d'],
-              '#4ade80',
-              // Brighten dark blue shades
-              ['==', ['get', 'station_colors'], '#00008b'],
-              '#60a5fa',
-              ['==', ['get', 'station_colors'], '#0000ff'],
-              '#60a5fa',
-              ['==', ['get', 'station_colors'], 'blue'],
-              '#60a5fa',
-              ['==', ['get', 'station_colors'], '#000080'],
-              '#60a5fa',
-              // Brighten dark red
-              ['==', ['get', 'station_colors'], '#8b0000'],
-              '#f87171',
-              ['==', ['get', 'station_colors'], 'maroon'],
-              '#f87171',
-              ['to-color', ['get', 'station_colors']],
-            ]
-          : [
-              'case',
-              [
-                'any',
-                ['==', ['get', 'station_colors'], '#ffff00'],
-                ['==', ['get', 'station_colors'], 'yellow'],
-              ],
-              '#FFEA00',
-              ['to-color', ['get', 'station_colors']],
-            ],
+        'icon-color': stationIconColor,
+        ...(isDark && {
+          'icon-halo-color': '#000',
+          'icon-halo-width': 0.5,
+          'icon-halo-blur': 1,
+        }),
+        'text-color': stationTextColor,
         'text-halo-color': [
           'case',
           [
@@ -2848,9 +2799,9 @@ const App = () => {
           ['==', ['get', 'station_colors'], 'violet'], // violet
           '#aaa',
           // Default halo
-          isDark ? '#000' : '#fff',
+          C.textHalo,
         ],
-        'text-halo-width': isDark ? 1.5 : 0.8,
+        'text-halo-width': C.stationHaloWidth,
       },
     });
 
@@ -2947,7 +2898,7 @@ const App = () => {
           ['concat', '\n', ['get', 'suffix']],
           '',
         ],
-        { 'font-scale': 0.8, 'text-color': isDark ? '#e0e0e0' : '#000' },
+        { 'font-scale': 0.8, 'text-color': C.text },
       ];
     } else {
       stopTextPartialFormat = ['get', 'number'];
@@ -2958,7 +2909,7 @@ const App = () => {
         '\n',
         {},
         ['get', 'name'],
-        { 'text-color': isDark ? '#e0e0e0' : '#000' },
+        { 'text-color': C.text },
       ];
     }
 
@@ -3003,9 +2954,9 @@ const App = () => {
         'text-line-height': 1.1,
       },
       paint: {
-        'text-color': isDark ? '#ff4d6d' : '#f01b48',
+        'text-color': C.stopRed,
         'text-halo-width': 1,
-        'text-halo-color': isDark ? '#000' : '#fff',
+        'text-halo-color': C.textHalo,
       },
     };
 
@@ -3031,14 +2982,14 @@ const App = () => {
         'circle-color': [
           'case',
           ['boolean', ['feature-state', 'selected'], false],
-          isDark ? '#1a1a1a' : '#fff',
-          isDark ? '#ff4d6d' : '#f01b48',
+          C.stopCircleBg,
+          C.stopRed,
         ],
         'circle-stroke-color': [
           'case',
           ['boolean', ['feature-state', 'selected'], false],
-          isDark ? '#ff4d6d' : '#f01b48',
-          isDark ? '#1a1a1a' : '#fff',
+          C.stopRed,
+          C.stopCircleBg,
         ],
         'circle-stroke-width': [
           'case',
@@ -3125,8 +3076,8 @@ const App = () => {
       ],
       paint: {
         'circle-radius': ['step', ['zoom'], 2, 12, 3],
-        'circle-color': isDark ? '#1a1a1a' : '#fff',
-        'circle-stroke-color': isDark ? '#ff4d6d' : '#f01b48',
+        'circle-color': C.stopCircleBg,
+        'circle-stroke-color': C.stopRed,
         'circle-stroke-width': ['step', ['zoom'], 1.5, 12, 2],
       },
     });
@@ -3364,18 +3315,8 @@ const App = () => {
           'line-cap': 'round',
         },
         paint: {
-          'line-color': isDark ? '#c0c0c0' : '#1a1a1a',
-          'line-gradient': [
-            'interpolate',
-            ['linear'],
-            ['line-progress'],
-            0,
-            isDark ? '#c0c0c0' : '#1a1a1a',
-            0.5,
-            isDark ? '#e0e0e0' : '#666666',
-            1,
-            isDark ? '#c0c0c0' : '#1a1a1a',
-          ],
+          'line-color': C.routeLine,
+          'line-gradient': routeLineGradient,
           'line-opacity': [
             'interpolate',
             ['linear'],
@@ -3422,7 +3363,7 @@ const App = () => {
           'line-cap': 'round',
         },
         paint: {
-          'line-color': isDark ? '#0a0a0a' : '#fff',
+          'line-color': C.routeCasing,
           'line-opacity': ['interpolate', ['linear'], ['zoom'], 12, 1, 22, 0],
           'line-width': 6,
           'line-offset': [
@@ -3472,9 +3413,9 @@ const App = () => {
           ],
         },
         paint: {
-          'text-color': isDark ? '#a855f7' : '#5301a4',
+          'text-color': C.metroPurple,
           'text-opacity': 0.9,
-          'text-halo-color': isDark ? '#000' : '#fff',
+          'text-halo-color': C.textHalo,
           'text-halo-width': 2,
         },
       },
@@ -3502,18 +3443,8 @@ const App = () => {
           'line-cap': 'round',
         },
         paint: {
-          'line-color': isDark ? '#c0c0c0' : '#1a1a1a',
-          'line-gradient': [
-            'interpolate',
-            ['linear'],
-            ['line-progress'],
-            0,
-            isDark ? '#c0c0c0' : '#1a1a1a',
-            0.5,
-            isDark ? '#e0e0e0' : '#666666',
-            1,
-            isDark ? '#c0c0c0' : '#1a1a1a',
-          ],
+          'line-color': C.routeLine,
+          'line-gradient': routeLineGradient,
           'line-opacity': [
             'case',
             ['boolean', ['feature-state', 'hover'], false],
@@ -3552,7 +3483,7 @@ const App = () => {
             'case',
             ['boolean', ['feature-state', 'fadein'], false],
             'transparent',
-            isDark ? '#0a0a0a' : '#fff',
+            C.routeCasing,
           ],
           'line-width': [
             'interpolate',
@@ -3586,8 +3517,8 @@ const App = () => {
         'text-line-height': 1,
       },
       paint: {
-        'text-color': isDark ? '#66e848' : '#3a6727',
-        'text-halo-color': isDark ? '#0a1a05' : '#eeffd1',
+        'text-color': C.serviceGreen,
+        'text-halo-color': C.serviceGreenHalo,
         'text-halo-width': 2,
         'text-opacity': [
           'case',
@@ -3629,9 +3560,9 @@ const App = () => {
           ],
         },
         paint: {
-          'text-color': isDark ? '#a855f7' : '#5301a4',
+          'text-color': C.metroPurple,
           'text-opacity': 0.9,
-          'text-halo-color': isDark ? '#000' : '#fff',
+          'text-halo-color': C.textHalo,
           'text-halo-width': 2,
           'text-opacity': [
             'case',
@@ -3742,8 +3673,8 @@ const App = () => {
         'text-padding': 4,
       },
       paint: {
-        'text-color': isDark ? '#e0e0e0' : '#000',
-        'text-halo-color': isDark ? '#000' : '#fff',
+        'text-color': C.text,
+        'text-halo-color': C.textHalo,
         'text-halo-width': 2,
       },
     });
@@ -3773,10 +3704,10 @@ const App = () => {
             'match',
             ['get', 'type'],
             'start',
-            isDark ? '#c0c0c0' : '#1a1a1a',
+            C.routeLine,
             'end',
-            isDark ? '#e0e0e0' : '#666666',
-            isDark ? '#c0c0c0' : '#1a1a1a',
+            C.routeLineMid,
+            C.routeLine,
           ],
           'line-opacity': 0.7,
           'line-width': [
@@ -3817,7 +3748,7 @@ const App = () => {
         source: 'routes-between',
         filter: ['==', ['get', 'type'], 'walk'],
         paint: {
-          'line-color': isDark ? '#4da3ff' : '#007aff',
+          'line-color': C.linkBlue,
           'line-dasharray': [2, 2],
           'line-opacity': 0.7,
           'line-width': [
@@ -3846,7 +3777,7 @@ const App = () => {
         },
         maxzoom: 14,
         paint: {
-          'line-color': isDark ? '#0a0a0a' : '#fff',
+          'line-color': C.routeCasing,
           'line-width': 6,
         },
       },
@@ -3881,9 +3812,9 @@ const App = () => {
         ],
       },
       paint: {
-        'text-color': isDark ? '#a855f7' : '#5301a4',
+        'text-color': C.metroPurple,
         'text-opacity': 0.8,
-        'text-halo-color': isDark ? '#000' : '#fff',
+        'text-halo-color': C.textHalo,
         'text-halo-width': 2,
       },
     });
@@ -4416,7 +4347,9 @@ const App = () => {
         ref={stopPopover}
         class={`popover ${showStopPopover ? 'expand' : ''}`}
       >
-        <div class="popover-handle"><span></span></div>
+        <div class="popover-handle">
+          <span></span>
+        </div>
         {stopPopoverData && (
           <>
             <a
@@ -4621,7 +4554,9 @@ const App = () => {
         class={`popover ${showServicePopover ? 'expand' : ''}`}
         key={``}
       >
-        <div class="popover-handle"><span></span></div>
+        <div class="popover-handle">
+          <span></span>
+        </div>
         <a
           href={`#${route.cityPrefix}/`}
           onClick={navBackToStop}
@@ -4699,7 +4634,9 @@ const App = () => {
         ref={betweenPopover}
         class={`popover ${showBetweenPopover ? 'expand' : ''}`}
       >
-        <div class="popover-handle"><span></span></div>
+        <div class="popover-handle">
+          <span></span>
+        </div>
         {showBetweenPopover && [
           <a
             href={`#${route.cityPrefix}/`}
@@ -4741,12 +4678,20 @@ const App = () => {
 
 render(<App />, document.getElementById('app'));
 
-if ('serviceWorker' in navigator) {
+if (
+  'serviceWorker' in navigator &&
+  window.location.hostname !== 'localhost' &&
+  window.location.hostname !== '127.0.0.1'
+) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register(
       new URL('../service-worker.js', import.meta.url),
       { type: 'module' },
     );
+  });
+} else if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then((registrations) => {
+    registrations.forEach((registration) => registration.unregister());
   });
 }
 
