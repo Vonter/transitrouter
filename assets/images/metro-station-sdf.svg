@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 10 10">
+  <defs>
+    <mask id="m">
+      <rect width="10" height="10" fill="#fff"/>
+      <path d="M3.70556 7H3V3H3.67778L5 5.65556L6.32222 3H7V7H6.29444V4.61111L5.13333 7H4.86667L3.70556 4.61111V7Z" fill="#000"/>
+    </mask>
+  </defs>
+  <rect x="0.278" y="0.278" width="9.444" height="9.444" rx="0.833" fill="#fff" mask="url(#m)"/>
+</svg>

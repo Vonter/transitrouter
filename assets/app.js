@@ -61,12 +61,10 @@ import StopsList from './components/StopsList.jsx';
 
 import stopImagePath from './images/stop.png';
 import stopEndImagePath from './images/stop-end.png';
-import mrtStationImagePath from './images/mrt-station.png';
-import lrtStationImagePath from './images/lrt-station.png';
 import passingRoutesBlueImagePath from './images/passing-routes-blue.svg';
 import iconSVGPath from '../icons/icon.svg';
 import busTinyImagePath from './images/bus-tiny-map.png';
-import metroStationSvgPath from './images/metro-station.svg';
+import metroStationSdfPath from './images/metro-station-sdf.svg';
 
 const city = getCurrentCity();
 const dataPath = `/data/${city}`;
@@ -2504,34 +2502,26 @@ const App = () => {
       });
     });
 
-    // Load all map images in parallel for faster initialization
-    // Await image loading before setting mapLoaded to ensure
-    // layers that reference these images can render properly
-    await Promise.all([
-      map
-        .loadImage(stopImagePath)
-        .then((img) => map.addImage('stop', img.data)),
-      map
-        .loadImage(stopEndImagePath)
-        .then((img) => map.addImage('stop-end', img.data)),
-      map
-        .loadImage(mrtStationImagePath)
-        .then((img) => map.addImage('mrt-station', img.data)),
-      map
-        .loadImage(lrtStationImagePath)
-        .then((img) => map.addImage('lrt-station', img.data)),
+    const loadPng = (name, path) =>
+      map.loadImage(path).then((img) => map.addImage(name, img.data));
+
+    const loadSvg = (name, path, size, opts = {}) =>
       new Promise((resolve, reject) => {
         const dpr = window.devicePixelRatio || 1;
         const img = new Image();
         img.onload = () => {
-          map.addImage('metro-station', img, { pixelRatio: 2 * dpr });
+          map.addImage(name, img, { pixelRatio: (size / img.naturalWidth) * dpr, ...opts });
           resolve();
         };
         img.onerror = reject;
-        img.width = 30 * dpr;
-        img.height = 30 * dpr;
-        img.src = metroStationSvgPath;
-      }),
+        img.width = img.height = size * dpr;
+        img.src = path;
+      });
+
+    await Promise.all([
+      loadPng('stop', stopImagePath),
+      loadPng('stop-end', stopEndImagePath),
+      loadSvg('metro-station', metroStationSdfPath, 60, { sdf: true }),
     ]).catch((e) => {
       console.error('Failed to load map images:', e);
     });
@@ -2559,7 +2549,12 @@ const App = () => {
           'line-cap': 'round',
         },
         paint: {
-          'line-color': ['to-color', ['get', 'line_color']],
+          'line-color': [
+              'case',
+              ['any', ['==', ['get', 'line_color'], '#ffff00'], ['==', ['get', 'line_color'], 'yellow']],
+              '#FFEA00',
+              ['to-color', ['get', 'line_color']],
+            ],
           'line-width': [
             'interpolate',
             ['linear'],
@@ -2600,7 +2595,7 @@ const App = () => {
       'rail-path',
     );
 
-    // Add rail stations layer using pois icon style
+    // Add rail stations layer (after lines so icons render on top)
     map.addLayer({
       id: 'rail-stations',
       type: 'symbol',
@@ -2610,26 +2605,34 @@ const App = () => {
         ['==', ['geometry-type'], 'Point'],
         ['==', ['get', 'stop_type'], 'station'],
       ],
-      minzoom: 12,
+      minzoom: 11,
       layout: {
-        'icon-image': 'mrt-station',
-        'icon-size': 0.2,
+        'icon-image': 'metro-station',
+        'icon-size': ['interpolate', ['linear'], ['zoom'], 11, 0.3, 22, 0.5],
         'icon-allow-overlap': false,
         'text-field': ['coalesce', ['get', 'name_en'], ['get', 'name']],
-        'text-font': ['Noto Sans Regular'],
-        'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10, 22, 16],
+        'text-font': ['Noto Sans Bold'],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 11, 10, 22, 16],
         'text-variable-anchor': ['left', 'right', 'top'],
-        'text-radial-offset': 0.85,
+        'text-radial-offset': 1.1,
         'text-optional': true,
       },
       paint: {
-        'text-color': ['to-color', ['get', 'station_colors']],
+        'icon-color': [
+          'case',
+          ['any', ['==', ['get', 'station_colors'], '#ffff00'], ['==', ['get', 'station_colors'], 'yellow']],
+          '#FFEA00',
+          ['to-color', ['get', 'station_colors']],
+        ],
+        'text-color': [
+          'case',
+          ['any', ['==', ['get', 'station_colors'], '#ffff00'], ['==', ['get', 'station_colors'], 'yellow']],
+          '#FFEA00',
+          ['to-color', ['get', 'station_colors']],
+        ],
         'text-halo-color': [
           'case',
-          // If color is very ligh, use darker halo
-          ['==', ['get', 'station_colors'], '#ffff00'], // yellow
-          '#555',
-          ['==', ['get', 'station_colors'], 'yellow'], // yellow
+          ['any', ['==', ['get', 'station_colors'], '#ffff00'], ['==', ['get', 'station_colors'], 'yellow']],
           '#555',
           ['==', ['get', 'station_colors'], '#00ffff'], // aqua/cyan
           '#666',

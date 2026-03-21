@@ -902,12 +902,15 @@
       "type": "symbol",
       "source": "openmaptiles",
       "source-layer": "poi",
-      "minzoom": 16,
+      "minzoom": 15,
       "filter": ["==", ["get", "subclass"], "subway_entrance"],
       "layout": {
         "icon-image": "metro-station",
-        "icon-size": 1,
+        "icon-size": 0.25,
         "icon-allow-overlap": true
+      },
+      "paint": {
+        "icon-color": "#1B4DA9"
       }
     },
     {

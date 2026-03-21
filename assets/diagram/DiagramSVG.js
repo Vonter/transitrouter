@@ -4,7 +4,7 @@ import QRCode from 'qrcode';
 import bmtcSvgUrl from 'url:../images/bmtc.svg';
 import ksrtcSvgUrl from 'url:../images/ksrtc.svg';
 import railwaysSvgUrl from 'url:../images/railways.svg';
-import metroStationSvgPath from '../images/metro-station.svg';
+import metroStationSdfPath from '../images/metro-station-sdf.svg';
 import {
   getStopName,
   groupRoutesByForwardStops,
@@ -406,13 +406,15 @@ function captureMapAsDataUri(lng, lat, w, h) {
           const dpr = window.devicePixelRatio || 1;
           const img = new Image();
           img.onload = () => {
-            map.addImage('metro-station', img, { pixelRatio: 2 * dpr });
+            map.addImage('metro-station', img, {
+              pixelRatio: (60 / img.naturalWidth) * dpr,
+              sdf: true,
+            });
             resolve();
           };
           img.onerror = reject;
-          img.width = 30 * dpr;
-          img.height = 30 * dpr;
-          img.src = metroStationSvgPath;
+          img.width = img.height = 60 * dpr;
+          img.src = metroStationSdfPath;
         });
       } catch {
         /* skip if image fails */
@@ -1035,9 +1037,10 @@ function drawRouteDiagram(
           .append('g')
           .attr('transform', `translate(${iconX},${iconY})`);
         if (t === 'metro') {
-          const s = POI_ICON_SIZE / 10;
+          const s = POI_ICON_SIZE / 40;
           const sg = ig.append('g').attr('transform', `scale(${s})`);
-          const bgColor = poiInfo.color || C.primary;
+          const rawColor = poiInfo.color || C.primary;
+          const bgColor = rawColor === '#ffff00' || rawColor === 'yellow' ? '#FFEA00' : rawColor;
           sg.append('rect')
             .attr('x', 0.278)
             .attr('y', 0.278)
