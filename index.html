@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <script>!function(){var t=localStorage.getItem('theme');if(t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('dark')}()</script>
     <meta
       name="viewport"
       content="width=device-width,initial-scale=1,viewport-fit=cover"
@@ -34,7 +35,9 @@
       data-i18n-key="app.name"
       data-i18n-attr="content"
     />
-    <meta name="theme-color" content="#F9F5ED" />
+    <meta name="theme-color" content="#F9F5ED" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta
       name="twitter:url"

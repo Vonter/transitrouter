@@ -90,6 +90,94 @@ const decodePolyline = (encoded) => decodePolylineCached(encoded, toGeoJSON);
 
 const $logo = document.getElementById('logo');
 
+// ── Popover drag-to-snap (mobile) ──────────────────────────────────────────
+function initPopoverDrag(popoverEl, onDismiss) {
+  if (!supportsTouch || BREAKPOINT()) return;
+
+  const handle = popoverEl.querySelector('.popover-handle');
+  if (!handle) return;
+
+  let startY, startH, dragging, lastY, lastTime, velocity;
+  const vh = () => window.innerHeight;
+
+  const onStart = (e) => {
+    if (!popoverEl.classList.contains('expand')) return;
+    const touch = e.touches[0];
+    startY = touch.clientY;
+    startH = popoverEl.getBoundingClientRect().height;
+    lastY = startY;
+    lastTime = Date.now();
+    velocity = 0;
+    dragging = true;
+    popoverEl.classList.add('dragging');
+  };
+
+  const onMove = (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    const y = touch.clientY;
+    const delta = y - startY;
+    const newH = Math.max(50, Math.min(vh() - 40, startH - delta));
+    popoverEl.style.maxHeight = newH + 'px';
+    // Also update transform so the popover bottom stays anchored to viewport bottom
+    popoverEl.style.transform =
+      'translateY(calc(-' + newH + 'px - var(--keyboard-height, 0px)))';
+
+    const now = Date.now();
+    const dt = now - lastTime;
+    if (dt > 10) {
+      velocity = (y - lastY) / dt; // px/ms — positive = downward
+      lastY = y;
+      lastTime = now;
+    }
+  };
+
+  const onEnd = () => {
+    if (!dragging) return;
+    dragging = false;
+
+    const currentH = popoverEl.getBoundingClientRect().height;
+    popoverEl.style.maxHeight = '';
+    popoverEl.style.transform = '';
+    popoverEl.classList.remove('dragging');
+    popoverEl.classList.remove('snap-full', 'snap-collapsed');
+
+    const v = vh();
+    const ratio = currentH / v;
+    const fast = Math.abs(velocity) > 0.4;
+
+    if (fast && velocity > 0.4) {
+      // Fast swipe down
+      if (ratio > 0.3) {
+        popoverEl.classList.add('snap-collapsed');
+      } else {
+        onDismiss?.();
+      }
+    } else if (fast && velocity < -0.4) {
+      // Fast swipe up
+      popoverEl.classList.add('snap-full');
+    } else {
+      // Snap by position
+      if (ratio > 0.65) {
+        popoverEl.classList.add('snap-full');
+      } else if (ratio < 0.2) {
+        onDismiss?.();
+      } else if (ratio < 0.35) {
+        popoverEl.classList.add('snap-collapsed');
+      }
+      // else mid (default, no class)
+    }
+  };
+
+  handle.addEventListener('touchstart', onStart, { passive: true });
+  document.addEventListener('touchmove', onMove, { passive: false });
+  document.addEventListener('touchend', onEnd);
+  document.addEventListener('touchcancel', onEnd);
+}
+
+const isDark = document.documentElement.classList.contains('dark');
+
 // City drawer functionality
 const createCityDrawer = () => {
   const overlay = document.createElement('div');
@@ -147,6 +235,41 @@ const createCityDrawer = () => {
   drawer.appendChild(intro);
   drawer.appendChild(divider);
   drawer.appendChild(citiesSection);
+
+  // Theme toggle inside drawer
+  const themeDivider = document.createElement('hr');
+  themeDivider.className = 'drawer-divider';
+  drawer.appendChild(themeDivider);
+
+  const themeSection = document.createElement('div');
+  themeSection.className = 'drawer-theme';
+  const themeLabel = document.createElement('span');
+  themeLabel.className = 'drawer-theme-label';
+  themeLabel.textContent = 'Dark mode';
+  const track = document.createElement('div');
+  track.className = 'theme-toggle-track';
+  track.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+  track.setAttribute('role', 'switch');
+  track.setAttribute('aria-checked', String(isDark));
+  track.setAttribute('aria-label', 'Dark mode');
+  track.tabIndex = 0;
+  track.innerHTML =
+    '<span class="theme-toggle-icons">' +
+      '<svg class="theme-toggle-sun" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="4"/><path d="M10 1v2m0 14v2M3.5 3.5l1.4 1.4m10.2 10.2l1.4 1.4M1 10h2m14 0h2M3.5 16.5l1.4-1.4m10.2-10.2l1.4-1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>' +
+      '<svg class="theme-toggle-moon" viewBox="0 0 20 20" fill="currentColor"><path d="M17.3 13.3A8 8 0 0 1 6.7 2.7a8 8 0 1 0 10.6 10.6z"/></svg>' +
+    '</span>' +
+    '<span class="theme-toggle-thumb"></span>';
+  const toggleTheme = () => {
+    const nowDark = document.documentElement.classList.contains('dark');
+    localStorage.setItem('theme', nowDark ? 'light' : 'dark');
+    location.reload();
+  };
+  track.onclick = toggleTheme;
+  track.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleTheme(); } };
+  themeSection.appendChild(themeLabel);
+  themeSection.appendChild(track);
+  drawer.appendChild(themeSection);
+
   overlay.appendChild(drawer);
 
   overlay.addEventListener('click', (e) => {
@@ -2413,7 +2536,7 @@ const App = () => {
 
     map = window._map = new maplibregl.Map({
       container: 'map',
-      style: '/data/style.json',
+      style: isDark ? '/data/style-dark.json' : '/data/style.json',
       renderWorldCopies: false,
       boxZoom: false,
       minZoom: 4,
@@ -2573,7 +2696,7 @@ const App = () => {
             22,
             6,
           ],
-          'line-opacity': 0.5,
+          'line-opacity': isDark ? 0.8 : 0.5,
         },
       },
       labelLayerId,
@@ -2594,7 +2717,7 @@ const App = () => {
           'line-cap': 'round',
         },
         paint: {
-          'line-color': '#fff',
+          'line-color': isDark ? '#1a1a1a' : '#fff',
           'line-width': ['interpolate', ['linear'], ['zoom'], 16, 9, 22, 12],
           'line-opacity': 0.5,
         },
@@ -2635,16 +2758,69 @@ const App = () => {
           '#FFEA00',
           ['to-color', ['get', 'station_colors']],
         ],
-        'text-color': [
-          'case',
-          [
-            'any',
-            ['==', ['get', 'station_colors'], '#ffff00'],
-            ['==', ['get', 'station_colors'], 'yellow'],
-          ],
-          '#FFEA00',
-          ['to-color', ['get', 'station_colors']],
-        ],
+        'text-color': isDark
+          ? [
+              'case',
+              [
+                'any',
+                ['==', ['get', 'station_colors'], '#ffff00'],
+                ['==', ['get', 'station_colors'], 'yellow'],
+              ],
+              '#FFEA00',
+              // Brighten purple/violet shades
+              ['==', ['get', 'station_colors'], 'purple'],
+              '#c084fc',
+              ['==', ['get', 'station_colors'], '#800080'],
+              '#c084fc',
+              ['==', ['get', 'station_colors'], '#5301a4'],
+              '#a855f7',
+              ['==', ['get', 'station_colors'], '#7b2fbe'],
+              '#c084fc',
+              ['==', ['get', 'station_colors'], '#9b59b6'],
+              '#c084fc',
+              ['==', ['get', 'station_colors'], '#ee82ee'],
+              '#f0abfc',
+              ['==', ['get', 'station_colors'], 'violet'],
+              '#f0abfc',
+              // Brighten green shades
+              ['==', ['get', 'station_colors'], 'green'],
+              '#4ade80',
+              ['==', ['get', 'station_colors'], '#008000'],
+              '#4ade80',
+              ['==', ['get', 'station_colors'], '#009933'],
+              '#4ade80',
+              ['==', ['get', 'station_colors'], '#00a650'],
+              '#4ade80',
+              ['==', ['get', 'station_colors'], '#009b3a'],
+              '#4ade80',
+              ['==', ['get', 'station_colors'], '#00843d'],
+              '#4ade80',
+              // Brighten dark blue shades
+              ['==', ['get', 'station_colors'], '#00008b'],
+              '#60a5fa',
+              ['==', ['get', 'station_colors'], '#0000ff'],
+              '#60a5fa',
+              ['==', ['get', 'station_colors'], 'blue'],
+              '#60a5fa',
+              ['==', ['get', 'station_colors'], '#000080'],
+              '#60a5fa',
+              // Brighten dark red
+              ['==', ['get', 'station_colors'], '#8b0000'],
+              '#f87171',
+              ['==', ['get', 'station_colors'], 'maroon'],
+              '#f87171',
+              ['to-color', ['get', 'station_colors']],
+            ]
+          : [
+              'case',
+              [
+                'any',
+                ['==', ['get', 'station_colors'], '#ffff00'],
+                ['==', ['get', 'station_colors'], 'yellow'],
+              ],
+              '#FFEA00',
+              ['to-color', ['get', 'station_colors']],
+            ],
         'text-halo-color': [
           'case',
           [
@@ -2671,19 +2847,42 @@ const App = () => {
           '#aaa',
           ['==', ['get', 'station_colors'], 'violet'], // violet
           '#aaa',
-          // Default white halo for most colors
-          '#fff',
+          // Default halo
+          isDark ? '#000' : '#fff',
         ],
-        'text-halo-width': 0.8,
+        'text-halo-width': isDark ? 1.5 : 0.8,
       },
     });
 
     setMapLoaded(true);
+
+    // Init popover drag-to-snap on mobile
+    requestIdleCallback(() => {
+      initPopoverDrag(stopPopover.current, () => hideStopPopover());
+      initPopoverDrag(servicePopover.current, () => {
+        setShowServicePopover(false);
+      });
+      initPopoverDrag(betweenPopover.current, () => resetStartEndStops());
+    });
   };
 
   useEffect(() => {
     onLoad();
   }, []);
+
+  // Reset snap classes when popovers open
+  useEffect(() => {
+    if (showStopPopover)
+      stopPopover.current?.classList.remove('snap-full', 'snap-collapsed');
+  }, [showStopPopover]);
+  useEffect(() => {
+    if (showServicePopover)
+      servicePopover.current?.classList.remove('snap-full', 'snap-collapsed');
+  }, [showServicePopover]);
+  useEffect(() => {
+    if (showBetweenPopover)
+      betweenPopover.current?.classList.remove('snap-full', 'snap-collapsed');
+  }, [showBetweenPopover]);
 
   useEffect(() => {
     const vv = window.visualViewport;
@@ -2748,7 +2947,7 @@ const App = () => {
           ['concat', '\n', ['get', 'suffix']],
           '',
         ],
-        { 'font-scale': 0.8, 'text-color': '#000' },
+        { 'font-scale': 0.8, 'text-color': isDark ? '#e0e0e0' : '#000' },
       ];
     } else {
       stopTextPartialFormat = ['get', 'number'];
@@ -2759,7 +2958,7 @@ const App = () => {
         '\n',
         {},
         ['get', 'name'],
-        { 'text-color': '#000' },
+        { 'text-color': isDark ? '#e0e0e0' : '#000' },
       ];
     }
 
@@ -2804,9 +3003,9 @@ const App = () => {
         'text-line-height': 1.1,
       },
       paint: {
-        'text-color': '#f01b48',
+        'text-color': isDark ? '#ff4d6d' : '#f01b48',
         'text-halo-width': 1,
-        'text-halo-color': '#fff',
+        'text-halo-color': isDark ? '#000' : '#fff',
       },
     };
 
@@ -2832,14 +3031,14 @@ const App = () => {
         'circle-color': [
           'case',
           ['boolean', ['feature-state', 'selected'], false],
-          '#fff',
-          '#f01b48',
+          isDark ? '#1a1a1a' : '#fff',
+          isDark ? '#ff4d6d' : '#f01b48',
         ],
         'circle-stroke-color': [
           'case',
           ['boolean', ['feature-state', 'selected'], false],
-          '#f01b48',
-          '#fff',
+          isDark ? '#ff4d6d' : '#f01b48',
+          isDark ? '#1a1a1a' : '#fff',
         ],
         'circle-stroke-width': [
           'case',
@@ -2926,8 +3125,8 @@ const App = () => {
       ],
       paint: {
         'circle-radius': ['step', ['zoom'], 2, 12, 3],
-        'circle-color': '#fff',
-        'circle-stroke-color': '#f01b48',
+        'circle-color': isDark ? '#1a1a1a' : '#fff',
+        'circle-stroke-color': isDark ? '#ff4d6d' : '#f01b48',
         'circle-stroke-width': ['step', ['zoom'], 1.5, 12, 2],
       },
     });
@@ -3165,17 +3364,17 @@ const App = () => {
           'line-cap': 'round',
         },
         paint: {
-          'line-color': '#1a1a1a',
+          'line-color': isDark ? '#c0c0c0' : '#1a1a1a',
           'line-gradient': [
             'interpolate',
             ['linear'],
             ['line-progress'],
             0,
-            '#1a1a1a',
+            isDark ? '#c0c0c0' : '#1a1a1a',
             0.5,
-            '#666666',
+            isDark ? '#e0e0e0' : '#666666',
             1,
-            '#1a1a1a',
+            isDark ? '#c0c0c0' : '#1a1a1a',
           ],
           'line-opacity': [
             'interpolate',
@@ -3223,7 +3422,7 @@ const App = () => {
           'line-cap': 'round',
         },
         paint: {
-          'line-color': '#fff',
+          'line-color': isDark ? '#0a0a0a' : '#fff',
           'line-opacity': ['interpolate', ['linear'], ['zoom'], 12, 1, 22, 0],
           'line-width': 6,
           'line-offset': [
@@ -3273,9 +3472,9 @@ const App = () => {
           ],
         },
         paint: {
-          'text-color': '#5301a4',
+          'text-color': isDark ? '#a855f7' : '#5301a4',
           'text-opacity': 0.9,
-          'text-halo-color': '#fff',
+          'text-halo-color': isDark ? '#000' : '#fff',
           'text-halo-width': 2,
         },
       },
@@ -3303,17 +3502,17 @@ const App = () => {
           'line-cap': 'round',
         },
         paint: {
-          'line-color': '#1a1a1a',
+          'line-color': isDark ? '#c0c0c0' : '#1a1a1a',
           'line-gradient': [
             'interpolate',
             ['linear'],
             ['line-progress'],
             0,
-            '#1a1a1a',
+            isDark ? '#c0c0c0' : '#1a1a1a',
             0.5,
-            '#666666',
+            isDark ? '#e0e0e0' : '#666666',
             1,
-            '#1a1a1a',
+            isDark ? '#c0c0c0' : '#1a1a1a',
           ],
           'line-opacity': [
             'case',
@@ -3353,7 +3552,7 @@ const App = () => {
             'case',
             ['boolean', ['feature-state', 'fadein'], false],
             'transparent',
-            '#fff',
+            isDark ? '#0a0a0a' : '#fff',
           ],
           'line-width': [
             'interpolate',
@@ -3387,8 +3586,8 @@ const App = () => {
         'text-line-height': 1,
       },
       paint: {
-        'text-color': '#3a6727',
-        'text-halo-color': '#eeffd1',
+        'text-color': isDark ? '#66e848' : '#3a6727',
+        'text-halo-color': isDark ? '#0a1a05' : '#eeffd1',
         'text-halo-width': 2,
         'text-opacity': [
           'case',
@@ -3430,9 +3629,9 @@ const App = () => {
           ],
         },
         paint: {
-          'text-color': '#5301a4',
+          'text-color': isDark ? '#a855f7' : '#5301a4',
           'text-opacity': 0.9,
-          'text-halo-color': '#fff',
+          'text-halo-color': isDark ? '#000' : '#fff',
           'text-halo-width': 2,
           'text-opacity': [
             'case',
@@ -3543,8 +3742,8 @@ const App = () => {
         'text-padding': 4,
       },
       paint: {
-        'text-color': '#000',
-        'text-halo-color': '#fff',
+        'text-color': isDark ? '#e0e0e0' : '#000',
+        'text-halo-color': isDark ? '#000' : '#fff',
         'text-halo-width': 2,
       },
     });
@@ -3574,10 +3773,10 @@ const App = () => {
             'match',
             ['get', 'type'],
             'start',
-            '#1a1a1a',
+            isDark ? '#c0c0c0' : '#1a1a1a',
             'end',
-            '#666666',
-            '#1a1a1a',
+            isDark ? '#e0e0e0' : '#666666',
+            isDark ? '#c0c0c0' : '#1a1a1a',
           ],
           'line-opacity': 0.7,
           'line-width': [
@@ -3618,7 +3817,7 @@ const App = () => {
         source: 'routes-between',
         filter: ['==', ['get', 'type'], 'walk'],
         paint: {
-          'line-color': '#007aff',
+          'line-color': isDark ? '#4da3ff' : '#007aff',
           'line-dasharray': [2, 2],
           'line-opacity': 0.7,
           'line-width': [
@@ -3647,7 +3846,7 @@ const App = () => {
         },
         maxzoom: 14,
         paint: {
-          'line-color': '#fff',
+          'line-color': isDark ? '#0a0a0a' : '#fff',
           'line-width': 6,
         },
       },
@@ -3682,9 +3881,9 @@ const App = () => {
         ],
       },
       paint: {
-        'text-color': '#5301a4',
+        'text-color': isDark ? '#a855f7' : '#5301a4',
         'text-opacity': 0.8,
-        'text-halo-color': '#fff',
+        'text-halo-color': isDark ? '#000' : '#fff',
         'text-halo-width': 2,
       },
     });
@@ -4217,6 +4416,7 @@ const App = () => {
         ref={stopPopover}
         class={`popover ${showStopPopover ? 'expand' : ''}`}
       >
+        <div class="popover-handle"><span></span></div>
         {stopPopoverData && (
           <>
             <a
@@ -4421,6 +4621,7 @@ const App = () => {
         class={`popover ${showServicePopover ? 'expand' : ''}`}
         key={``}
       >
+        <div class="popover-handle"><span></span></div>
         <a
           href={`#${route.cityPrefix}/`}
           onClick={navBackToStop}
@@ -4498,6 +4699,7 @@ const App = () => {
         ref={betweenPopover}
         class={`popover ${showBetweenPopover ? 'expand' : ''}`}
       >
+        <div class="popover-handle"><span></span></div>
         {showBetweenPopover && [
           <a
             href={`#${route.cityPrefix}/`}

@@ -1,5 +1,7 @@
 import './i18n';
 
+const isDark = document.documentElement.classList.contains('dark');
+
 import { getCurrentCity } from './config';
 import { getConfigForCity, getApiUrl } from './city-config';
 import { normalizeName } from './utils/normalizeNames';
@@ -1255,7 +1257,7 @@ function ArrivalTimes() {
       'ontouchstart' in window || navigator.maxTouchPoints > 0;
     const map = new maplibregl.Map({
       container: mapContainer.current,
-      style: '/data/style.json',
+      style: isDark ? '/data/style-dark.json' : '/data/style.json',
       center: [lng, lat],
       zoom: 13,
       renderWorldCopies: false,
@@ -1321,9 +1323,9 @@ function ArrivalTimes() {
             'text-optional': true,
           },
           paint: {
-            'text-color': '#f01b48',
+            'text-color': isDark ? '#ff4d6d' : '#f01b48',
             'text-halo-width': 1,
-            'text-halo-color': '#fff',
+            'text-halo-color': isDark ? '#000' : '#fff',
           },
         });
 
@@ -1341,17 +1343,17 @@ function ArrivalTimes() {
             source: 'routes-pinned',
             layout: { 'line-cap': 'round' },
             paint: {
-              'line-color': '#1a1a1a',
+              'line-color': isDark ? '#c0c0c0' : '#1a1a1a',
               'line-gradient': [
                 'interpolate',
                 ['linear'],
                 ['line-progress'],
                 0,
-                '#1a1a1a',
+                isDark ? '#c0c0c0' : '#1a1a1a',
                 0.5,
-                '#666666',
+                isDark ? '#e0e0e0' : '#666666',
                 1,
-                '#1a1a1a',
+                isDark ? '#c0c0c0' : '#1a1a1a',
               ],
               'line-opacity': [
                 'interpolate',
@@ -1401,7 +1403,7 @@ function ArrivalTimes() {
                 20,
                 8,
               ],
-              'circle-color': '#1a1a1a',
+              'circle-color': isDark ? '#c0c0c0' : '#1a1a1a',
               'circle-stroke-width': [
                 'interpolate',
                 ['linear'],
@@ -1411,7 +1413,7 @@ function ArrivalTimes() {
                 16,
                 1.5,
               ],
-              'circle-stroke-color': '#ffffff',
+              'circle-stroke-color': isDark ? '#1a1a1a' : '#ffffff',
             },
           },
           'stop-highlight-icon',
@@ -1434,8 +1436,8 @@ function ArrivalTimes() {
               'text-max-width': 10,
             },
             paint: {
-              'text-color': '#1a1a1a',
-              'text-halo-color': '#ffffff',
+              'text-color': isDark ? '#e0e0e0' : '#1a1a1a',
+              'text-halo-color': isDark ? '#000' : '#ffffff',
               'text-halo-width': 1.5,
             },
           },
@@ -1478,8 +1480,8 @@ function ArrivalTimes() {
             'text-padding': 4,
           },
           paint: {
-            'text-color': '#000',
-            'text-halo-color': '#fff',
+            'text-color': isDark ? '#e0e0e0' : '#000',
+            'text-halo-color': isDark ? '#000' : '#fff',
             'text-halo-width': 2,
           },
         });

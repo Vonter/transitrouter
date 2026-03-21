@@ -281,7 +281,7 @@ a:active {
   font-weight: normal;
   margin: 1em 0 0.5em;
   padding: 0 12px;
-  color: #666;
+  color: #444;
   text-transform: uppercase;
 }
 .drawer-city-list {
@@ -292,6 +292,7 @@ a:active {
 .drawer-city-item {
   display: flex;
   align-items: center;
+  color: #222;
   gap: 8px;
   padding: 12px;
   cursor: pointer;
@@ -307,6 +308,17 @@ a:active {
 }
 .drawer-city-name {
   line-height: 1.3;
+}
+.drawer-theme {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+}
+.drawer-theme-label {
+  font-size: 0.95em;
+  font-weight: 500;
+  color: #333;
 }
 
 .popover {
@@ -439,7 +451,7 @@ a:active {
   font-weight: normal;
   margin: 0.5em 0 0;
   padding: 0;
-  color: #999;
+  color: #444;
   text-transform: uppercase;
 }
 #stop-popover h2,
@@ -466,7 +478,7 @@ a:active {
   font-size: 0.7em;
   margin: 1em 0 0.5em;
   padding: 0;
-  color: #666;
+  color: #444;
   text-transform: uppercase;
 }
 #stop-popover p,
@@ -1514,6 +1526,7 @@ a.service-tag:hover {
   font-size: 1em;
   margin: 0;
   padding: 0;
+  color: #333;
 }
 .float-pill h2 {
   font-size: 0.8em;
@@ -2245,5 +2258,745 @@ input[type='checkbox']:checked:after {
   }
   100% {
     transform: rotate(360deg);
+  }
+}
+
+/* ── Popover drag handle + snap positions (mobile) ────────────────────────── */
+
+.popover-handle {
+  display: none;
+}
+
+@media (max-width: 1199px) {
+  .popover-handle {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 10px 0 2px;
+    cursor: grab;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    flex-shrink: 0;
+  }
+  .popover-handle span {
+    width: 40px;
+    height: 5px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.18);
+  }
+
+  /* Snap positions — override max-height on expanded popovers */
+  #stop-popover.snap-full,
+  #between-popover.snap-full,
+  #service-popover.snap-full {
+    max-height: calc(100dvh - 100px);
+    max-height: calc(100vh - 100px);
+  }
+  #stop-popover.snap-collapsed,
+  #between-popover.snap-collapsed,
+  #service-popover.snap-collapsed {
+    max-height: 50dvh;
+    max-height: 50vh;
+    transform: translateY(calc(-85px - var(--keyboard-height, 0px)));
+    overflow: hidden;
+  }
+
+  /* Disable transitions while actively dragging */
+  .popover.dragging {
+    transition: none !important;
+  }
+}
+
+/* ── Theme toggle ─────────────────────────────────────────────────────────── */
+
+.theme-toggle-track {
+  display: flex;
+  align-items: center;
+  width: 64px;
+  height: 32px;
+  padding: 3px;
+  border: none;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  position: relative;
+}
+@supports (backdrop-filter: blur(10px)) {
+  .theme-toggle-track {
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(10px);
+  }
+}
+.theme-toggle-track:hover {
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.35);
+}
+.theme-toggle-thumb {
+  position: absolute;
+  left: 3px;
+  width: 26px;
+  height: 26px;
+  border-radius: 13px;
+  background: #f9f5ed;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: left 0.25s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.theme-toggle-icons {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0 7px;
+  pointer-events: none;
+}
+.theme-toggle-icons svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.theme-toggle-sun {
+  color: #e8a000;
+}
+.theme-toggle-moon {
+  color: #8899aa;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   Dark mode — AMOLED-optimised (#000 background)
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+html.dark {
+  color-scheme: dark;
+
+  body {
+    background-color: #000;
+    color: #e0e0e0;
+  }
+
+  #map {
+    background-color: #000;
+  }
+
+  a {
+    color: #4da3ff;
+  }
+
+  /* ── Theme toggle (dark) ──────────────────────────────────────────────────── */
+
+  .theme-toggle-track {
+    background: rgba(60, 60, 60, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+  }
+  @supports (backdrop-filter: blur(10px)) {
+    .theme-toggle-track {
+      background: rgba(60, 60, 60, 0.7);
+    }
+  }
+  .theme-toggle-track:hover {
+    border-color: rgba(255, 255, 255, 0.5);
+    box-shadow: 0 1px 10px rgba(0, 0, 0, 0.7);
+  }
+  .theme-toggle-thumb {
+    left: 35px;
+    background: #555;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+  }
+  .theme-toggle-sun {
+    color: #555;
+  }
+  .theme-toggle-moon {
+    color: #f0c040;
+  }
+
+  /* ── Popover handle (dark) ─────────────────────────────────────────────── */
+
+  .popover-handle span {
+    background: rgba(255, 255, 255, 0.3);
+  }
+
+  /* ── Map controls ─────────────────────────────────────────────────────────── */
+
+  .maplibregl-ctrl-group {
+    background-color: rgba(30, 30, 30, 0.85);
+  }
+  @supports (backdrop-filter: blur(10px)) {
+    .maplibregl-ctrl-group {
+      background-color: rgba(30, 30, 30, 0.7);
+    }
+  }
+  .maplibregl-ctrl-group button {
+    filter: invert(1);
+  }
+
+  /* ── Logo ──────────────────────────────────────────────────────────────────── */
+
+  #logo {
+    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6));
+  }
+  #logo svg circle {
+    fill: #1a1a1a;
+    stroke: #4dd0db;
+  }
+  #logo svg path {
+    fill: #4dd0db;
+  }
+
+  /* ── About overlay ─────────────────────────────────────────────────────────── */
+
+  #about section {
+    background-color: rgba(20, 20, 20, 0.95);
+    color: #e0e0e0;
+  }
+  @supports (backdrop-filter: blur(10px)) {
+    #about section {
+      background-color: rgba(20, 20, 20, 0.8);
+    }
+  }
+  #about hr {
+    border-top-color: #333;
+  }
+  #about h2 {
+    color: #f0f0f0;
+  }
+
+  /* ── City drawer ───────────────────────────────────────────────────────────── */
+
+  #city-drawer {
+    background-color: rgba(10, 10, 10, 0.95);
+    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.5);
+  }
+  @supports (backdrop-filter: blur(10px)) {
+    #city-drawer {
+      background-color: rgba(10, 10, 10, 0.8);
+    }
+  }
+  .drawer-intro h2 {
+    color: #4dd0db;
+  }
+  .drawer-intro p {
+    color: #ccc;
+  }
+  .drawer-intro a,
+  .drawer-github {
+    color: #4da3ff;
+  }
+  .drawer-divider {
+    border-top-color: #333;
+  }
+  .drawer-cities-label {
+    color: #bbb;
+  }
+  .drawer-city-item {
+    color: #e0e0e0;
+  }
+  .drawer-city-item:hover {
+    background: rgba(77, 208, 219, 0.1);
+  }
+  .drawer-theme-label {
+    color: #ccc;
+  }
+
+  /* ── Popovers (search, stop, between, service, arrivals) ───────────────────── */
+
+  .popover {
+    background-color: #0d0d0d;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-bottom: none;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.8), 0 -1px 0 rgba(255, 255, 255, 0.06);
+  }
+  @supports (backdrop-filter: blur(10px)) {
+    .popover {
+      background-color: rgba(13, 13, 13, 0.85);
+    }
+  }
+
+  @supports (backdrop-filter: blur(10px)) {
+    #search-popover .popover-inner {
+      background-color: rgba(13, 13, 13, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-bottom: none;
+    }
+  }
+
+  #arrivals-popover {
+    background-color: #0a0a0a;
+  }
+
+  /* Panel headers — raised background to clearly separate from content */
+  #stop-popover header,
+  #between-popover header,
+  #service-popover header {
+    background-color: #151515;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    padding-bottom: 8px;
+  }
+
+  #stop-popover h1,
+  #between-popover h1,
+  #service-popover h1 {
+    color: #f0f0f0;
+  }
+  #stop-popover h2,
+  #between-popover h2,
+  #service-popover h2 {
+    color: #aaa;
+  }
+  #stop-popover h3,
+  #between-popover h3,
+  #service-popover h3 {
+    color: #bbb;
+  }
+
+  /* Content area — darker than header for clear contrast */
+  #stop-popover .popover-scroll,
+  #between-popover .popover-scroll,
+  #service-popover .popover-scroll {
+    background-color: #050505;
+  }
+
+  /* Footer — raised like header */
+  #stop-popover .popover-footer {
+    background-color: #151515;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+  }
+
+  /* Stacked popover separation — when service popover sits behind stop popover */
+  #stop-popover.expand ~ #service-popover.expand {
+    border-top: 2px solid rgba(255, 255, 255, 0.15);
+  }
+
+  /* ── Search ────────────────────────────────────────────────────────────────── */
+
+  .popover-search {
+    border-bottom-color: rgba(255, 255, 255, 0.1);
+  }
+  .popover-search input[type='search'] {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+  }
+  .popover-search input[type='search']:focus {
+    background-color: rgba(255, 255, 255, 0.15);
+  }
+  .popover-search input[type='search']:active {
+    background-color: rgba(255, 255, 255, 0.2);
+  }
+  .popover-search input[type='search']:focus-visible {
+    outline-color: #4da3ff;
+  }
+
+  .search-input-wrapper .cancel-btn {
+    color: #e0e0e0;
+  }
+  .search-input-wrapper .cancel-btn:active {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .popover-search .geolocate-btn {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #ccc;
+  }
+  .popover-search .geolocate-btn:active {
+    background-color: rgba(255, 255, 255, 0.2);
+  }
+  .popover-search .geolocate-btn.loading,
+  .popover-search .geolocate-btn.active {
+    color: #4da3ff;
+  }
+
+  /* ── Popover list ──────────────────────────────────────────────────────────── */
+
+  .popover-list li:not(.ads) a {
+    color: #e0e0e0;
+    border-bottom-color: rgba(255, 255, 255, 0.12);
+  }
+  @media (hover: hover) {
+    .popover-list li:not(.ads) a:hover {
+      background-color: rgba(255, 255, 255, 0.06);
+    }
+  }
+  .popover-list li a.current {
+    background-color: #1a2e0d;
+  }
+  .popover-list li:not(.ads) > label:not([hidden]) {
+    background-image: linear-gradient(to left, #0a0a0a, rgba(10, 10, 10, 0));
+  }
+
+  /* ── Popover close / buttons ───────────────────────────────────────────────── */
+
+  .popover-close {
+    background-color: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.5);
+  }
+  .popover-close:hover {
+    color: rgba(255, 255, 255, 0.8);
+  }
+
+  .popover-button {
+    background-color: rgba(77, 163, 255, 0.15);
+    color: #4da3ff;
+  }
+  .popover-button.primary {
+    box-shadow: inset 0 0 0 2px #4da3ff, 0 1px 5px rgba(77, 163, 255, 0.4);
+    background-color: #111;
+  }
+
+  /* ── Between popover ───────────────────────────────────────────────────────── */
+
+  #between-popover .between-nada {
+    color: #ccc;
+  }
+  #between-popover .between-item {
+    background-color: #111;
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+  #between-popover .between-item:hover {
+    border-color: #2a5a8a;
+    background-color: #1a1a1a;
+  }
+  #between-popover .between-item.selected {
+    border-color: #4da3ff;
+    box-shadow: 0 0 8px rgba(77, 163, 255, 0.2);
+    background-color: #1a1a1a;
+  }
+  #between-popover .between-stops:before,
+  #between-popover .between-stops:after,
+  #between-popover .nearby-start .between-stops .start:before,
+  #between-popover .nearby-end .between-stops .end:before {
+    background-color: #111;
+  }
+
+  /* ── Stop / service tags ───────────────────────────────────────────────────── */
+
+  .stop-tag {
+    background-color: rgba(240, 27, 72, 0.2);
+    color: #ff4d6d;
+  }
+  .mini-stop-tag {
+    color: #ff4d6d;
+  }
+  .service-tag {
+    background-color: rgba(85, 221, 51, 0.15);
+    color: #66e848;
+    border-color: #222;
+  }
+  .service-tag span {
+    background-color: #111;
+    color: #999;
+  }
+  .service-tag span.close:hover {
+    color: #ff4d6d;
+  }
+  a.service-tag:hover {
+    color: #f0f0f0;
+  }
+
+  .stop-tag.online:after,
+  .stop-tag.loading:after {
+    border-color: #111;
+  }
+  .stop-tag.static:after {
+    border-color: #111;
+  }
+  .stop-tag.error:after {
+    border-color: #111;
+  }
+
+  /* ── Float pill ────────────────────────────────────────────────────────────── */
+
+  .float-pill {
+    background-color: #0d0d0d;
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+  }
+  @supports (backdrop-filter: blur(10px)) {
+    .float-pill {
+      background-color: rgba(13, 13, 13, 0.85);
+    }
+  }
+  .float-pill h1 {
+    color: #f0f0f0;
+  }
+  .float-pill h2 {
+    color: #888;
+  }
+
+  /* ── Tooltip ───────────────────────────────────────────────────────────────── */
+
+  #tooltip {
+    background-color: rgba(20, 20, 20, 0.95);
+    color: #e0e0e0;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1);
+  }
+  @supports (backdrop-filter: blur(10px)) {
+    #tooltip {
+      background-color: rgba(20, 20, 20, 0.8);
+    }
+  }
+
+  /* ── Stops list / table ────────────────────────────────────────────────────── */
+
+  .stops-list li a,
+  .stops-table td.stop a,
+  .stops-table td.stop-start a,
+  .stops-table td.stop-end a {
+    color: #e0e0e0;
+  }
+  .stops-list li a:hover,
+  .stops-table td.stop a:hover,
+  .stops-table td.stop-start a:hover,
+  .stops-table td.stop-end a:hover {
+    background-color: rgba(240, 27, 72, 0.15);
+  }
+  .stops-table td.stop:before,
+  .stops-table td.stop-start:before,
+  .stops-table td.stop-end:before,
+  .stops-list li:before {
+    background-color: #111;
+  }
+
+  /* Section separators within popover content */
+  #stop-popover h3,
+  #service-popover h3 {
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    padding-top: 1em;
+    margin-top: 1.4em;
+  }
+
+  /* ── Callouts ──────────────────────────────────────────────────────────────── */
+
+  .warning {
+    background-color: #2a1f0a;
+    color: #f0c040;
+  }
+  .info {
+    background-color: #0a1a2a;
+    color: #80c0ff;
+  }
+
+  /* ── Vehicles ──────────────────────────────────────────────────────────────── */
+
+  .vehicle-inline {
+    background: #1a1500;
+    border-color: #cc7a00;
+    color: #e0d0b0;
+  }
+  .vehicle-inline:hover {
+    background: #2a2000;
+    border-color: #cc6600;
+  }
+
+  /* ── Placeholder ───────────────────────────────────────────────────────────── */
+
+  .placeholder {
+    color: #555;
+  }
+
+  /* ── Destination filter ────────────────────────────────────────────────────── */
+
+  .dest-filter {
+    border-color: rgba(255, 255, 255, 0.15);
+    background-color: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+  }
+  .dest-filter:focus {
+    border-color: #e0e0e0;
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+  .dest-filter-icon {
+    color: #999;
+  }
+  .dest-filter-clear {
+    background: rgba(255, 255, 255, 0.15);
+    color: #ccc;
+  }
+  .dest-filter-empty {
+    color: #888;
+  }
+
+  .no-eta-section-header {
+    color: #777;
+    border-top-color: rgba(255, 255, 255, 0.1);
+  }
+
+  /* ── Service destination ───────────────────────────────────────────────────── */
+
+  .service-destination-info {
+    color: #ccc;
+  }
+  .service-destination-info strong {
+    color: #f0f0f0;
+  }
+
+  /* ── Checkbox ──────────────────────────────────────────────────────────────── */
+
+  input[type='checkbox']:before {
+    border-color: rgba(102, 232, 72, 0.4);
+    background-color: #0a1a06;
+  }
+  input[type='checkbox']:active:before {
+    background-color: #1a2a10;
+  }
+  input[type='checkbox']:hover:before,
+  input[type='checkbox']:checked:before {
+    border-color: #66e848;
+  }
+  input[type='checkbox']:after {
+    border-color: #66e848;
+  }
+
+  /* ── Simple stops list ─────────────────────────────────────────────────────── */
+
+  .simple-stops-list li a {
+    color: #e0e0e0;
+  }
+  .simple-stops-list li a:hover {
+    background-color: rgba(240, 27, 72, 0.15);
+  }
+  .simple-stops-list .services-meta-list {
+    color: #66e848;
+    text-shadow: none;
+  }
+
+  /* ── Locale selector ───────────────────────────────────────────────────────── */
+
+  #locale-selector select {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+  }
+  #locale-selector select:hover,
+  #locale-selector select:active,
+  #locale-selector select:focus {
+    background-color: rgba(255, 255, 255, 0.2);
+  }
+
+  /* ── Live badge ────────────────────────────────────────────────────────────── */
+
+  .live {
+    background-color: #4dd0db;
+    color: #000;
+  }
+
+  /* ── Live data loading ─────────────────────────────────────────────────────── */
+
+  .live-data-loading {
+    border-color: #e0e0e0;
+    border-top-color: transparent;
+  }
+
+  /* ── Donation box ──────────────────────────────────────────────────────────── */
+
+  .donation-box {
+    color: #4da3ff;
+    background-color: rgba(77, 163, 255, 0.08);
+    box-shadow: 0 2px 5px rgba(77, 163, 255, 0.15);
+  }
+  .donation-box:hover {
+    color: #f0f0f0;
+    background-color: #111;
+  }
+
+  /* ── Plus button ───────────────────────────────────────────────────────────── */
+
+  .plus {
+    border-color: #222;
+    background-color: rgba(85, 221, 51, 0.15);
+  }
+  .plus:before,
+  .plus:after {
+    background-color: #66e848;
+  }
+  .plus:hover {
+    border-color: #66e848;
+  }
+
+  /* ── Geolocation ───────────────────────────────────────────────────────────── */
+
+  .maplibregl-ctrl-custom-geolocate {
+    color: #ccc;
+  }
+  .maplibregl-ctrl-custom-geolocate.active,
+  .maplibregl-ctrl-custom-geolocate.loading {
+    color: #4da3ff;
+  }
+  .user-location-dot {
+    background-color: #222;
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+  }
+  .user-location-dot:after {
+    background-color: #4da3ff;
+  }
+
+  /* ── Standalone gradient ───────────────────────────────────────────────────── */
+
+  .standalone:before {
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0));
+  }
+
+  /* ── Stop suffix / name ────────────────────────────────────────────────────── */
+
+  .stop-suffix {
+    color: #777;
+  }
+
+  /* ── Install sheet ─────────────────────────────────────────────────────────── */
+
+  .install-sheet-backdrop {
+    background: rgba(0, 0, 0, 0.6);
+  }
+  .install-sheet {
+    background: #111;
+    box-shadow: 0 -2px 20px rgba(0, 0, 0, 0.5);
+  }
+  .install-sheet-title {
+    color: #f0f0f0;
+  }
+  .install-browser-tab {
+    border-color: rgba(255, 255, 255, 0.15);
+    color: #ccc;
+  }
+  .install-browser-tab.active {
+    background: #4da3ff;
+    color: #000;
+    border-color: #4da3ff;
+  }
+  .install-sheet-steps {
+    color: #ccc;
+  }
+  .install-sheet-close {
+    background: #4da3ff;
+    color: #000;
+  }
+
+  /* ── Sidebar (wide landscape) ──────────────────────────────────────────────── */
+
+  @media (min-width: 1200px) and (min-height: 600px) and (orientation: landscape) {
+    #search-popover,
+    #search-popover.expand,
+    #search-popover.shrink {
+      background: linear-gradient(to bottom right, #000 30%, #0a1a0d, #0a1520);
+      box-shadow: 2px 0 16px rgba(0, 0, 0, 0.8);
+      border-right: 1px solid rgba(255, 255, 255, 0.1);
+    }
+  }
+
+  /* ── h2 new-window icon ────────────────────────────────────────────────────── */
+
+  #stop-popover h2 img.new-window,
+  #service-popover h2 img.new-window {
+    filter: opacity(0.4);
+  }
+
+  /* ── Arrivals popover popout ───────────────────────────────────────────────── */
+
+  #arrivals-popover .popover-popout img {
+    filter: brightness(2);
+  }
+  #arrivals-popover .popover-popout:hover img {
+    filter: brightness(3);
   }
 }

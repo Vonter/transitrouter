@@ -753,3 +753,240 @@ body {
   .diagram-page { padding: 0; max-width: none; }
   .diagram-svg-host { box-shadow: none; border-radius: 0; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   Dark mode — AMOLED-optimised
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+html.dark {
+  color-scheme: dark;
+
+  body {
+    background: #000;
+    color: #e0e0e0;
+  }
+
+  .diagram-svg-host {
+    background: #0a0a0a;
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.4);
+  }
+
+  /* ── Controls ──────────────────────────────────────────────────────────────── */
+
+  .stop-change-button {
+    background: #111;
+    border-color: rgba(255, 255, 255, 0.14);
+    color: #e0e0e0;
+  }
+  .stop-change-button:hover { background: #1a1a1a; }
+
+  .stop-tag {
+    background: rgba(228, 50, 75, 0.2);
+    color: #ff6680;
+  }
+
+  .stop-selector-dropdown {
+    background: #111;
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  }
+
+  .stop-search-input {
+    background: #0a0a0a;
+    color: #e0e0e0;
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+  }
+  .stop-search-input:focus {
+    background: #111;
+    border-bottom-color: #4d8ee6;
+  }
+
+  .stop-list-item {
+    border-bottom-color: rgba(255, 255, 255, 0.04);
+  }
+  .stop-list-item:hover { background: #1a1a1a; }
+
+  .stop-list-id {
+    background: rgba(228, 50, 75, 0.2);
+    color: #ff6680;
+  }
+  .stop-list-name { color: #e0e0e0; }
+  .stop-list-empty { color: #777; }
+
+  /* ── Diagram controls ──────────────────────────────────────────────────────── */
+
+  .control-label { color: #999; }
+
+  .control-input {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: #111;
+    color: #e0e0e0;
+  }
+  .control-input:hover { border-color: rgba(255, 255, 255, 0.22); }
+  .control-input:focus { border-color: #4d8ee6; }
+
+  .export-button {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: #111;
+    color: #ccc;
+  }
+  .export-button:hover {
+    background: #4d8ee6;
+    border-color: #4d8ee6;
+    color: #fff;
+  }
+
+  /* ── Map picker ────────────────────────────────────────────────────────────── */
+
+  .map-picker-hint {
+    background: #111;
+    color: #e0e0e0;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  }
+
+  /* ── Loading / error ───────────────────────────────────────────────────────── */
+
+  .diagram-loading-text { color: #777; }
+
+  .diagram-error {
+    background: #1a0a0d;
+    color: #ff6666;
+  }
+  .diagram-error h2 { color: #ff6666; }
+  .diagram-error p { color: #cc5555; }
+
+  /* ── Expert panel ──────────────────────────────────────────────────────────── */
+
+  .expert-toggle-button {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: #111;
+    color: #ccc;
+  }
+  .expert-toggle-button:hover { background: #1a1a1a; }
+  .expert-toggle-button--active {
+    background: #4d8ee6;
+    border-color: #4d8ee6;
+    color: #fff;
+  }
+  .expert-toggle-button--active:hover { background: #3a7dd4; }
+
+  .expert-panel {
+    background: #0a0a0a;
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.4);
+  }
+
+  .expert-theme {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .expert-section-title { color: #ccc; }
+  .expert-group-label {
+    color: #4d8ee6;
+    border-bottom-color: rgba(77, 142, 230, 0.2);
+  }
+  .expert-row-label { color: #999; }
+
+  .expert-row-input {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: #0a0a0a;
+    color: #e0e0e0;
+  }
+  .expert-row-input:focus { border-color: #4d8ee6; background: #111; }
+
+  .expert-reset-btn {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: #111;
+    color: #999;
+  }
+  .expert-reset-btn:hover { background: #1a1a1a; }
+
+  .expert-data-label { color: #999; }
+  .expert-data-textarea {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: #0a0a0a;
+    color: #e0e0e0;
+  }
+  .expert-data-textarea:focus { border-color: #4d8ee6; background: #111; }
+
+  .expert-apply-btn {
+    background: #4d8ee6;
+    color: #fff;
+  }
+  .expert-apply-btn:hover { background: #3a7dd4; }
+
+  /* ── Data table ────────────────────────────────────────────────────────────── */
+
+  .data-table-scroll {
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .data-table th,
+  .data-table td {
+    border-color: rgba(255, 255, 255, 0.07);
+  }
+
+  .data-table-corner,
+  .data-table-route-hdr,
+  .data-table-stop-hdr {
+    background: #0d0d0d;
+  }
+
+  .data-table-route-hdr { color: #ccc; }
+  .data-table-stop-label { color: #999; }
+
+  .data-table-rm { color: #555; }
+  .data-table-rm:hover { color: #ff6680; }
+
+  .data-table-rm-cell { background: #0a0a0a; }
+  .data-table-route-id {
+    color: #6aa3f0;
+    background: #0d0d0d;
+  }
+
+  .data-table-cell:hover { background: rgba(255, 255, 255, 0.04); }
+  .data-table-cell--hit {
+    color: #6aa3f0;
+    background: rgba(77, 142, 230, 0.1);
+  }
+  .data-table-cell--forced-on {
+    color: #4ccc6c;
+    background: rgba(76, 204, 108, 0.1);
+  }
+  .data-table-cell--forced-off {
+    color: #ff6666;
+    background: rgba(255, 102, 102, 0.08);
+  }
+
+  .data-table-toolbar {
+    border-bottom-color: rgba(255, 255, 255, 0.06);
+  }
+  .data-table-actions {
+    border-top-color: rgba(255, 255, 255, 0.06);
+  }
+
+  .data-table-stop-label[contenteditable]:hover { background: rgba(77, 142, 230, 0.1); }
+  .data-table-stop-label[contenteditable]:focus { background: rgba(77, 142, 230, 0.15); }
+
+  .data-table-route-name-input {
+    color: #6aa3f0;
+  }
+  .data-table-route-name-input:hover { background: rgba(77, 142, 230, 0.08); }
+  .data-table-route-name-input:focus { outline-color: #4d8ee6; background: #111; }
+
+  .data-table-add-btn {
+    border-color: rgba(77, 142, 230, 0.35);
+    background: rgba(77, 142, 230, 0.05);
+    color: #6aa3f0;
+  }
+  .data-table-add-btn:hover {
+    background: #4d8ee6;
+    border-color: #4d8ee6;
+    color: #fff;
+  }
+
+  .route-selector-dropdown {
+    background: #111;
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  }
+}
