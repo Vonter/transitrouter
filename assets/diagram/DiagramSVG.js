@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import bmtcSvgUrl from 'url:../images/bmtc.svg';
 import ksrtcSvgUrl from 'url:../images/ksrtc.svg';
 import railwaysSvgUrl from 'url:../images/railways.svg';
+import metroStationSvgPath from '../images/metro-station.svg';
 import {
   getStopName,
   groupRoutesByForwardStops,
@@ -399,10 +400,28 @@ function captureMapAsDataUri(lng, lat, w, h) {
 
     const timer = setTimeout(() => finish(null), 8000);
 
-    map.once('load', () => {
+    map.once('load', async () => {
+      try {
+        await new Promise((resolve, reject) => {
+          const dpr = window.devicePixelRatio || 1;
+          const img = new Image();
+          img.onload = () => {
+            map.addImage('metro-station', img, { pixelRatio: 2 * dpr });
+            resolve();
+          };
+          img.onerror = reject;
+          img.width = 30 * dpr;
+          img.height = 30 * dpr;
+          img.src = metroStationSvgPath;
+        });
+      } catch {
+        /* skip if image fails */
+      }
+
       const style = map.getStyle();
       for (const layer of style.layers) {
-        const isLabel = layer.type === 'symbol';
+        const isLabel =
+          layer.type === 'symbol' && layer.id !== 'poi_subway_entrance';
         const isBuilding =
           layer['source-layer'] === 'building' || layer.id.includes('building');
         const isLanduse =

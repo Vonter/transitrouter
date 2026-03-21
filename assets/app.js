@@ -66,6 +66,7 @@ import lrtStationImagePath from './images/lrt-station.png';
 import passingRoutesBlueImagePath from './images/passing-routes-blue.svg';
 import iconSVGPath from '../icons/icon.svg';
 import busTinyImagePath from './images/bus-tiny-map.png';
+import metroStationSvgPath from './images/metro-station.svg';
 
 const city = getCurrentCity();
 const dataPath = `/data/${city}`;
@@ -2519,6 +2520,18 @@ const App = () => {
       map
         .loadImage(lrtStationImagePath)
         .then((img) => map.addImage('lrt-station', img.data)),
+      new Promise((resolve, reject) => {
+        const dpr = window.devicePixelRatio || 1;
+        const img = new Image();
+        img.onload = () => {
+          map.addImage('metro-station', img, { pixelRatio: 2 * dpr });
+          resolve();
+        };
+        img.onerror = reject;
+        img.width = 30 * dpr;
+        img.height = 30 * dpr;
+        img.src = metroStationSvgPath;
+      }),
     ]).catch((e) => {
       console.error('Failed to load map images:', e);
     });

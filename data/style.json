@@ -898,6 +898,19 @@
       }
     },
     {
+      "id": "poi_subway_entrance",
+      "type": "symbol",
+      "source": "openmaptiles",
+      "source-layer": "poi",
+      "minzoom": 16,
+      "filter": ["==", ["get", "subclass"], "subway_entrance"],
+      "layout": {
+        "icon-image": "metro-station",
+        "icon-size": 1,
+        "icon-allow-overlap": true
+      }
+    },
+    {
       "id": "waterway_line_label",
       "type": "symbol",
       "source": "openmaptiles",
