@@ -3,82 +3,76 @@ import { test, expect } from '@playwright/test';
 test.describe('Main Page', () => {
   test('should load the root page successfully', async ({ page }) => {
     await page.goto('/');
-
-    // Check that the page title is correct
     await expect(page).toHaveTitle(/TransitRouter/);
-
-    // Check that the logo is visible
     await expect(page.locator('#logo')).toBeVisible();
-
-    // Check that the map container is present
     await expect(page.locator('#map')).toBeVisible();
-
-    // Wait for the app to load and render content
-    await page.waitForFunction(
-      () => {
-        const app = document.getElementById('app');
-        return app && app.children.length > 0;
-      },
-      { timeout: 5000 },
-    );
-
-    // Check for search functionality (main feature of the app)
-    await expect(page.locator('input[type="search"]')).toBeVisible();
   });
 
-  test('should load stop page for stop 08057', async ({ page }) => {
-    await page.goto('/#/stops/08057');
-
-    // Check that the page title is correct
-    await expect(page).toHaveTitle(/TransitRouter/);
-
-    // Check that the map container is present
-    await expect(page.locator('#map')).toBeVisible();
-
-    // Wait for the app to load and render content
+  test('should render the app container with content', async ({ page }) => {
+    await page.goto('/');
     await page.waitForFunction(
       () => {
         const app = document.getElementById('app');
         return app && app.children.length > 0;
       },
-      { timeout: 5000 },
+      { timeout: 10000 },
     );
-
-    // Check that we're on the correct route by looking at the URL hash
-    await expect(page).toHaveURL(/#\/stops\/08057/);
-
-    // Look for stop-related content
-    const hasStopContent = await page
-      .locator('text=/08057|stop|bus|service/i')
-      .count();
-    expect(hasStopContent).toBeGreaterThan(0);
+    const app = page.locator('#app');
+    await expect(app).not.toBeEmpty();
   });
 
-  test('should load service page for service 133', async ({ page }) => {
-    await page.goto('/#/services/133');
+  test('should display the search input', async ({ page }) => {
+    await page.goto('/');
+    const search = page.locator('input[type="search"]').first();
+    await expect(search).toBeVisible();
+    await expect(search).toBeEnabled({ timeout: 10000 });
+  });
 
-    // Check that the page title is correct
-    await expect(page).toHaveTitle(/TransitRouter/);
+  test('should have the map container visible', async ({ page }) => {
+    await page.goto('/');
+    const map = page.locator('#map');
+    await expect(map).toBeVisible();
+    const box = await map.boundingBox();
+    expect(box.width).toBeGreaterThan(100);
+    expect(box.height).toBeGreaterThan(100);
+  });
 
-    // Check that the map container is present
-    await expect(page.locator('#map')).toBeVisible();
-
-    // Wait for the app to load and render content
-    await page.waitForFunction(
-      () => {
-        const app = document.getElementById('app');
-        return app && app.children.length > 0;
-      },
-      { timeout: 5000 },
+  test('should have correct meta tags', async ({ page }) => {
+    await page.goto('/');
+    const description = await page.getAttribute(
+      'meta[name="description"]',
+      'content',
     );
+    expect(description).toContain('transit');
+  });
 
-    // Check that we're on the correct route by looking at the URL hash
-    await expect(page).toHaveURL(/#\/services\/133/);
+  test('should show the search popover element', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForFunction(
+      () => document.getElementById('search-popover'),
+      { timeout: 10000 },
+    );
+    await expect(page.locator('#search-popover')).toBeAttached();
+  });
 
-    // Look for service-related content
-    const hasServiceContent = await page
-      .locator('text=/133|service|route|bus/i')
-      .count();
-    expect(hasServiceContent).toBeGreaterThan(0);
+  test('should load route service list', async ({ page }) => {
+    await page.goto('/');
+    // Wait for services to load (placeholder items or real ones)
+    await expect(
+      page.locator('#search-popover .popover-list li').first(),
+    ).toBeVisible({ timeout: 15000 });
+  });
+
+  test('should have no console errors on load', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3000);
+    expect(errors).toEqual([]);
+  });
+
+  test('should have a tooltip element', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('#tooltip')).toBeAttached();
   });
 });

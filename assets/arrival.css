@@ -836,3 +836,199 @@ footer {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   Dark mode — AMOLED-optimised
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+html.dark {
+  color-scheme: dark;
+
+  body {
+    background-color: #000;
+    color: #e0e0e0;
+  }
+
+  main {
+    background-color: #0a0a0a;
+    box-shadow: 0 0 100px rgba(0, 0, 0, 0.5);
+  }
+
+  h1 {
+    color: #f0f0f0;
+    background-color: rgba(10, 10, 10, 0.95);
+  }
+  @supports (backdrop-filter: blur(4px)) {
+    h1 {
+      background-color: rgba(10, 10, 10, 0.85);
+    }
+  }
+
+  table thead * {
+    color: #888;
+  }
+  table tbody th small {
+    color: #888;
+  }
+  table tbody tr:nth-child(4n),
+  table tbody tr:nth-child(4n-1) {
+    background-color: #0d0d0d;
+  }
+  table tbody tr.pin {
+    background-color: #1a1500;
+  }
+  table tbody tr.pin th {
+    color: #f0a020;
+  }
+  @media (hover: hover) {
+    table tbody tr:has(th:not([colspan])):hover th {
+      color: #f0a020;
+    }
+  }
+
+  .legend {
+    background-color: rgba(15, 15, 15, 0.85);
+  }
+  .legend .loads span {
+    background-color: #111;
+  }
+
+  footer {
+    background-color: #000;
+    color: #ccc;
+  }
+
+  .stop-tag {
+    background-color: rgba(240, 27, 72, 0.2);
+    color: #ff4d6d;
+  }
+  .stop-tag.online:after,
+  .stop-tag.loading:after,
+  .stop-tag.static:after,
+  .stop-tag.error:after {
+    border-color: #0a0a0a;
+  }
+
+  .load-sea,
+  .time-sea {
+    color: #4ccc4c;
+  }
+  .time-sea {
+    border-bottom-color: transparent;
+  }
+  .load-sda,
+  .time-sda {
+    color: #ff7744;
+  }
+  .time-sda {
+    border-bottom-color: #ff7744;
+  }
+  .load-lsd,
+  .time-lsd {
+    color: #ff5555;
+  }
+  .time-lsd {
+    border-bottom-color: #ff5555;
+  }
+
+  .destination {
+    background-color: #0d1a0a;
+    color: #66cc66;
+  }
+
+  .bus-lane-cell::before {
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .bus-lane + .bus-lane {
+    border-top-color: rgba(255, 255, 255, 0.05);
+  }
+
+  .visit-number {
+    color: rgba(255, 255, 255, 0.5);
+    background-color: rgba(10, 10, 10, 0.8);
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+
+  .more-indicator {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #999;
+  }
+  .more-indicator:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .debug {
+    background: #111;
+  }
+
+  .dest-filter {
+    border-color: rgba(255, 255, 255, 0.2);
+    background-color: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+  }
+  .dest-filter:focus {
+    border-color: #4da3ff;
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+  .dest-filter-icon {
+    color: #999;
+  }
+  .dest-filter-clear {
+    background: rgba(255, 255, 255, 0.15);
+    color: #ccc;
+  }
+
+  .bookmark-btn {
+    color: #999;
+  }
+  .bookmark-btn:hover {
+    color: #4da3ff;
+  }
+  .bookmark-btn.installed {
+    color: #e0e0e0;
+  }
+
+  .install-sheet {
+    background: #111;
+    box-shadow: 0 -2px 20px rgba(0, 0, 0, 0.5);
+  }
+  .install-sheet-title {
+    color: #f0f0f0;
+  }
+  .install-browser-tab {
+    border-color: rgba(255, 255, 255, 0.15);
+    color: #ccc;
+  }
+  .install-browser-tab.active {
+    background: #4da3ff;
+    color: #000;
+    border-color: #4da3ff;
+  }
+  .install-sheet-steps {
+    color: #ccc;
+  }
+  .install-sheet-close {
+    background: #4da3ff;
+    color: #000;
+  }
+
+  .stop-match-header th {
+    color: #ccc;
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+  .no-eta-section-header th {
+    color: #777;
+    border-top-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .live-data-loading {
+    border-color: #e0e0e0;
+    border-top-color: transparent;
+  }
+
+  @media (min-width: 720px) {
+    body {
+      background-color: #000;
+    }
+  }
+}

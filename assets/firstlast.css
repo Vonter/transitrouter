@@ -278,3 +278,110 @@ blink {
     opacity: 1;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   Dark mode — AMOLED-optimised
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+html.dark {
+  color-scheme: dark;
+
+  body {
+    background-color: #000;
+    color: #e0e0e0;
+  }
+
+  h1 b {
+    color: #f0f0f0;
+  }
+
+  .stop-tag {
+    background-color: rgba(240, 27, 72, 0.2);
+    color: #ff4d6d;
+  }
+
+  .legend {
+    color: #999;
+  }
+  .legend .abbr {
+    color: #888;
+    border-color: #555;
+    background-color: #111;
+  }
+
+  table thead tr > * {
+    background-color: rgba(0, 0, 0, 0.9);
+    border-bottom-color: #333;
+  }
+  table thead th {
+    color: #888;
+  }
+
+  table tbody {
+    background-color: #0a0a0a;
+  }
+  table tbody > tr:first-child > td[rowspan],
+  table tbody > tr:last-child > * {
+    border-bottom-color: #333;
+  }
+  table tbody th abbr {
+    color: #777;
+  }
+  table tbody tr:nth-child(2) > * {
+    border-top-color: #1a1a1a;
+    border-bottom-color: #1a1a1a;
+  }
+
+  table td[title='-'] {
+    color: rgba(255, 255, 255, 0.2);
+  }
+
+  .time-ranger {
+    background-color: #333;
+  }
+  .time-ranger.nada {
+    background-color: #1a1a1a;
+  }
+  .time-ranger .bar {
+    background-color: #4da3ff;
+  }
+  .time-duration {
+    color: #4da3ff;
+  }
+
+  .timerange-indicator > span {
+    background-color: #4da3ff;
+    color: #000;
+  }
+
+  tfoot td {
+    color: #777;
+  }
+  tfoot a {
+    color: #777;
+  }
+
+  .placeholder {
+    color: #555;
+  }
+
+  .time-cell {
+    background: linear-gradient(
+      to right,
+      transparent,
+      transparent 24.8%,
+      #1a1a1a 24.9%,
+      #1a1a1a 25.1%,
+      transparent 25.2%,
+      transparent 49.8%,
+      #222 49.9%,
+      #222 50.1%,
+      transparent 50.2%,
+      transparent 74.8%,
+      #1a1a1a 74.9%,
+      #1a1a1a 75.1%,
+      transparent 75.2%,
+      transparent
+    );
+  }
+}
