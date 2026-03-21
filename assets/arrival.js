@@ -392,7 +392,7 @@ const fetchLiveStopRoutes = async (stationId, signal) => {
       return null;
     }
     const result = await response.json();
-    return result.services?.length > 0 ? result.services : null;
+    return result.services ?? [];
   } catch (error) {
     if (error.name !== 'AbortError') {
       console.error(`Stop routes API error for ${city}:`, error);
@@ -1174,7 +1174,17 @@ function ArrivalTimes() {
 
     Promise.race([stopRoutesPromise, timeoutPromise])
       .then((liveServices) => {
-        if (liveServices?.length > 0) {
+        if (liveServices === null) {
+          console.log('Live API returned no data');
+          setFetchServicesError(true);
+          fetchScheduleFallback(id);
+        } else if (liveServices.length === 0) {
+          setFetchServicesStatus('online');
+          setFetchServicesError(false);
+          setServices([]);
+          isFirstFetchRef.current = false;
+          scheduleRetry(id);
+        } else {
           const filtered = liveServices
             .map(filterStaleArrivalsFromService)
             .filter((s) => s.next || (s.arrivals && s.arrivals.length > 0));
@@ -1190,10 +1200,6 @@ function ArrivalTimes() {
               if (enriched) setServices(enriched);
             })
             .catch(() => {});
-        } else {
-          console.log('Live API returned no data');
-          setFetchServicesError(false);
-          fetchScheduleFallback(id);
         }
       })
       .catch((error) => {
@@ -1213,28 +1219,35 @@ function ArrivalTimes() {
         // Continue waiting for stop routes API in background
         stopRoutesPromise
           .then((liveServices) => {
-            if (liveServices?.length > 0) {
-              console.log(
-                'Stop routes response received, updating with live data',
-              );
-              const filtered = liveServices
-                .map(filterStaleArrivalsFromService)
-                .filter(
-                  (s) => s.next || (s.arrivals && s.arrivals.length > 0),
-                );
+            if (liveServices === null) return;
+            if (liveServices.length === 0) {
               setFetchServicesStatus('online');
               setFetchServicesError(false);
-              setServices(filtered);
+              setServices([]);
               isFirstFetchRef.current = false;
               scheduleRetry(id);
-
-              // Phase 2 for the background result
-              fetchAndMergeVehicles(filtered, signal)
-                .then((enriched) => {
-                  if (enriched) setServices(enriched);
-                })
-                .catch(() => {});
+              return;
             }
+            console.log(
+              'Stop routes response received, updating with live data',
+            );
+            const filtered = liveServices
+              .map(filterStaleArrivalsFromService)
+              .filter(
+                (s) => s.next || (s.arrivals && s.arrivals.length > 0),
+              );
+            setFetchServicesStatus('online');
+            setFetchServicesError(false);
+            setServices(filtered);
+            isFirstFetchRef.current = false;
+            scheduleRetry(id);
+
+            // Phase 2 for the background result
+            fetchAndMergeVehicles(filtered, signal)
+              .then((enriched) => {
+                if (enriched) setServices(enriched);
+              })
+              .catch(() => {});
           })
           .catch(() => {});
       });
@@ -2240,7 +2253,7 @@ function ArrivalTimes() {
             ) : (
               <tbody>
                 <tr>
-                  <td class="blank">No upcoming arrivals.</td>
+                  <td class="blank">No buses arriving soon.</td>
                 </tr>
               </tbody>
             );
