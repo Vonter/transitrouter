@@ -2123,15 +2123,7 @@ function ArrivalTimes() {
         </div>
       )}
       <table>
-        {services && !cityConfig?.liveArrivals?.enabled ? (
-          <tbody>
-            <tr>
-              <td class="blank">
-                Live arrival data is not available for this city.
-              </td>
-            </tr>
-          </tbody>
-        ) : services ? (
+        {services ? (
           (() => {
             const renderGroupRow = (group) => {
               const { no, destination, buses } = group;
