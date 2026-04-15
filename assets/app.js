@@ -879,7 +879,7 @@ const App = () => {
     target.classList.add('highlight');
     highlightRoute(null, service, true);
     // Navigate to the service route with city prefix
-    navigateTo(`/services/${service}`, route);
+    navigateTo(`/services/${encodeURIComponent(service)}`, route);
   };
 
   const highlightRoute = (e, service, zoomIn) => {
@@ -1560,7 +1560,7 @@ const App = () => {
                 serviceName: name,
               },
             ],
-            url: `${route.cityPrefix}/services/${service}`,
+            url: `${route.cityPrefix}/services/${encodeURIComponent(service)}`,
           });
 
           setShowServicePopover(true);
@@ -1645,7 +1645,7 @@ const App = () => {
             .join(', ');
           setHead({
             title: ['service.titleMultiple', { serviceNumbersNames }],
-            url: `${route.cityPrefix}/services/${services.join('~')}`,
+            url: `${route.cityPrefix}/services/${services.map((s) => encodeURIComponent(s)).join('~')}`,
           });
 
           let routeStops = [];
@@ -3583,7 +3583,7 @@ const App = () => {
       map.on('click', 'routes-path', (e) => {
         if (e.features.length) {
           const { id } = e.features[0];
-          navigateTo(`/services/${decode(id)}`, route);
+          navigateTo(`/services/${encodeURIComponent(decode(id))}`, route);
         }
       });
       // RAF-throttled mousemove for smooth route highlighting
@@ -4054,7 +4054,7 @@ const App = () => {
                     {routeServices.sort(sortServices).map((service) => (
                       <>
                         <a
-                          href={`#${route.cityPrefix}/services/${service}`}
+                          href={`#${route.cityPrefix}/services/${encodeURIComponent(service)}`}
                           onClick={(e) => clickRoute(e, service)}
                           onMouseEnter={(e) => highlightRoute(e, service)}
                           onMouseLeave={unhighlightRoute}
@@ -4071,9 +4071,7 @@ const App = () => {
                               const newRouteServices = routeServices.filter(
                                 (s) => s !== service,
                               );
-                              location.hash = `${route.cityPrefix}/services/${newRouteServices.join(
-                                '~',
-                              )}`;
+                              location.hash = `${route.cityPrefix}/services/${newRouteServices.map((s) => encodeURIComponent(s)).join('~')}`;
                               unhighlightRoute();
                             }}
                           >
@@ -4178,6 +4176,7 @@ const App = () => {
                         route.value
                       ].services
                         .sort(sortServices)
+                        .map((s) => encodeURIComponent(s))
                         .join('~')}`}
                     >
                       {t('glossary.multiRouteMode')} ⊕
@@ -4187,7 +4186,7 @@ const App = () => {
                     .sort(sortServices)
                     .map((service) => (
                       <a
-                        href={`#${route.cityPrefix}/services/${service}`}
+                        href={`#${route.cityPrefix}/services/${encodeURIComponent(service)}`}
                         onClick={(e) => clickRoute(e, service)}
                         onMouseEnter={(e) => highlightRoute(e, service)}
                         onMouseLeave={unhighlightRoute}
@@ -4269,7 +4268,7 @@ const App = () => {
                     return (
                       <li key={s.number}>
                         <a
-                          href={`#${route.cityPrefix}/services/${s.number}`}
+                          href={`#${route.cityPrefix}/services/${encodeURIComponent(s.number)}`}
                           class={checked ? 'current' : ''}
                           onMouseEnter={() => previewRoute(s.number)}
                           onMouseLeave={unpreviewRoute}
@@ -4296,7 +4295,7 @@ const App = () => {
                               setTimeout(() => {
                                 if (newServices.length) {
                                   navigateTo(
-                                    `/services/${newServices.join('~')}`,
+                                    `/services/${newServices.map((s) => encodeURIComponent(s)).join('~')}`,
                                     route,
                                   );
                                 } else {
