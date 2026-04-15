@@ -8,7 +8,9 @@ export const AVAILABLE_CITIES = [
   'pune',
   'telangana',
   'andhrapradesh',
+  'ahmedabad',
   'indore',
+  'rajkot',
   'railways',
   'greyhound',
   'nyc',
@@ -114,6 +116,23 @@ export const CITY_CONFIGS = {
         upperLong: 74.05,
       },
     },
+    liveArrivals: {
+      enabled: true,
+      apiPath: '/api/pmpml/arrivals',
+    },
+    liveVehicles: {
+      enabled: true,
+      apiPath: '/api/pmpml/vehicles',
+    },
+    stopRoutes: {
+      enabled: true,
+      apiPath: '/api/pmpml/stop-routes',
+    },
+    stopVehicles: {
+      enabled: true,
+      apiPath: '/api/pmpml/stop-vehicles',
+    },
+    maxArrivalTime: 2 * 60 * 60 * 1000, // 2 hours in milliseconds
   },
   telangana: {
     city: {
@@ -141,6 +160,19 @@ export const CITY_CONFIGS = {
       },
     },
   },
+  ahmedabad: {
+    city: {
+      name: 'Ahmedabad',
+      code: 'ahmedabad',
+      flag: '🇮🇳',
+      bounds: {
+        lowerLat: 22.82,
+        upperLat: 23.25,
+        lowerLong: 72.28,
+        upperLong: 72.83,
+      },
+    },
+  },
   indore: {
     city: {
       name: 'Indore',
@@ -151,6 +183,19 @@ export const CITY_CONFIGS = {
         upperLat: 22.9,
         lowerLong: 75.6,
         upperLong: 76.1,
+      },
+    },
+  },
+  rajkot: {
+    city: {
+      name: 'Rajkot',
+      code: 'rajkot',
+      flag: '🇮🇳',
+      bounds: {
+        lowerLat: 22.11,
+        upperLat: 22.44,
+        lowerLong: 70.65,
+        upperLong: 70.96,
       },
     },
   },
