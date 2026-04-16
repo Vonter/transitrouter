@@ -21,7 +21,7 @@ test.describe('Theme / Dark Mode', () => {
 
   test('should persist dark mode across pages', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('theme', 'dark'));
-    for (const url of ['/', '/arrival/#08057', '/first-last/']) {
+    for (const url of ['/', '/arrival/#08057', '/beta/timetable/']) {
       await page.goto(url);
       const isDark = await page.evaluate(() =>
         document.documentElement.classList.contains('dark'),

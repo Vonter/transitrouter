@@ -1,6 +1,5 @@
 import { h } from 'preact';
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { getCurrentCity } from '../config';
 import getRoute from '../utils/getRoute';
 
 import {
@@ -22,6 +21,22 @@ import { getCurrentThemeValues, patchTheme, resetTheme } from './theme';
 function readIntParam(name, min, max, fallback) {
   const v = parseInt(new URLSearchParams(location.search).get(name), 10);
   return !isNaN(v) && v >= min && v <= max ? v : fallback;
+}
+
+function getStopIdFromUrl() {
+  const route = getRoute();
+  const hashPath = (route.path || '').replace(/^\/+|\/+$/g, '');
+  if (!hashPath) return '';
+
+  // Supports both "#/city/stopId" and "#/stopId".
+  const hashParts = hashPath.split('/').filter(Boolean);
+  if (hashParts.length > 1) {
+    return hashParts[hashParts.length - 1];
+  }
+
+  // Also support route-like patterns if provided.
+  if (route.value) return String(route.value);
+  return hashParts[0] || '';
 }
 
 function syncUrlParams(routes, stops, expert) {
@@ -1005,7 +1020,7 @@ export default function BusDiagram() {
   // ── Load city data ───────────────────────────────────────────────────────────
 
   useEffect(() => {
-    const currentCity = getCurrentCity();
+    const currentCity = getRoute().city;
     setCity(currentCity);
     loadCityData(currentCity)
       .then(setCityData)
@@ -1025,12 +1040,7 @@ export default function BusDiagram() {
       setError(null);
       setDiagramData(null);
 
-      let resolvedStopId = location.hash.slice(1);
-      const route = getRoute();
-      if (route.path && route.path !== '/') {
-        resolvedStopId = route.path.replace(/^\/[a-z]+\//i, '');
-      }
-      resolvedStopId = resolvedStopId.replace(/^\/+|\/+$/g, '');
+      const resolvedStopId = getStopIdFromUrl();
 
       if (!resolvedStopId) {
         setShowMapPicker(true);
@@ -1231,7 +1241,7 @@ export default function BusDiagram() {
 
   const handleStopSelect = (selectedStopId) => {
     setShowStopSelector(false);
-    window.location.hash = `#${selectedStopId}`;
+    window.location.hash = `#/${city}/${selectedStopId}`;
   };
 
   const handleExportSvg = () => {

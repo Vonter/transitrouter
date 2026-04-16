@@ -26,8 +26,8 @@ const headers = [
     ],
   },
   {
-    path: '/beta/first-last/',
-    files: [/^firstlast\..+js$/, /^firstlast\..+css$/],
+    path: '/beta/timetable/',
+    files: [/^timetable\..+js$/, /^timetable\..+css$/],
   },
   {
     path: '/diagram/',

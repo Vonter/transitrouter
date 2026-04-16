@@ -7,10 +7,10 @@
   "scripts": {
     "gtfs": "python data/process.py",
     "data": "cpy data/* dist && cpy beta/visualization/data/* dist && rm -Rf dist/data/*/*.zip dist/data/*/schedule",
-    "build": "pnpm run data && parcel build index.html arrival/index.html beta/first-last/index.html diagram/index.html beta/visualization/index.html --no-cache --no-scope-hoist",
+    "build": "pnpm run data && parcel build index.html arrival/index.html beta/timetable/index.html diagram/index.html beta/visualization/index.html --no-cache --no-scope-hoist",
     "postbuild": "cpy favicon.ico dist && cpy well-known/* dist/.well-known && cpy functions/* dist && node tasks/generateHeaders",
-    "start": "parcel serve index.html arrival/index.html beta/first-last/index.html diagram/index.html beta/visualization/index.html -p 8888",
-    "dev": "pnpm run build && concurrently --kill-others \"parcel watch index.html arrival/index.html beta/first-last/index.html diagram/index.html beta/visualization/index.html --no-hmr\" \"wrangler pages dev dist --live-reload --ip 0.0.0.0\"",
+    "start": "parcel serve index.html arrival/index.html beta/timetable/index.html diagram/index.html beta/visualization/index.html -p 8888",
+    "dev": "pnpm run build && concurrently --kill-others \"parcel watch index.html arrival/index.html beta/timetable/index.html diagram/index.html beta/visualization/index.html --no-hmr\" \"wrangler pages dev dist --live-reload --ip 0.0.0.0\"",
     "prod": "npx serve dist/",
     "test:e2e": "playwright test"
   },
@@ -26,7 +26,6 @@
     "fuse.js": "~7.1.0",
     "i18next": "~25.2.1",
     "i18next-browser-languagedetector": "~8.2.0",
-    "just-intersect": "~4.3.0",
     "lscache": "~1.3.2",
     "maplibre-gl": "~5.6.2",
     "preact": "~10.26.9",

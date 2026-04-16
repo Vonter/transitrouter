@@ -1,5 +1,11 @@
 {
   "name": "transitrouter",
   "pages_build_output_dir": "dist",
-  "compatibility_date": "2026-03-21"
+  "compatibility_date": "2026-03-21",
+  "analytics_engine_datasets": [
+    {
+      "binding": "USAGE",
+      "dataset": "transitrouter"
+    }
+  ]
 }

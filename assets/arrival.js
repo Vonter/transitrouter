@@ -2,7 +2,7 @@ import './i18n';
 
 import { mapStyle, C, routeLineGradient } from './utils/theme';
 import { getCurrentCity } from './config';
-import { getConfigForCity, getApiUrl } from './city-config';
+import { getConfigForCity, getApiUrl, isApiDisabled } from './city-config';
 import { normalizeName } from './utils/normalizeNames';
 import {
   pointDistance,
@@ -358,6 +358,7 @@ const convertScheduleToArrival = (scheduleData) => {
 
 // API functions
 const fetchLiveArrivalData = async (stationId, signal) => {
+  if (isApiDisabled()) return null;
   try {
     const response = await fetch(
       `${getApiUrl(cityConfig?.liveArrivals?.apiPath)}?stationid=${stationId}`,
@@ -379,6 +380,7 @@ const fetchLiveArrivalData = async (stationId, signal) => {
 };
 
 const fetchLiveStopRoutes = async (stationId, signal) => {
+  if (isApiDisabled()) return null;
   const apiPath =
     cityConfig?.stopRoutes?.apiPath || cityConfig?.liveArrivals?.apiPath;
   if (!apiPath) return null;
@@ -402,6 +404,7 @@ const fetchLiveStopRoutes = async (stationId, signal) => {
 };
 
 const fetchAndMergeVehicles = async (services, signal) => {
+  if (isApiDisabled()) return null;
   const apiPath = cityConfig?.stopVehicles?.apiPath;
   if (!apiPath || !services?.length) return null;
 
@@ -445,6 +448,8 @@ const fetchAndMergeVehicles = async (services, signal) => {
         next: enrichTrip(service.next),
         next2: enrichTrip(service.next2),
         next3: enrichTrip(service.next3),
+        next4: enrichTrip(service.next4),
+        next5: enrichTrip(service.next5),
         ...(service.arrivals
           ? { arrivals: service.arrivals.map(enrichTrip) }
           : {}),
@@ -849,11 +854,13 @@ const extractVehicles = (services, pinnedServiceNumbers) => {
     const serviceNoStr = toServiceNoStr(service.no);
     if (!pinnedServiceNumbers.has(serviceNoStr)) return;
 
-    // Support both old format (next, next2, next3) and new format (arrivals array)
+    // Support both old format (next through next5) and new format (arrivals array)
     const trips = service.arrivals || [
       service.next,
       service.next2,
       service.next3,
+      service.next4,
+      service.next5,
     ];
     trips.forEach((trip) => {
       if (!trip) return;
@@ -1597,11 +1604,13 @@ function ArrivalTimes() {
 
     let vehicleLocation = null;
     for (const service of services) {
-      // Support both old format (next, next2, next3) and new format (arrivals array)
+      // Support both old format (next through next5) and new format (arrivals array)
       const trips = service.arrivals || [
         service.next,
         service.next2,
         service.next3,
+        service.next4,
+        service.next5,
       ];
       for (const trip of trips) {
         if (!trip?.location) continue;
@@ -1683,11 +1692,13 @@ function ArrivalTimes() {
     let maxDuration = 0;
 
     services.forEach((service) => {
-      // Support both old format (next, next2, next3) and new format (arrivals array)
+      // Support both old format (next through next5) and new format (arrivals array)
       const arrivals = service.arrivals || [
         service.next,
         service.next2,
         service.next3,
+        service.next4,
+        service.next5,
       ];
       const firstArrival = arrivals.find(Boolean);
       const key = `${service.no}-${service.destination || firstArrival?.destination_code || ''}`;
@@ -1724,7 +1735,11 @@ function ArrivalTimes() {
       return b.frequency - a.frequency;
     });
 
-    return { groupedServices: sorted, maxDuration_ms: maxDuration };
+    const minDuration = 5 * 60 * 1000; // 5 minutes floor
+    return {
+      groupedServices: sorted,
+      maxDuration_ms: Math.max(maxDuration, minDuration),
+    };
   }, [services, pinnedSet]);
 
   // Build a Fuse index over all downstream stop names for this stop.
