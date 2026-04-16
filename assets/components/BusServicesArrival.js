@@ -338,7 +338,7 @@ export default function BusServicesArrival({
         .map((service) => (
           <>
             <a
-              href={`#${route.cityPrefix}/services/${service}`}
+              href={`#${route.cityPrefix}/services/${encodeURIComponent(service)}`}
               class={`service-tag ${
                 route.page === 'service' && servicesValue.includes(service)
                   ? 'current'
@@ -373,7 +373,7 @@ export default function BusServicesArrival({
       {serviceList.map((service) => (
         <>
           <a
-            href={`#${route.cityPrefix}/services/${service}`}
+            href={`#${route.cityPrefix}/services/${encodeURIComponent(service)}`}
             class={`service-tag ${
               route.page === 'service' && servicesValue.includes(service)
                 ? 'current'
