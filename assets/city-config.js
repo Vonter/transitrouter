@@ -18,6 +18,7 @@ export const AVAILABLE_CITIES = [
   'goa',
   'kochi',
   'pune',
+  'mumbai',
   'telangana',
   'andhrapradesh',
   'ahmedabad',
@@ -145,6 +146,19 @@ export const CITY_CONFIGS = {
       apiPath: '/api/pmpml/stop-vehicles',
     },
     maxArrivalTime: 2 * 60 * 60 * 1000, // 2 hours in milliseconds
+  },
+  mumbai: {
+    city: {
+      name: 'Mumbai',
+      code: 'mumbai',
+      flag: '🇮🇳',
+      bounds: {
+        lowerLat: 18.90,
+        upperLat: 19.31,
+        lowerLong: 72.78,
+        upperLong: 73.16,
+      },
+    }
   },
   telangana: {
     city: {
