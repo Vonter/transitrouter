@@ -26,7 +26,7 @@
     "saturdays": "Saturdays",
     "sundaysPublicHolidaysShort": "SUN",
     "sundaysPublicHolidays": "Sunday & Public Holidays",
-    "service": "Service",
+    "service": "Route",
     "firstBus": "First Trip",
     "lastBus": "Last Trip"
   },
@@ -51,7 +51,7 @@
   "stop": {
     "title": "Stop {{stopNumber}}: {{stopName}} - $t(app.name)",
     "titleRoutes": "Routes passing stop {{stopNumber}}: {{stopName}} - $t(app.name)",
-    "firstLastBus": "First/last trip",
+    "firstLastBus": "Timetable",
     "diagramBus": "Stop route diagram",
     "multipleDirectionsWarning": "Some services serve multiple directions. Open \"Arrivals\" to see more details.",
     "liveBusTrack": "{{count}} trips now on track",
@@ -76,9 +76,14 @@
     "multipleVisitsLegend": "1st or 2nd visit. Stops here twice, going in different directions. Check destination before boarding.",
     "wheelchairDisclaimer": "<0/> All public transit in revenue service are <2>wheelchair-accessible</2>. The ones that are not accesssible will be marked with this icon <4/>"
   },
-  "firstLast": {
-    "title": "Approximate first & last trip arrival times for {{stopNumber}}: {{stopName}}",
+  "timetable": {
+    "title": "Timetable for {{stopNumber}}: {{stopName}}",
     "busStopCodeNotFound": "Stop code not found.",
-    "preHeading": "Approximate first & last trip arrival times"
+    "preHeading": "Timetable",
+    "tripsLabel": "trips",
+    "backToStop": "Back to stop",
+    "backToTrips": "Back to trips",
+    "loading": "Loading...",
+    "noSchedule": "No schedule data available"
   }
 }

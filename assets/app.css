@@ -239,6 +239,24 @@ a:active {
 #city-drawer-overlay.open #city-drawer {
   transform: translateX(0);
 }
+.drawer-handle {
+  display: none;
+}
+@media (max-width: 1199px) {
+  .drawer-handle {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 10px 0 2px;
+    flex-shrink: 0;
+  }
+  .drawer-handle span {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.18);
+  }
+}
 .drawer-intro {
   padding: 12px;
 }
@@ -321,6 +339,42 @@ a:active {
   font-weight: 500;
   color: #333;
 }
+.drawer-select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  background: #fff;
+  font-size: 0.9em;
+  color: #333;
+  cursor: pointer;
+  max-width: 55%;
+}
+.dev-toggle-track {
+  width: 44px; height: 24px;
+  border-radius: 12px; background: #ccc;
+  position: relative; cursor: pointer;
+  transition: background 0.25s; flex-shrink: 0;
+}
+.dev-toggle-track.active { background: #007aff; }
+.dev-toggle-thumb {
+  position: absolute; top: 2px; left: 2px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: #fff; transition: transform 0.25s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.dev-toggle-track.active .dev-toggle-thumb { transform: translateX(20px); }
+.drawer-dev-settings { padding: 0 0 4px; }
+.drawer-dev-item { padding-left: 28px; }
+.dev-buttons { margin-top: 4px; }
+.dev-buttons .popover-button { font-weight: normal; font-size: 0.8em; }
+.dev-journey-btn {
+  background: transparent;
+  color: #666;
+  border: 1.5px dashed #aaa;
+  box-shadow: none;
+}
+.dev-journey-btn:hover { border-color: #007aff; color: #007aff; }
+.footer-secondary-group { flex: none; width: calc(50% - 3.5px); min-width: 0; display: flex; gap: 7px; }
 
 .popover {
   position: fixed;
@@ -507,7 +561,8 @@ a:active {
 #service-popover .popover-scroll {
   padding-top: 0;
 }
-#stop-popover .popover-footer {
+#stop-popover .popover-footer,
+#service-popover .popover-footer {
   padding: 12px;
 }
 @supports (top: max(1px)) {
@@ -521,7 +576,8 @@ a:active {
     padding-right: max(12px, env(safe-area-inset-right));
     padding-bottom: max(12px, env(safe-area-inset-bottom));
   }
-  #stop-popover .popover-footer {
+  #stop-popover .popover-footer,
+  #service-popover .popover-footer {
     padding-left: max(12px, env(safe-area-inset-left));
     padding-right: max(12px, env(safe-area-inset-right));
     padding-bottom: max(12px, env(safe-area-inset-bottom));
@@ -1609,6 +1665,7 @@ a.service-tag:hover {
 
 .popover-buttons {
   display: flex;
+  gap: 7px;
 }
 .popover-button {
   cursor: pointer;
@@ -1621,16 +1678,12 @@ a.service-tag:hover {
   font-size: 14px;
   border-radius: 7px;
   text-decoration: none;
-  margin-left: 7px;
   flex: 1;
   font-weight: bold;
 }
 .popover-button.primary {
-  box-shadow: inset 0 0 0 2px #007aff, 0 1px 5px #007aff99;
+  box-shadow: inset 0 0 0 2px #007aff;
   background-color: #fff;
-}
-.popover-button:first-child {
-  margin-left: 0;
 }
 .popover-button:focus,
 .popover-button:hover {
@@ -1645,6 +1698,201 @@ a.service-tag:hover {
 }
 .popover-button * {
   pointer-events: none;
+}
+.popover-button.footer-arrivals {
+  flex: none;
+  width: calc(50% - 3.5px);
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px 9px;
+}
+.popover-button.footer-arrivals svg,
+.popover-button.footer-arrivals img {
+  display: block;
+}
+.popover-button.footer-secondary {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0;
+  min-width: 0;
+}
+.popover-button.footer-secondary img,
+.popover-button.footer-secondary svg {
+  display: block;
+}
+
+.footer-actions {
+  flex-wrap: nowrap;
+}
+.footer-actions .footer-arrivals {
+  flex: 1;
+  width: auto;
+}
+.footer-actions .footer-secondary {
+  flex: none;
+  width: 42px;
+  min-width: 42px;
+}
+
+/* Directions button in stop header */
+.stop-header-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.stop-header-row h1 {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.directions-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 0;
+  background-color: #007aff22;
+  color: #007aff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background-color 0.15s, transform 0.1s;
+}
+.directions-btn:hover {
+  background-color: #007aff44;
+}
+.directions-btn:active {
+  transform: scale(0.9);
+}
+
+/* Directions selection banner */
+.directions-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  padding: 8px 12px;
+  padding-top: calc(8px + env(safe-area-inset-top, 0px));
+  pointer-events: none;
+}
+.directions-banner-inner {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #007aff;
+  color: #fff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 14px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  animation: directions-banner-in 0.25s ease-out;
+}
+.directions-banner-inner svg {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+.directions-banner-inner span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.directions-banner-inner b {
+  font-weight: 600;
+}
+.directions-banner-close {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.directions-banner-close:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+@keyframes directions-banner-in {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Between popover header */
+.between-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.between-header-stops {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 1em;
+  font-weight: bold;
+  margin: 0 0 0.5em;
+}
+.between-stop-edit {
+  background: none;
+  border: 0;
+  border-bottom: 1.5px dashed #007aff88;
+  padding: 0 0 1px;
+  font: inherit;
+  font-weight: bold;
+  color: inherit;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color 0.15s;
+}
+.between-stop-edit:hover {
+  border-bottom-color: #007aff;
+}
+.between-stop-arrow {
+  color: #999;
+  font-weight: normal;
+  flex-shrink: 0;
+}
+.between-swap-btn {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 0;
+  background-color: #007aff22;
+  color: #007aff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background-color 0.15s, transform 0.15s;
+  margin-top: -2px;
+}
+.between-swap-btn:hover {
+  background-color: #007aff44;
+}
+.between-swap-btn:active {
+  transform: rotate(180deg) scale(0.9);
 }
 
 #tooltip {
@@ -2286,6 +2534,13 @@ input[type='checkbox']:checked:after {
     background: rgba(0, 0, 0, 0.18);
   }
 
+  /* Reclaim close-button padding on mobile */
+  #stop-popover header,
+  #between-popover header,
+  #service-popover header {
+    padding-right: 12px;
+  }
+
   /* Snap positions — override max-height on expanded popovers */
   #stop-popover.snap-full,
   #between-popover.snap-full,
@@ -2300,6 +2555,13 @@ input[type='checkbox']:checked:after {
     max-height: 50vh;
     transform: translateY(calc(-85px - var(--keyboard-height, 0px)));
     overflow: hidden;
+  }
+
+  /* Hide close button on mobile — dismiss via drag handle instead */
+  #stop-popover .popover-close,
+  #between-popover .popover-close,
+  #service-popover .popover-close {
+    display: none;
   }
 
   /* Disable transitions while actively dragging */
@@ -2453,10 +2715,10 @@ html.dark {
   }
   #logo svg circle {
     fill: #1a1a1a;
-    stroke: #4dd0db;
+    stroke: rgba(255, 255, 255, 0.15);
   }
   #logo svg path {
-    fill: #4dd0db;
+    fill: #b0b0b0;
   }
 
   /* ── About overlay ─────────────────────────────────────────────────────────── */
@@ -2488,6 +2750,9 @@ html.dark {
       background-color: rgba(10, 10, 10, 0.8);
     }
   }
+  .drawer-handle span {
+    background: rgba(255, 255, 255, 0.25);
+  }
   .drawer-intro h2 {
     color: #4dd0db;
   }
@@ -2513,6 +2778,15 @@ html.dark {
   .drawer-theme-label {
     color: #ccc;
   }
+  .drawer-select {
+    background: #1a1a1a;
+    color: #e0e0e0;
+    border-color: #444;
+  }
+  .dev-toggle-track { background: #555; }
+  .dev-toggle-track.active { background: #4da3ff; }
+  .dev-journey-btn { color: #999; border-color: #555; }
+  .dev-journey-btn:hover { border-color: #4da3ff; color: #4da3ff; }
 
   /* ── Popovers (search, stop, between, service, arrivals) ───────────────────── */
 
@@ -2573,7 +2847,8 @@ html.dark {
   }
 
   /* Footer — raised like header */
-  #stop-popover .popover-footer {
+  #stop-popover .popover-footer,
+  #service-popover .popover-footer {
     background-color: #151515;
     border-top: 1px solid rgba(255, 255, 255, 0.15);
   }
@@ -2658,6 +2933,33 @@ html.dark {
     background-color: #111;
   }
 
+  .directions-btn {
+    background-color: rgba(77, 163, 255, 0.15);
+    color: #4da3ff;
+  }
+  .directions-btn:hover {
+    background-color: rgba(77, 163, 255, 0.3);
+  }
+
+  .between-swap-btn {
+    background-color: rgba(77, 163, 255, 0.15);
+    color: #4da3ff;
+  }
+  .between-swap-btn:hover {
+    background-color: rgba(77, 163, 255, 0.3);
+  }
+
+  .between-stop-edit {
+    border-bottom-color: rgba(77, 163, 255, 0.5);
+    color: #f0f0f0;
+  }
+  .between-stop-edit:hover {
+    border-bottom-color: #4da3ff;
+  }
+  .between-stop-arrow {
+    color: #666;
+  }
+
   /* ── Between popover ───────────────────────────────────────────────────────── */
 
   #between-popover .between-nada {
@@ -2693,13 +2995,13 @@ html.dark {
     color: #ff4d6d;
   }
   .service-tag {
-    background-color: rgba(85, 221, 51, 0.15);
-    color: #66e848;
-    border-color: #222;
+    background-color: rgba(85, 221, 51, 0.1);
+    color: #5cc83e;
+    border-color: rgba(255, 255, 255, 0.08);
   }
   .service-tag span {
-    background-color: #111;
-    color: #999;
+    background-color: rgba(255, 255, 255, 0.06);
+    color: #888;
   }
   .service-tag span.close:hover {
     color: #ff4d6d;
@@ -2916,7 +3218,7 @@ html.dark {
   /* ── Plus button ───────────────────────────────────────────────────────────── */
 
   .plus {
-    border-color: #222;
+    border-color: rgba(255, 255, 255, 0.08);
     background-color: rgba(85, 221, 51, 0.15);
   }
   .plus:before,

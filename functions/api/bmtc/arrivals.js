@@ -184,6 +184,8 @@ async function convertBMTCToServices(data) {
     if (trips[0]) service.next = trips[0];
     if (trips[1]) service.next2 = trips[1];
     if (trips[2]) service.next3 = trips[2];
+    if (trips[3]) service.next4 = trips[3];
+    if (trips[4]) service.next5 = trips[4];
     return service;
   });
 }

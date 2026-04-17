@@ -1,4 +1,4 @@
-import { getApiUrl } from '../city-config.js';
+import { getApiUrl, isApiDisabled } from '../city-config.js';
 import { LIVE_DATA_MAX_AGE_MS } from './fetchArrivals.js';
 
 /**
@@ -24,7 +24,7 @@ export async function fetchVehicles(
   routeIdentifier,
   serviceTypeId = 0,
 ) {
-  if (!apiPath || !routeIdentifier) {
+  if (!apiPath || !routeIdentifier || isApiDisabled()) {
     return null;
   }
 

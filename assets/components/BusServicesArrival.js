@@ -12,7 +12,7 @@ import Fuse from 'fuse.js';
 import getRoute from '../utils/getRoute';
 import { setRafInterval, clearRafInterval } from '../utils/rafInterval';
 import { timeDisplay, sortServices } from '../utils/bus';
-import { getConfigForCity } from '../city-config';
+import { getConfigForCity, isDevMode } from '../city-config';
 import fetchCache from '../utils/fetchCache';
 import {
   filterStaleArrivalsFromService,
@@ -46,10 +46,14 @@ export default function BusServicesArrival({
   const [scheduleData, setScheduleData] = useState(null);
   const route = getRoute();
 
-  // Build a Fuse index over all downstream stop names for this stop.
-  // Rebuilt only when stop data or services list changes.
-  const destFuse = useMemo(() => {
-    if (!stopData?.destinationGroups) return null;
+  // When filter is active, group services by which downstream stop name fuzzy-matches.
+  // Each service may appear under multiple matching stop names.
+  // Returns null when no filter is active.
+  // The Fuse index is built lazily here — only when destFilter is non-empty — so
+  // opening a stop popover without typing a filter carries no indexing cost.
+  const matchingStopGroups = useMemo(() => {
+    if (!destFilter.trim() || !stopData?.destinationGroups) return null;
+
     const names = new Set();
     services.forEach((service) => {
       const serviceDestGroups = stopData.destinationGroups[service];
@@ -65,19 +69,14 @@ export default function BusServicesArrival({
         });
       });
     });
-    return new Fuse(Array.from(names), { threshold: 0.35 });
-  }, [services, stopData]);
-
-  // When filter is active, group services by which downstream stop name fuzzy-matches.
-  // Each service may appear under multiple matching stop names.
-  // Returns null when no filter is active.
-  const matchingStopGroups = useMemo(() => {
-    if (!destFilter.trim() || !stopData?.destinationGroups || !destFuse)
-      return null;
 
     const fuzzyMatches = destFilterExact
       ? new Set([destFilter.trim()])
-      : new Set(destFuse.search(destFilter).map((r) => r.item));
+      : new Set(
+          new Fuse(Array.from(names), { threshold: 0.35 })
+            .search(destFilter)
+            .map((r) => r.item),
+        );
     if (fuzzyMatches.size === 0) return [];
 
     const stopNameToServices = new Map();
@@ -117,7 +116,7 @@ export default function BusServicesArrival({
         services: Array.from(serviceSet).sort(sortServices),
       }))
       .sort((a, b) => b.services.length - a.services.length);
-  }, [services, destFilter, destFilterExact, stopData, destFuse]);
+  }, [services, destFilter, destFilterExact, stopData]);
 
   const controllerRef = useRef(null);
   const fetchServices = useCallback(async () => {
@@ -160,11 +159,13 @@ export default function BusServicesArrival({
           if (hasDuplicateServices) {
             servicesWithIssues.push(service.no);
           }
-          const { next, next2, next3 } = service;
+          const { next, next2, next3, next4, next5 } = service;
           const hasMultipleVisits =
             next?.visit_number > 1 ||
             next2?.visit_number > 1 ||
-            next3?.visit_number > 1;
+            next3?.visit_number > 1 ||
+            next4?.visit_number > 1 ||
+            next5?.visit_number > 1;
           if (hasMultipleVisits) {
             servicesWithIssues.push(service.no);
           }
@@ -207,7 +208,8 @@ export default function BusServicesArrival({
   useEffect(() => {
     let intervalID;
     if (active) {
-      intervalID = setRafInterval(fetchServices, 60 * 1000); // 60 seconds
+      const sec = isDevMode() ? Number(localStorage.getItem('refreshInterval') ?? 60) : 60;
+      if (sec > 0) intervalID = setRafInterval(fetchServices, sec * 1000);
     }
     return () => {
       clearRafInterval(intervalID);

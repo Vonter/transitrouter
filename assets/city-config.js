@@ -1,4 +1,16 @@
-export const DEFAULT_CITY = 'blr';
+export const FALLBACK_CITY = 'blr';
+
+const pref = (key) => localStorage.getItem(key);
+const storedDefaultCity = pref('defaultCity');
+export const DEFAULT_CITY =
+  storedDefaultCity && storedDefaultCity !== 'auto'
+    ? storedDefaultCity
+    : FALLBACK_CITY;
+
+export const isDevMode = () => pref('devMode') === 'true';
+export const isApiDisabled = () => isDevMode() && pref('disableApi') === 'true';
+export const isAlphaEnabled = () => isDevMode() && pref('alphaFeatures') === 'true';
+
 export const AVAILABLE_CITIES = [
   'blr',
   'chennai',
@@ -270,6 +282,7 @@ export const getApiBaseUrl = () => {
  */
 export const getApiUrl = (apiPath) => {
   if (!apiPath) return null;
+  if (isApiDisabled()) return null;
   return `${getApiBaseUrl()}${apiPath}`;
 };
 

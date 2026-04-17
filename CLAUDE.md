@@ -31,7 +31,7 @@ pnpm run data             # Prepare data files for dist/
 assets/              Main app source
   app.js             Main map application entry
   arrival.js         Live arrivals page entry
-  firstlast.js       First/last route entry
+  timetable.js       Timetable page entry
   city-config.js     Per-city config (bounds, APIs, feature flags)
   components/        Preact components (PascalCase)
   utils/             Utility modules (camelCase)
@@ -40,7 +40,7 @@ assets/              Main app source
     geometry.js      Polyline operations
     fetchArrivals.js Live arrival data + staleness filtering
 arrival/             Arrivals page HTML
-beta/                Beta features (first-last, visualization)
+beta/                Beta features (timetable, visualization)
 diagram/             Route diagram visualization
 data/                GTFS processing scripts (Python) + per-city JSON
 functions/           Cloudflare Functions (serverless API endpoints)
@@ -53,7 +53,7 @@ tasks/               Build tasks (header generation)
 
 - `index.html` — Main map app
 - `arrival/index.html` — Arrivals page
-- `beta/first-last/index.html` — First/last routes
+- `beta/timetable/index.html` — Timetable
 - `diagram/index.html` — Route diagrams
 - `beta/visualization/index.html` — 3D visualization
 

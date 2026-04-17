@@ -8,6 +8,8 @@
  *   routeMetrics('blr', '500C', 'main');
  */
 
+import { isApiDisabled } from '../city-config.js';
+
 const ENDPOINT = '/api/usage/metrics';
 
 // Debounce to avoid duplicate entries on rapid navigation
@@ -23,6 +25,7 @@ const DEBOUNCE_MS = 2000;
  */
 const metrics = async (type, city, id, page) => {
   if (!city || !id) return;
+  if (isApiDisabled()) return;
 
   // Debounce duplicate entries
   const key = `${type}:${city}:${id}:${page}`;

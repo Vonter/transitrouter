@@ -1,4 +1,4 @@
-import { getApiUrl } from '../city-config.js';
+import { getApiUrl, isApiDisabled } from '../city-config.js';
 
 /** Max age for live arrival/vehicle data (15 minutes). Items with lastRefreshMs older than this are considered stale. */
 export const LIVE_DATA_MAX_AGE_MS = 15 * 60 * 1000;
@@ -23,12 +23,14 @@ export function filterStaleArrivalsFromService(service) {
   if (!service) return service;
   const list = service.arrivals
     ? [...service.arrivals]
-    : [service.next, service.next2, service.next3].filter(Boolean);
+    : [service.next, service.next2, service.next3, service.next4, service.next5].filter(Boolean);
   const fresh = list.filter((trip) => !isArrivalStale(trip));
   const result = { ...service };
   result.next = fresh[0] ?? null;
   result.next2 = fresh[1] ?? null;
   result.next3 = fresh[2] ?? null;
+  result.next4 = fresh[3] ?? null;
+  result.next5 = fresh[4] ?? null;
   if (service.arrivals) result.arrivals = fresh;
   return result;
 }
@@ -40,7 +42,7 @@ export function filterStaleArrivalsFromService(service) {
  * @returns {Promise} Promise resolving to arrival data
  */
 export async function fetchArrivals(apiPath, stationId) {
-  if (!apiPath || !stationId) {
+  if (!apiPath || !stationId || isApiDisabled()) {
     return null;
   }
 
@@ -113,10 +115,12 @@ export function groupArrivalsByService(arrivalsData) {
       };
     }
 
-    // Add all available arrivals (next, next2, next3)
+    // Add all available arrivals (next through next5)
     if (service.next) grouped[service.no].arrivals.push(service.next);
     if (service.next2) grouped[service.no].arrivals.push(service.next2);
     if (service.next3) grouped[service.no].arrivals.push(service.next3);
+    if (service.next4) grouped[service.no].arrivals.push(service.next4);
+    if (service.next5) grouped[service.no].arrivals.push(service.next5);
   });
 
   return grouped;
@@ -152,7 +156,7 @@ export function formatArrivalTime(durationMs) {
  * @returns {Promise<{services: Array, servicesArrivals: Object}|null>}
  */
 export async function fetchStopRoutes(apiPath, stationId, signal) {
-  if (!apiPath || !stationId) return null;
+  if (!apiPath || !stationId || isApiDisabled()) return null;
 
   try {
     const url = `${getApiUrl(apiPath)}?stationid=${stationId}`;
@@ -201,7 +205,7 @@ export async function fetchStopVehicles(
   serviceNumbers,
   signal,
 ) {
-  if (!vehiclesApiPath || !serviceNumbers?.length) return [];
+  if (!vehiclesApiPath || !serviceNumbers?.length || isApiDisabled()) return [];
 
   try {
     const routes = serviceNumbers.map(encodeURIComponent).join(',');
