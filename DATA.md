@@ -8,6 +8,7 @@
 - Goa: [KTCL Goa](https://ktclgoa.com/gtfs/)
 - Kochi: [Jungle Bus](https://jungle-bus.github.io/KochiTransport/)
 - Pune: [croyla/pmpml-gtfs](https://github.com/croyla/pmpml-gtfs)
+- Mumbai: [croyla/mumbai-gtfs](https://github.com/croyla/mumbai-gtfs)
 - Ahmedabad: [croyla/amd-gtfs](https://github.com/croyla/amd-gtfs)
 - Rajkot: [croyla/rrl-gtfs](https://github.com/croyla/rrl-gtfs)
 - Indore: [Neo2308/aictsl-gtfs](https://github.com/Neo2308/aictsl-gtfs)
