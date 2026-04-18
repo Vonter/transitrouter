@@ -1,758 +1,355 @@
 #!/usr/bin/env python3
 """
-Script to fetch subway/metro route data from OpenStreetMap and generate rail.json
-in the same format as existing city rail.json files.
+Fetch metro/subway GeoJSON from Organic Maps CDN and generate rail.json.
+Optionally augments with commuter/suburban rail from OpenStreetMap via Overpass.
+
+One or more CDN cities can be combined into a single output file (useful when
+a metro network spans multiple Organic Maps city slugs).
+
+Line features are passed through as-is. Named station points are re-emitted
+with a computed station-color: the stroke color of the nearest line, or
+#ff2600 if the station is near lines of more than one color (interchange).
 
 Usage:
-    python rail.py --city CITY_NAME [--bbox SOUTH,WEST,NORTH,EAST] [--output OUTPUT_FILE]
+    python3 rail.py --cdn-city bangalore --output blr/rail.json
+    python3 rail.py --cdn-city hyderabad --output telangana/rail.json
+    python3 rail.py --cdn-city cityA cityB --output combined/rail.json
+    python3 rail.py --cdn-city chennai --overpass-bbox 12.75,80.0,13.4,80.35 --output chennai/rail.json
+    python3 rail.py --cdn-city mumbai  --overpass-bbox 18.85,72.75,19.35,73.20 --output mumbai/rail.json
 
-Example:
-    python rail.py --city "San Francisco" --bbox 37.7,-122.5,37.8,-122.4
-    python rail.py --city "London" --bbox 51.3,-0.5,51.7,0.2
+Examples:
+    python3 rail.py --cdn-city bangalore    --output blr/rail.json
+    python3 rail.py --cdn-city mumbai       --overpass-bbox 18.85,72.75,19.35,73.20  --output mumbai/rail.json
+    python3 rail.py --cdn-city delhi        --output delhi/rail.json
+    python3 rail.py --cdn-city chennai      --overpass-bbox 12.75,80.0,13.4,80.35    --output chennai/rail.json
+    python3 rail.py --cdn-city pune         --output pune/rail.json
+    python3 rail.py --cdn-city hyderabad    --output telangana/rail.json
+    python3 rail.py --cdn-city ahmedabad    --output ahmedabad/rail.json
+    python3 rail.py --cdn-city kochi        --output kochi/rail.json
+    python3 rail.py --cdn-city indore       --output indore/rail.json
 """
 
 import argparse
 import json
+import math
+import re
 import sys
 import time
-from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
-import requests
+import urllib.parse
+import urllib.request
 
+CDN_BASE = 'https://cdn.organicmaps.app/subway'
+OVERPASS_API = 'https://overpass-api.de/api/interpreter'
+INTERCHANGE_COLOR = '#ff2600'
 
-# Default values for missing fields
-DEFAULT_VALUES = {
-    "network": "Metro",
-    "operator": None,
-    "stop_type": "station",
-    "mode": "metro_rail",
-    "station_colors": "#000000",
-    "line_color": "#000000",
+# Distance threshold in degrees (~300 m). Stations within this distance of a
+# line are considered to belong to that line.
+THRESHOLD = 0.003
+
+# Colors that are invisible or near-invisible on a light basemap, mapped to
+# visible alternatives.
+COLOR_SUBSTITUTIONS = {
+    '#ffff00': '#FFD700',  # pure yellow → gold
+    '#00ffff': '#0097A7',  # pure cyan → teal
+    '#7fffd4': '#00897B',  # aquamarine → teal green
 }
 
 
-def fetch_overpass_data(bbox: Tuple[float, float, float, float], 
-                       transport_modes: List[str] = None) -> dict:
-    """
-    Fetch transit route data from OpenStreetMap using Overpass API.
-    
-    Args:
-        bbox: Bounding box as (south, west, north, east)
-        transport_modes: List of transport modes to fetch (default: subway, light_rail, tram)
-    
-    Returns:
-        JSON response from Overpass API
-    """
-    if transport_modes is None:
-        transport_modes = ["subway", "light_rail", "tram"]
-    
-    # Build Overpass QL query
-    mode_filter = "|".join(transport_modes)
-    overpass_url = "https://overpass-api.de/api/interpreter"
-    
-    # Query for routes and their stations
-    query = f"""
-    [out:json][timeout:180][bbox:{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}];
-    (
-      // Get all metro/subway/light rail routes
-      relation["route"~"^({mode_filter})$"];
-      
-      // Get stop_area relations for station color information
-      relation["public_transport"="stop_area"];
-      
-      // Get all metro stations
-      node["railway"="station"]["station"~"subway|light_rail"];
-      node["railway"="halt"]["station"~"subway|light_rail"];
-      node["public_transport"="stop_position"]["train"="yes"];
-      
-      // Get ways that are part of routes
-      way(r);
-    );
-    out body;
-    >;
-    out skel qt;
-    """
-    
-    print(f"Fetching data from OpenStreetMap for bbox: {bbox}")
-    print(f"Transport modes: {', '.join(transport_modes)}")
-    
-    response = requests.post(overpass_url, data={"data": query})
-    response.raise_for_status()
-    
-    return response.json()
+def fetch_geojson(cdn_city: str) -> dict:
+    url = f'{CDN_BASE}/{cdn_city}.geojson'
+    print(f'Fetching {url} ...')
+    with urllib.request.urlopen(url) as resp:
+        return json.loads(resp.read().decode())
 
 
-def normalize_name(name: str) -> str:
-    """Normalize station name for consistent formatting."""
-    if not name:
-        return ""
-    return name.lower().strip()
-
-
-def normalize_color_to_hex(color_value: str) -> str:
-    """
-    Normalize a color value to hex format.
-    
-    Args:
-        color_value: Color as hex (#RRGGBB or RRGGBB) or color name
-    
-    Returns:
-        Hex color string with # prefix
-    """
-    if not color_value:
-        return DEFAULT_VALUES["line_color"]
-    
-    color_value = color_value.strip()
-    
-    # Already a hex color with #
-    if color_value.startswith("#") and len(color_value) == 7:
-        return color_value.lower()
-    
-    # Hex color without #
-    if len(color_value) == 6 and all(c in "0123456789abcdefABCDEF" for c in color_value):
-        return f"#{color_value.lower()}"
-    
-    # Common color names to hex mapping
-    color_names = {
-        "red": "#ff0000", "blue": "#0000ff", "green": "#00ff00", "yellow": "#ffff00",
-        "orange": "#ff8800", "purple": "#800080", "pink": "#ffc0cb", "brown": "#a52a2a",
-        "grey": "#808080", "gray": "#808080", "aqua": "#00ffff", "silver": "#c0c0c0",
-        "gold": "#ffd700", "cyan": "#00ffff", "magenta": "#ff00ff", "lime": "#00ff00",
-        "indigo": "#4b0082", "violet": "#ee82ee", "teal": "#008080", "black": "#000000",
-        "white": "#ffffff", "maroon": "#800000", "olive": "#808000", "navy": "#000080"
-    }
-    
-    color_lower = color_value.lower()
-    if color_lower in color_names:
-        return color_names[color_lower]
-    
-    # Default fallback
-    return DEFAULT_VALUES["line_color"]
-
-
-def get_color_mapping(osm_data: dict) -> Dict[str, str]:
-    """
-    Build a mapping of station IDs to their line colors (as hex values).
-    Stations serving multiple lines get hyphen-separated hex colors.
-    
-    Checks colors from:
-    1. Station node's own colour/color tag
-    2. Route relations the station belongs to
-    3. stop_area relations the station belongs to
-    
-    Returns colors in hex format (e.g., "#ff0000-#0000ff" for red and blue lines)
-    """
-    station_colors = defaultdict(set)
-    relations = [elem for elem in osm_data.get("elements", []) if elem.get("type") == "relation"]
-    nodes = {str(elem["id"]): elem for elem in osm_data.get("elements", []) if elem.get("type") == "node"}
-    
-    # First, check station nodes for their own color tags
-    for node_id, node in nodes.items():
-        tags = node.get("tags", {})
-        node_color = tags.get("colour") or tags.get("color")
-        if node_color:
-            # Normalize to hex color
-            hex_color = normalize_color_to_hex(node_color)
-            station_colors[node_id].add(hex_color)
-    
-    # Then check stop_area relations
-    for relation in relations:
-        if relation.get("type") != "relation":
-            continue
-        
-        tags = relation.get("tags", {})
-        
-        if tags.get("public_transport") == "stop_area":
-            # Get color from stop_area
-            area_color = tags.get("colour") or tags.get("color")
-            if area_color:
-                hex_color = normalize_color_to_hex(area_color)
-                # Apply to all members
-                for member in relation.get("members", []):
-                    if member.get("type") == "node":
-                        ref = str(member.get("ref", ""))
-                        if ref:
-                            station_colors[ref].add(hex_color)
-    
-    # Finally check route relations
-    for relation in relations:
-        if relation.get("type") != "relation":
-            continue
-        
-        tags = relation.get("tags", {})
-        route_type = tags.get("route", "")
-        
-        if route_type not in ["subway", "light_rail", "tram"]:
-            continue
-        
-        # Get line color (this is the actual color for the route)
-        color = tags.get("colour") or tags.get("color") or DEFAULT_VALUES["line_color"]
-        hex_color = normalize_color_to_hex(color)
-        
-        # Get all members that are stations and assign this route's hex color
-        for member in relation.get("members", []):
-            if member.get("type") == "node" and member.get("role") in ["stop", "platform", "stop_entry_only", "stop_exit_only", ""]:
-                ref = str(member.get("ref", ""))
-                if ref:
-                    station_colors[ref].add(hex_color)
-    
-    # Convert sets to sorted hyphen-separated strings
-    return {
-        station_id: "-".join(sorted(colors)) if colors else DEFAULT_VALUES["station_colors"]
-        for station_id, colors in station_colors.items()
-    }
-
-
-def build_stop_area_mapping(osm_data: dict) -> Dict[str, List[str]]:
-    """
-    Build a mapping from station nodes to stop_position nodes using stop_area relations.
-    
-    In OSM, stop_area relations connect:
-    - stop_position nodes (route members with colors)
-    - station/platform nodes (with names for display)
-    
-    Args:
-        osm_data: OSM data from Overpass API
-    
-    Returns:
-        Dictionary mapping station node IDs to list of stop_position node IDs
-    """
-    station_to_stop_positions = defaultdict(list)
-    relations = [elem for elem in osm_data.get("elements", []) if elem.get("type") == "relation"]
-    
-    for relation in relations:
-        tags = relation.get("tags", {})
-        
-        if tags.get("public_transport") != "stop_area":
-            continue
-        
-        # Collect stop_position and station nodes from this stop_area
-        stop_positions = []
-        stations = []
-        
-        for member in relation.get("members", []):
-            if member.get("type") != "node":
-                continue
-            
-            role = member.get("role", "")
-            ref = str(member.get("ref", ""))
-            
-            if role == "stop" or role == "stop_entry_only" or role == "stop_exit_only":
-                # These are typically stop_position nodes
-                stop_positions.append(ref)
-            elif role == "platform" or role == "" or role == "station":
-                # These are typically station/platform nodes with names
-                stations.append(ref)
-        
-        # Map each station node to all stop_position nodes in the same stop_area
-        for station_id in stations:
-            for stop_pos_id in stop_positions:
-                if stop_pos_id not in station_to_stop_positions[station_id]:
-                    station_to_stop_positions[station_id].append(stop_pos_id)
-    
-    return dict(station_to_stop_positions)
-
-
-def extract_stations(osm_data: dict, color_mapping: Dict[str, str], 
-                     stop_area_mapping: Dict[str, List[str]], fallback_colors: List[str]) -> List[dict]:
-    """
-    Extract station features from OSM data.
-    
-    Args:
-        osm_data: OSM data from Overpass API
-        color_mapping: Mapping of stop_position node IDs to their colors
-        stop_area_mapping: Mapping of station node IDs to lists of stop_position node IDs
-        fallback_colors: List of route colors to use as fallback
-    
-    Returns:
-        List of GeoJSON Point features for stations
-    """
-    stations = []
-    seen_coords = set()
-    seen_names = {}  # Track stations by name to merge duplicates
-    
-    nodes = [elem for elem in osm_data.get("elements", []) if elem.get("type") == "node"]
-    
-    print(f"Stop area mapping has {len(stop_area_mapping)} entries")
-    
-    # First pass: collect all nodes that are in the color_mapping (route members)
-    priority_node_ids = set(color_mapping.keys())
-    
-    for node in nodes:
-        tags = node.get("tags", {})
-        
-        # Check if this is a transit station
-        railway = tags.get("railway", "")
-        station = tags.get("station", "")
-        public_transport = tags.get("public_transport", "")
-        node_id = str(node.get("id", ""))
-        
-        # Prioritize nodes that are route members (in color_mapping)
-        is_route_member = node_id in priority_node_ids
-        
-        is_station = (
-            is_route_member or  # Always include route members
-            (railway in ["station", "halt"] and station in ["subway", "light_rail"]) or
-            (public_transport == "stop_position") or  # Include all stop_position nodes
-            (railway == "station" and not station)  # Generic railway station
+def _overpass_query(query: str, retries: int = 3) -> dict:
+    data = urllib.parse.urlencode({'data': query}).encode()
+    for attempt in range(retries):
+        if attempt:
+            delay = 15 * attempt
+            print(f'  Retrying in {delay}s ...')
+            time.sleep(delay)
+        req = urllib.request.Request(
+            OVERPASS_API, data=data,
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
         )
-        
-        if not is_station:
-            continue
-        
-        name = tags.get("name", "")
-        
-        # If this is a route member without a name, try to find it from other data
-        if not name and is_route_member:
-            # For unnamed route members, we'll skip them as they're likely
-            # stop_position nodes without proper station names
-            # The actual station nodes with names will be picked up separately
-            continue
-        
-        if not name:
-            # Skip unnamed stations that aren't route members
-            continue
-        
-        lat = node.get("lat")
-        lon = node.get("lon")
-        
-        if lat is None or lon is None:
-            continue
-        
-        # Avoid duplicate stations at same location
-        coord_key = (round(lat, 6), round(lon, 6))
-        if coord_key in seen_coords:
-            continue
-        seen_coords.add(coord_key)
-        
-        node_id = str(node.get("id", ""))
-        station_colors = color_mapping.get(node_id)
-        num_colors = 1  # Default to 1 line
-        
-        # If not directly in color_mapping, check if this station is mapped to stop_positions via stop_area
-        if not station_colors and node_id in stop_area_mapping:
-            # Collect colors from all stop_position nodes linked to this station
-            stop_position_ids = stop_area_mapping[node_id]
-            all_colors = set()
-            for stop_pos_id in stop_position_ids:
-                stop_colors = color_mapping.get(stop_pos_id)
-                if stop_colors:
-                    # Split and add individual colors
-                    all_colors.update(stop_colors.split("-"))
-            
-            if all_colors:
-                num_colors = len(all_colors)
-                # If station serves multiple lines, use black (#000000)
-                if num_colors > 1:
-                    station_colors = "#000000"
-                else:
-                    station_colors = list(all_colors)[0]
-        
-        # Fallback logic: use route colors if station has no explicit colors
-        if not station_colors:
-            if fallback_colors:
-                num_colors = len(fallback_colors)
-                # If multiple route colors exist, use black
-                if num_colors > 1:
-                    station_colors = "#000000"
-                else:
-                    station_colors = fallback_colors[0]
-            else:
-                # Final fallback to default
-                station_colors = DEFAULT_VALUES["station_colors"]
-                num_colors = 1
-        else:
-            # If we got colors from color_mapping directly, count them
-            if '-' in station_colors:
-                num_colors = len(station_colors.split("-"))
-        
-        network_count = num_colors
-        
-        feature = {
-            "type": "Feature",
-            "properties": {
-                "name": name,
-                "name_norm": normalize_name(name),
-                "network": tags.get("network", DEFAULT_VALUES["network"]),
-                "operator": tags.get("operator", DEFAULT_VALUES["operator"]),
-                "station_colors": station_colors,
-                "network_count": network_count,
-                "stop_type": DEFAULT_VALUES["stop_type"],
-            },
-            "geometry": {
-                "type": "Point",
-                "coordinates": [lon, lat]
-            }
-        }
-        
-        # Add mode if present in Delhi format
-        if "mode" in tags:
-            feature["properties"]["mode"] = tags["mode"]
-        
-        stations.append(feature)
-    
-    return stations
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 504) and attempt < retries - 1:
+                continue
+            raise
 
 
-def get_route_colors(osm_data: dict) -> List[str]:
+def fetch_overpass_commuter_rail(bbox: str) -> list:
     """
-    Extract all unique route colors from the OSM data.
-    
-    Args:
-        osm_data: OSM data from Overpass API
-    
-    Returns:
-        List of unique hex color values from all routes
-    """
-    colors = set()
-    relations = [elem for elem in osm_data.get("elements", []) if elem.get("type") == "relation"]
-    
-    for relation in relations:
-        tags = relation.get("tags", {})
-        route_type = tags.get("route", "")
-        
-        if route_type not in ["subway", "light_rail", "tram"]:
-            continue
-        
-        # Get line color
-        color = tags.get("colour") or tags.get("color")
-        if color:
-            hex_color = normalize_color_to_hex(color)
-            colors.add(hex_color)
-    
-    return list(colors)
+    Fetch commuter/suburban rail route relations from OSM via Overpass API.
+    bbox: 'south,west,north,east'
 
+    Strategy to avoid timeouts:
+    1. Fetch relation IDs + tags only (no geometry) — fast
+    2. For each relation, fetch its member ways that intersect the bbox — one
+       small query per line, much faster than pulling full relation geometry
+    3. Fetch named station nodes in the bbox independently
 
-def extract_routes(osm_data: dict, nodes_dict: Dict[str, dict]) -> List[dict]:
+    Returns raw GeoJSON-style features (LineStrings with 'stroke', Points with
+    'name') ready to be merged into the main feature list before color assignment.
     """
-    Extract route LineString features from OSM data.
-    
-    Only uses way members from route relations, properly connecting them
-    without creating straight lines between disconnected segments.
-    
-    Args:
-        osm_data: OSM data from Overpass API
-        nodes_dict: Dictionary mapping node IDs to node data
-    
-    Returns:
-        List of GeoJSON LineString features for routes
-    """
-    routes = []
-    relations = [elem for elem in osm_data.get("elements", []) if elem.get("type") == "relation"]
-    ways_dict = {str(elem["id"]): elem for elem in osm_data.get("elements", []) if elem.get("type") == "way"}
-    
-    for relation in relations:
-        tags = relation.get("tags", {})
-        route_type = tags.get("route", "")
-        
-        if route_type not in ["subway", "light_rail", "tram"]:
-            continue
-        
-        route_name = tags.get("name", "")
-        if not route_name:
-            continue
-        
-        # Get line properties
-        line_ref = tags.get("ref", "")
-        color_value = tags.get("colour") or tags.get("color")
-        line_color = normalize_color_to_hex(color_value) if color_value else DEFAULT_VALUES["line_color"]
-        
-        network = tags.get("network", DEFAULT_VALUES["network"])
-        operator = tags.get("operator", DEFAULT_VALUES["operator"])
-        
-        # Extract way members and build coordinates properly
-        # Only use ways that are actual route members (not stops/platforms)
-        way_segments = []
-        for member in relation.get("members", []):
-            # Only process way members with empty role or specific route roles
-            if member.get("type") == "way" and member.get("role", "") in ["", "forward", "backward"]:
-                way_id = str(member.get("ref", ""))
-                way = ways_dict.get(way_id)
-                if way:
-                    way_nodes = way.get("nodes", [])
-                    segment_coords = []
-                    for node_id in way_nodes:
-                        node = nodes_dict.get(str(node_id))
-                        if node and "lat" in node and "lon" in node:
-                            segment_coords.append([node["lon"], node["lat"]])
-                    
-                    if len(segment_coords) >= 2:
-                        way_segments.append(segment_coords)
-        
-        if not way_segments:
-            # No valid way segments found
-            continue
-        
-        # Connect way segments that share endpoints
-        coordinates = connect_way_segments(way_segments)
-        
-        if len(coordinates) < 2:
-            # Skip routes with insufficient coordinates
-            continue
-        
-        feature = {
-            "type": "Feature",
-            "properties": {
-                "line_color": line_color,
-                "name": route_name,
-                "ref": line_ref,
-                "network": network,
-                "operator": operator,
-                "stop_type": "",
-            },
-            "geometry": {
-                "type": "LineString",
-                "coordinates": coordinates
-            }
-        }
-        
-        routes.append(feature)
-    
-    return routes
+    # Step 1: relation metadata (tags only, no geometry)
+    meta_query = f'''[out:json][timeout:60];
+(
+  relation["route"="train"]["service"~"commuter|suburban"]({bbox});
+  relation["route"="railway"]["service"~"commuter|suburban"]({bbox});
+);
+out tags;
+'''
+    print(f'Querying Overpass for commuter/suburban rail routes ({bbox}) ...')
+    meta_raw = _overpass_query(meta_query)
 
+    relations = [e for e in meta_raw['elements'] if e['type'] == 'relation']
+    print(f'  {len(relations)} commuter rail routes found')
 
-def connect_way_segments(segments: List[List[List[float]]]) -> List[List[float]]:
-    """
-    Connect way segments that share endpoints, avoiding straight lines
-    between disconnected segments.
-    
-    Args:
-        segments: List of coordinate lists for each way segment
-    
-    Returns:
-        List of coordinates forming a connected path
-    """
-    if not segments:
-        return []
-    
-    if len(segments) == 1:
-        return segments[0]
-    
-    # Try to connect segments by matching endpoints
-    connected = [segments[0]]
-    remaining = segments[1:]
-    
-    while remaining:
-        last_point = connected[-1][-1]  # Last point of current path
-        first_point = connected[-1][0]  # First point of current path
-        
-        found = False
-        for i, segment in enumerate(remaining):
-            seg_first = segment[0]
-            seg_last = segment[-1]
-            
-            # Check if segment connects to end of current path
-            if points_close(last_point, seg_first):
-                connected.append(segment[1:])  # Skip duplicate point
-                remaining.pop(i)
-                found = True
-                break
-            elif points_close(last_point, seg_last):
-                connected.append(list(reversed(segment))[1:])  # Reverse and skip duplicate
-                remaining.pop(i)
-                found = True
-                break
-            # Check if segment connects to beginning of current path
-            elif points_close(first_point, seg_last):
-                connected.insert(0, segment[:-1])  # Skip duplicate point
-                remaining.pop(i)
-                found = True
-                break
-            elif points_close(first_point, seg_first):
-                connected.insert(0, list(reversed(segment))[:-1])  # Reverse and skip duplicate
-                remaining.pop(i)
-                found = True
-                break
-        
-        if not found:
-            # No connecting segment found, start a new path if remaining segments exist
-            # This handles disconnected route parts
+    # Pick a stroke color: first relation with a colour tag, otherwise brown
+    # (distinct from metro line colors and visible on both light and dark maps)
+    stroke = '#795548'
+    for rel in relations:
+        tags = rel.get('tags', {})
+        c = tags.get('colour') or tags.get('color')
+        if c:
+            stroke = substitute_color(c if c.startswith('#') else f'#{c}')
             break
-    
-    # Flatten the connected segments
+    print(f'  stroke: {stroke}')
+
+    features = []
+
+    # Step 2: main railway tracks in bbox (no service tag = exclude sidings/yards)
+    ways_query = f'[out:json][timeout:60];way["railway"="rail"][!"service"]({bbox});out geom;'
+    print(f'Querying Overpass for railway tracks ({bbox}) ...')
+    ways_raw = _overpass_query(ways_query)
+
+    for element in ways_raw['elements']:
+        if element['type'] != 'way' or 'geometry' not in element:
+            continue
+        coords = [[n['lon'], n['lat']] for n in element['geometry']]
+        if len(coords) >= 2:
+            features.append({
+                'type': 'Feature',
+                'properties': {'stroke': stroke},
+                'geometry': {'type': 'LineString', 'coordinates': coords},
+            })
+
+    print(f'  {len(features)} track segments')
+
+    # Step 3: named railway station nodes (exclude subway entrances/metro platforms)
+    stops_query = (
+        f'[out:json][timeout:60];'
+        f'node["railway"~"station|halt"]["name"]["station"!="subway"]({bbox});'
+        f'out body;'
+    )
+    print(f'Querying Overpass for commuter rail stations ({bbox}) ...')
+    stops_raw = _overpass_query(stops_query)
+
+    seen_node_ids: set = set()
+    stops_count = 0
+    for element in stops_raw['elements']:
+        if element['type'] != 'node' or element['id'] in seen_node_ids:
+            continue
+        seen_node_ids.add(element['id'])
+        name = element.get('tags', {}).get('name')
+        if not name:
+            continue
+        features.append({
+            'type': 'Feature',
+            'properties': {'name': name},
+            'geometry': {'type': 'Point', 'coordinates': [element['lon'], element['lat']]},
+        })
+        stops_count += 1
+
+    print(f'  {stops_count} named stations')
+    return features
+
+
+def _segment_distance(px, py, ax, ay, bx, by) -> float:
+    """Euclidean distance (degrees) from point P to segment AB."""
+    dx, dy = bx - ax, by - ay
+    if dx == 0 and dy == 0:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def _linestring_distance(px, py, coords) -> float:
+    """Minimum distance from point to a LineString."""
+    return min(
+        _segment_distance(px, py, coords[i][0], coords[i][1],
+                          coords[i + 1][0], coords[i + 1][1])
+        for i in range(len(coords) - 1)
+    )
+
+
+def substitute_color(color: str) -> str:
+    return COLOR_SUBSTITUTIONS.get(color.lower(), color)
+
+
+def assign_station_colors(features: list) -> list:
+    """
+    Return a new list of features with:
+    - LineString features unchanged (stroke color substituted if needed).
+    - Named Point features re-emitted with station-color set to the stroke of
+      the nearest line, or INTERCHANGE_COLOR if near lines of multiple colors.
+    - Unnamed Point features dropped (not displayed by the UI).
+    """
+    lines = []
     result = []
-    for segment in connected:
-        if isinstance(segment[0], list):
-            result.extend(segment)
+    for f in features:
+        if f['geometry']['type'] != 'LineString':
+            continue
+        stroke = f['properties'].get('stroke')
+        if not stroke:
+            result.append(f)
+            continue
+        stroke = substitute_color(stroke)
+        patched = {**f, 'properties': {**f['properties'], 'stroke': stroke}}
+        result.append(patched)
+        lines.append((f['geometry']['coordinates'], stroke))
+
+    for feature in features:
+        if feature['geometry']['type'] != 'Point':
+            continue
+        props = feature['properties']
+        if not props.get('name'):
+            continue  # unnamed stops are not shown in the UI
+
+        px, py = feature['geometry']['coordinates']
+
+        nearby_colors = {
+            stroke
+            for coords, stroke in lines
+            if _linestring_distance(px, py, coords) <= THRESHOLD
+        }
+
+        if len(nearby_colors) > 1:
+            color = INTERCHANGE_COLOR
+        elif len(nearby_colors) == 1:
+            color = next(iter(nearby_colors))
         else:
-            result.append(segment)
-    
+            color = substitute_color(props.get('marker-color', '#797979'))
+
+        station_props = {
+            'name': props['name'],
+            'station-color': color,
+        }
+        if len(nearby_colors) > 1:
+            station_props['interchange'] = True
+
+        result.append({
+            'type': 'Feature',
+            'properties': station_props,
+            'geometry': feature['geometry'],
+        })
+
     return result
 
 
-def points_close(p1: List[float], p2: List[float], tolerance: float = 1e-6) -> bool:
+def merge_interchanges(features: list) -> list:
     """
-    Check if two coordinate points are close enough to be considered connected.
-    
-    Args:
-        p1: First point [lon, lat]
-        p2: Second point [lon, lat]
-        tolerance: Distance tolerance
-    
-    Returns:
-        True if points are within tolerance
+    Merge interchange Point features with the same base name into a single
+    station at their centroid. Base name is derived by stripping parenthetical
+    suffixes e.g. "(Purple Line)". Non-interchange features pass through unchanged.
     """
-    return abs(p1[0] - p2[0]) < tolerance and abs(p1[1] - p2[1]) < tolerance
+    non_interchange = []
+    groups = {}
+
+    for f in features:
+        if f['geometry']['type'] != 'Point' or not f['properties'].get('interchange'):
+            non_interchange.append(f)
+            continue
+        name = f['properties']['name']
+        base_name = re.sub(r'\s*\([^)]*\)', '', name).strip()
+        groups.setdefault(base_name, []).append(f['geometry']['coordinates'])
+
+    merged = [
+        {
+            'type': 'Feature',
+            'properties': {
+                'name': base_name,
+                'station-color': INTERCHANGE_COLOR,
+                'interchange': True,
+            },
+            'geometry': {
+                'type': 'Point',
+                'coordinates': [
+                    sum(c[0] for c in coords) / len(coords),
+                    sum(c[1] for c in coords) / len(coords),
+                ],
+            },
+        }
+        for base_name, coords in groups.items()
+    ]
+
+    return non_interchange + merged
 
 
-def generate_rail_json(city_name: str, bbox: Tuple[float, float, float, float],
-                      transport_modes: List[str] = None,
-                      output_file: Optional[str] = None) -> dict:
-    """
-    Generate rail.json for a city by fetching data from OpenStreetMap.
-    
-    Args:
-        city_name: Name of the city
-        bbox: Bounding box as (south, west, north, east)
-        transport_modes: List of transport modes (default: subway, light_rail, tram)
-        output_file: Optional output file path
-    
-    Returns:
-        GeoJSON FeatureCollection
-    """
-    # Fetch data from OSM
-    osm_data = fetch_overpass_data(bbox, transport_modes)
-    
-    print(f"Received {len(osm_data.get('elements', []))} elements from OSM")
-    
-    # Build lookup dictionaries
-    nodes_dict = {
-        str(elem["id"]): elem 
-        for elem in osm_data.get("elements", []) 
-        if elem.get("type") == "node"
-    }
-    
-    # Build stop_area mapping (connects station nodes to stop_position nodes)
-    print("Building stop_area mapping...")
-    stop_area_mapping = build_stop_area_mapping(osm_data)
-    print(f"Mapped {len(stop_area_mapping)} station nodes to stop_position nodes")
-    
-    # Build color mapping
-    print("Building station color mapping...")
-    color_mapping = get_color_mapping(osm_data)
-    
-    # Get all route colors for fallback
-    print("Collecting route colors...")
-    route_colors = get_route_colors(osm_data)
-    if route_colors:
-        print(f"Found {len(route_colors)} unique route colors: {', '.join(route_colors)}")
-    
-    # Extract stations and routes
-    print("Extracting stations...")
-    stations = extract_stations(osm_data, color_mapping, stop_area_mapping, route_colors)
-    print(f"Found {len(stations)} stations")
-    
-    print("Extracting routes...")
-    routes = extract_routes(osm_data, nodes_dict)
-    print(f"Found {len(routes)} routes")
-    
-    # Combine into FeatureCollection
-    feature_collection = {
-        "type": "FeatureCollection",
-        "generator": "rail.py",
-        "features": stations + routes
-    }
-    
-    # Write to file if specified
-    if output_file:
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(feature_collection, f, indent=2, ensure_ascii=False)
-        print(f"\nWrote rail.json to {output_file}")
-    
-    return feature_collection
+def process(cdn_cities: list, output_file: str, overpass_bbox: str | None) -> None:
+    all_features = []
+    for cdn_city in cdn_cities:
+        raw = fetch_geojson(cdn_city)
+        features = raw['features']
+        lines = [f for f in features if f['geometry']['type'] == 'LineString']
+        points = [f for f in features if f['geometry']['type'] == 'Point']
+        named = [f for f in points if f['properties'].get('name')]
+        print(f'  {len(lines)} line segments, {len(named)} named stations')
+        all_features.extend(features)
+
+    if overpass_bbox:
+        all_features.extend(fetch_overpass_commuter_rail(overpass_bbox))
+
+    processed = assign_station_colors(all_features)
+    processed = merge_interchanges(processed)
+
+    interchanges = sum(
+        1 for f in processed
+        if f['geometry']['type'] == 'Point'
+        and f['properties'].get('interchange')
+    )
+    print(f'  {interchanges} interchange stations detected')
+
+    out = {'type': 'FeatureCollection', 'features': processed}
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(out, f, separators=(',', ':'), ensure_ascii=False)
+    print(f'Wrote {output_file}')
 
 
-def parse_bbox(bbox_str: str) -> Tuple[float, float, float, float]:
-    """Parse bounding box string into tuple of floats."""
-    try:
-        parts = [float(x.strip()) for x in bbox_str.split(",")]
-        if len(parts) != 4:
-            raise ValueError("Bounding box must have exactly 4 values")
-        return tuple(parts)
-    except (ValueError, AttributeError) as e:
-        raise ValueError(f"Invalid bounding box format: {e}")
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Fetch subway/metro data from OpenStreetMap and generate rail.json",
+        description='Generate rail.json from Organic Maps subway GeoJSON.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # San Francisco BART
-  python rail.py --city "San Francisco" --bbox 37.7,-122.5,37.8,-122.4
-
-  # London Underground
-  python rail.py --city "London" --bbox 51.3,-0.5,51.7,0.2
-  
-  # Tokyo Metro
-  python rail.py --city "Tokyo" --bbox 35.5,139.5,35.8,139.9
-
-  # Specify output file
-  python rail.py --city "Boston" --bbox 42.2,-71.2,42.4,-71.0 --output boston/rail.json
-
-  # Include trams
-  python rail.py --city "Melbourne" --bbox -37.9,144.8,-37.7,145.1 --modes subway light_rail tram
-
-Note: Bounding box format is SOUTH,WEST,NORTH,EAST (minlat,minlon,maxlat,maxlon)
-"""
+        epilog=__doc__.split('Examples:')[1],
     )
-    
     parser.add_argument(
-        "--city",
-        required=True,
-        help="Name of the city"
+        '--cdn-city', required=True, nargs='+',
+        help='One or more city slugs for the Organic Maps CDN (e.g. bangalore mumbai)',
     )
-    
     parser.add_argument(
-        "--bbox",
-        required=True,
-        help="Bounding box as SOUTH,WEST,NORTH,EAST (e.g., 37.7,-122.5,37.8,-122.4)"
+        '--overpass-bbox',
+        help='Bounding box for OSM commuter/suburban rail query: south,west,north,east'
+             ' (e.g. 12.75,80.0,13.4,80.35 for Chennai)',
     )
-    
     parser.add_argument(
-        "--output",
-        help="Output file path (default: rail.json)"
+        '--output', required=True,
+        help='Output file path (e.g. blr/rail.json)',
     )
-    
-    parser.add_argument(
-        "--modes",
-        nargs="+",
-        default=["subway", "light_rail"],
-        help="Transport modes to include (default: subway light_rail)"
-    )
-    
     args = parser.parse_args()
-    
-    # Parse bounding box
+
     try:
-        bbox = parse_bbox(args.bbox)
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-    
-    # Set output file
-    output_file = args.output or "rail.json"
-    
-    # Generate rail.json
-    try:
-        generate_rail_json(
-            city_name=args.city,
-            bbox=bbox,
-            transport_modes=args.modes,
-            output_file=output_file
-        )
-        print("\n✓ Successfully generated rail.json")
-    except requests.RequestException as e:
-        print(f"\nError fetching data from OpenStreetMap: {e}", file=sys.stderr)
-        sys.exit(1)
+        process(args.cdn_city, args.output, args.overpass_bbox)
     except Exception as e:
-        print(f"\nError generating rail.json: {e}", file=sys.stderr)
+        print(f'Error: {e}', file=sys.stderr)
         import traceback
         traceback.print_exc()
         sys.exit(1)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-

@@ -2534,135 +2534,49 @@ const App = () => {
       data: railJSONPath,
     });
 
-    // Add rail lines layer
-    map.addLayer(
-      {
-        id: 'rail-path',
-        type: 'line',
-        source: 'rail',
-        filter: [
-          'all',
-          ['==', ['geometry-type'], 'LineString'],
-          ['has', 'line_color'],
-        ],
-        minzoom: 9,
-        layout: {
-          'line-join': 'round',
-          'line-cap': 'round',
-        },
-        paint: {
-          'line-color': [
-            'case',
-            [
-              'any',
-              ['==', ['get', 'line_color'], '#ffff00'],
-              ['==', ['get', 'line_color'], 'yellow'],
-            ],
-            '#FFEA00',
-            ['to-color', ['get', 'line_color']],
-          ],
-          'line-width': [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            12,
-            3,
-            16,
-            4,
-            22,
-            6,
-          ],
-          'line-opacity': C.routeLineOpacity,
-        },
-      },
-      labelLayerId,
-    );
-    map.addLayer(
-      {
-        id: 'rail-path-case',
-        type: 'line',
-        source: 'rail',
-        filter: [
-          'all',
-          ['==', ['geometry-type'], 'LineString'],
-          ['has', 'line_color'],
-        ],
-        minzoom: 9,
-        layout: {
-          'line-join': 'round',
-          'line-cap': 'round',
-        },
-        paint: {
-          'line-color': C.stopCircleBg,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 16, 9, 22, 12],
-          'line-opacity': 0.5,
-        },
-      },
-      'rail-path',
-    );
+    // Rail layer specs
+    const railLineFilter = ['all', ['==', ['geometry-type'], 'LineString'], ['has', 'stroke']];
+    const railLineLayout = { 'line-join': 'round', 'line-cap': 'round' };
+    const railInterchangeFilter = ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'interchange'], true]];
+    const railStationsFilter = ['all', ['==', ['geometry-type'], 'Point'], ['has', 'name'], ['!=', ['get', 'interchange'], true]];
 
-    // Add rail stations layer (after lines so icons render on top)
-    map.addLayer({
-      id: 'rail-stations',
-      type: 'symbol',
-      source: 'rail',
-      filter: [
-        'all',
-        ['==', ['geometry-type'], 'Point'],
-        ['==', ['get', 'stop_type'], 'station'],
-      ],
-      minzoom: 11,
-      layout: {
-        'icon-image': 'metro-station',
-        'icon-size': ['interpolate', ['linear'], ['zoom'], 11, 0.3, 22, 0.5],
-        'icon-allow-overlap': false,
-        'text-field': ['coalesce', ['get', 'name_en'], ['get', 'name']],
-        'text-font': ['Noto Sans Bold'],
-        'text-size': ['interpolate', ['linear'], ['zoom'], 11, 10, 22, 16],
-        'text-variable-anchor': ['left', 'right', 'top'],
-        'text-radial-offset': 1.1,
-        'text-optional': true,
-      },
-      paint: {
-        'icon-color': stationIconColor,
-        ...(isDark && {
-          'icon-halo-color': '#000',
-          'icon-halo-width': 0.5,
-          'icon-halo-blur': 1,
-        }),
-        'text-color': stationTextColor,
-        'text-halo-color': [
-          'case',
-          [
-            'any',
-            ['==', ['get', 'station_colors'], '#ffff00'],
-            ['==', ['get', 'station_colors'], 'yellow'],
-          ],
-          '#555',
-          ['==', ['get', 'station_colors'], '#00ffff'], // aqua/cyan
-          '#666',
-          ['==', ['get', 'station_colors'], 'aqua'], // aqua/cyan
-          '#666',
-          ['==', ['get', 'station_colors'], 'cyan'], // aqua/cyan
-          '#666',
-          ['==', ['get', 'station_colors'], '#ffc0cb'], // pink
-          '#888',
-          ['==', ['get', 'station_colors'], 'pink'], // pink
-          '#888',
-          ['==', ['get', 'station_colors'], '#ff8800'], // orange
-          '#999',
-          ['==', ['get', 'station_colors'], 'orange'], // orange
-          '#999',
-          ['==', ['get', 'station_colors'], '#ee82ee'], // violet
-          '#aaa',
-          ['==', ['get', 'station_colors'], 'violet'], // violet
-          '#aaa',
-          // Default halo
-          C.textHalo,
-        ],
-        'text-halo-width': C.stationHaloWidth,
-      },
-    });
+    const railInterchangeLayout = {
+      'icon-image': 'metro-station',
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.45, 22, 0.75],
+      'icon-allow-overlap': false,
+      'text-field': ['get', 'name'],
+      'text-font': ['Noto Sans Bold'],
+      'text-size': ['interpolate', ['linear'], ['zoom'], 10, 10, 22, 16],
+      'text-variable-anchor': ['left', 'right', 'top'],
+      'text-radial-offset': 1.1,
+      'text-optional': true,
+    };
+    const railInterchangePaint = {
+      'icon-color': C.text,
+      ...(isDark && { 'icon-halo-color': '#000', 'icon-halo-width': 0.5, 'icon-halo-blur': 1 }),
+      'text-color': C.text,
+      'text-halo-color': C.textHalo,
+      'text-halo-width': C.stationHaloWidth,
+    };
+    const railStationsLayout = {
+      'icon-image': 'metro-station',
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 11, 0.3, 22, 0.5],
+      'icon-allow-overlap': false,
+      'text-field': ['get', 'name'],
+      'text-font': ['Noto Sans Bold'],
+      'text-size': ['interpolate', ['linear'], ['zoom'], 11, 10, 22, 16],
+      'text-variable-anchor': ['left', 'right', 'top'],
+      'text-radial-offset': 1.1,
+      'text-optional': true,
+    };
+    const railStationsPaint = {
+      'icon-color': stationIconColor,
+      ...(isDark && { 'icon-halo-color': '#000', 'icon-halo-width': 0.5, 'icon-halo-blur': 1 }),
+      'text-color': stationTextColor,
+      'text-halo-color': C.textHalo,
+      'text-halo-width': C.stationHaloWidth,
+    };
+
 
     setMapLoaded(true);
 
@@ -2909,6 +2823,98 @@ const App = () => {
         ],
         ...stopText.paint,
       },
+    });
+
+    // Rail layer specs
+    const railLineFilter = ['all', ['==', ['geometry-type'], 'LineString'], ['has', 'stroke']];
+    const railLineLayout = { 'line-join': 'round', 'line-cap': 'round' };
+    const railInterchangeFilter = ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'interchange'], true]];
+    const railStationsFilter = ['all', ['==', ['geometry-type'], 'Point'], ['has', 'name'], ['!=', ['get', 'interchange'], true]];
+
+    const railInterchangeLayout = {
+      'icon-image': 'metro-station',
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.45, 22, 0.75],
+      'icon-allow-overlap': false,
+      'text-field': ['get', 'name'],
+      'text-font': ['Noto Sans Bold'],
+      'text-size': ['interpolate', ['linear'], ['zoom'], 10, 10, 22, 16],
+      'text-variable-anchor': ['left', 'right', 'top'],
+      'text-radial-offset': 1.1,
+      'text-optional': true,
+    };
+    const railInterchangePaint = {
+      'icon-color': C.text,
+      ...(isDark && { 'icon-halo-color': '#000', 'icon-halo-width': 0.5, 'icon-halo-blur': 1 }),
+      'text-color': C.text,
+      'text-halo-color': C.textHalo,
+      'text-halo-width': C.stationHaloWidth,
+    };
+    const railStationsLayout = {
+      'icon-image': 'metro-station',
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 11, 0.3, 22, 0.5],
+      'icon-allow-overlap': false,
+      'text-field': ['get', 'name'],
+      'text-font': ['Noto Sans Bold'],
+      'text-size': ['interpolate', ['linear'], ['zoom'], 11, 10, 22, 16],
+      'text-variable-anchor': ['left', 'right', 'top'],
+      'text-radial-offset': 1.1,
+      'text-optional': true,
+    };
+    const railStationsPaint = {
+      'icon-color': stationIconColor,
+      ...(isDark && { 'icon-halo-color': '#000', 'icon-halo-width': 0.5, 'icon-halo-blur': 1 }),
+      'text-color': stationTextColor,
+      'text-halo-color': C.textHalo,
+      'text-halo-width': C.stationHaloWidth,
+    };
+
+    // Rail layers — always above bus stops
+    map.addLayer({
+      id: 'rail-path',
+      type: 'line',
+      source: 'rail',
+      filter: railLineFilter,
+      minzoom: 9,
+      layout: railLineLayout,
+      paint: {
+        'line-color': ['get', 'stroke'],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3, 16, 4, 22, 6],
+        'line-opacity': C.routeLineOpacity,
+      },
+    });
+    map.addLayer(
+      {
+        id: 'rail-path-case',
+        type: 'line',
+        source: 'rail',
+        filter: railLineFilter,
+        minzoom: 9,
+        layout: railLineLayout,
+        paint: {
+          'line-color': C.stopCircleBg,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 16, 9, 22, 12],
+          'line-opacity': 0.5,
+        },
+      },
+      'rail-path',
+    );
+    map.addLayer({
+      id: 'rail-stations-interchange',
+      type: 'symbol',
+      source: 'rail',
+      filter: railInterchangeFilter,
+      minzoom: 10,
+      layout: railInterchangeLayout,
+      paint: railInterchangePaint,
+    });
+    map.addLayer({
+      id: 'rail-stations',
+      type: 'symbol',
+      source: 'rail',
+      filter: railStationsFilter,
+      minzoom: 11,
+      layout: railStationsLayout,
+      paint: railStationsPaint,
     });
 
     // Create stops-highlight source and layers BEFORE setting up event handlers
