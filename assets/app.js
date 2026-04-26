@@ -77,6 +77,8 @@ import passingRoutesBlueImagePath from './images/passing-routes-blue.svg';
 import iconSVGPath from '../icons/icon.svg';
 import busTinyImagePath from './images/bus-tiny-map.png';
 import metroStationSdfPath from './images/metro-station-sdf.svg';
+import railStationPath from './images/rail-station.svg';
+import monorailStationPath from './images/monorail-station.svg';
 
 const city = getCurrentCity();
 const dataPath = `/data/${city}`;
@@ -2524,6 +2526,8 @@ const App = () => {
       loadPng('stop-end', stopEndImagePath),
       loadPng('stop-active', stopActiveImagePath),
       loadSvg('metro-station', metroStationSdfPath, 60, { sdf: true }),
+      loadSvg('rail-station', railStationPath, 60, { sdf: true }),
+      loadSvg('monorail-station', monorailStationPath, 60, { sdf: true }),
     ]).catch((e) => {
       console.error('Failed to load map images:', e);
     });
@@ -2541,7 +2545,7 @@ const App = () => {
     const railStationsFilter = ['all', ['==', ['geometry-type'], 'Point'], ['has', 'name'], ['!=', ['get', 'interchange'], true]];
 
     const railInterchangeLayout = {
-      'icon-image': 'metro-station',
+      'icon-image': ['match', ['get', 'mode'], 'metro', 'metro-station', 'monorail', 'monorail-station', 'rail-station'],
       'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.45, 22, 0.75],
       'icon-allow-overlap': false,
       'text-field': ['get', 'name'],
@@ -2559,7 +2563,7 @@ const App = () => {
       'text-halo-width': C.stationHaloWidth,
     };
     const railStationsLayout = {
-      'icon-image': 'metro-station',
+      'icon-image': ['match', ['get', 'mode'], 'metro', 'metro-station', 'monorail', 'monorail-station', 'rail-station'],
       'icon-size': ['interpolate', ['linear'], ['zoom'], 11, 0.3, 22, 0.5],
       'icon-allow-overlap': false,
       'text-field': ['get', 'name'],
@@ -2832,7 +2836,7 @@ const App = () => {
     const railStationsFilter = ['all', ['==', ['geometry-type'], 'Point'], ['has', 'name'], ['!=', ['get', 'interchange'], true]];
 
     const railInterchangeLayout = {
-      'icon-image': 'metro-station',
+      'icon-image': ['match', ['get', 'mode'], 'metro', 'metro-station', 'monorail', 'monorail-station', 'rail-station'],
       'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.45, 22, 0.75],
       'icon-allow-overlap': false,
       'text-field': ['get', 'name'],
@@ -2850,7 +2854,7 @@ const App = () => {
       'text-halo-width': C.stationHaloWidth,
     };
     const railStationsLayout = {
-      'icon-image': 'metro-station',
+      'icon-image': ['match', ['get', 'mode'], 'metro', 'metro-station', 'monorail', 'monorail-station', 'rail-station'],
       'icon-size': ['interpolate', ['linear'], ['zoom'], 11, 0.3, 22, 0.5],
       'icon-allow-overlap': false,
       'text-field': ['get', 'name'],
@@ -2879,7 +2883,25 @@ const App = () => {
       paint: {
         'line-color': ['get', 'stroke'],
         'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3, 16, 4, 22, 6],
-        'line-opacity': C.routeLineOpacity,
+        'line-opacity': ['match', ['get', 'mode'],
+          'monorail', 1,
+          'rail', 0.01,
+          C.routeLineOpacity,
+        ],
+      },
+    });
+    map.addLayer({
+      id: 'rail-path-dots',
+      type: 'line',
+      source: 'rail',
+      filter: ['all', ...railLineFilter.slice(1), ['==', ['get', 'mode'], 'rail']],
+      minzoom: 9,
+      layout: { ...railLineLayout, 'line-cap': 'butt' },
+      paint: {
+        'line-color': ['get', 'stroke'],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 12, 2, 16, 3, 22, 4],
+        'line-opacity': 1,
+        'line-dasharray': [3, 3],
       },
     });
     map.addLayer(
@@ -2891,9 +2913,12 @@ const App = () => {
         minzoom: 9,
         layout: railLineLayout,
         paint: {
-          'line-color': C.stopCircleBg,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 16, 9, 22, 12],
-          'line-opacity': 0.5,
+          'line-color': ['match', ['get', 'mode'], 'metro', C.stopCircleBg, 'monorail', '#FFF', ['get', 'stroke']],
+          'line-width': ['interpolate', ['linear'], ['zoom'],
+            16, ['match', ['get', 'mode'], 'monorail', 0.85, 'rail', 5, 9],
+            22, ['match', ['get', 'mode'], 'monorail', 12, 'rail', 7, 12],
+          ],
+          'line-opacity': ['match', ['get', 'mode'], 'monorail', 0.5, 'rail', 0.75, 0.5],
         },
       },
       'rail-path',
