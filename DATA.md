@@ -11,6 +11,7 @@
 - Mumbai: [croyla/mumbai-gtfs](https://github.com/croyla/mumbai-gtfs)
 - Ahmedabad: [croyla/amd-gtfs](https://github.com/croyla/amd-gtfs)
 - Rajkot: [croyla/rrl-gtfs](https://github.com/croyla/rrl-gtfs)
+- Hubli-Dharwad: [croyla/hdbrts-gtfs](https://github.com/croyla/hdbrts-gtfs)
 - Indore: [Neo2308/aictsl-gtfs](https://github.com/Neo2308/aictsl-gtfs)
 - Telangana: [Open Data Telangana](https://drive.google.com/file/d/1vmjLCHzWButGuQUK0RLjy3a1_norIHyq)
 - Andhra Pradesh: [Neo2308/apsrtc-gtfs](https://github.com/Neo2308/apsrtc-gtfs)
