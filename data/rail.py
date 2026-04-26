@@ -707,39 +707,6 @@ def deduplicate_lines(features: list) -> list:
             return None
         return candidate
 
-    def _to_spur(trunk, full):
-        """Trim full to just the portion that extends beyond trunk.
-
-        Walks full's coordinates and finds the last point that lies close to
-        trunk — that's the divergence junction.  Returns full[junction:] as
-        the spur, or full[:junction+1] if trunk occupies the far end of full.
-        Returns None when no meaningful spur can be extracted (e.g. identical
-        paths or full is exhausted at the junction).
-        """
-        last_close = -1
-        for idx, pt in enumerate(full):
-            if _dist_to_line(pt[0], pt[1], trunk) <= PROXIMITY:
-                last_close = idx
-
-        if last_close < 0:
-            return None
-
-        # Forward spur: full continues past the junction
-        forward = full[last_close:]
-        if len(forward) >= 2:
-            return forward
-
-        # Backward spur: trunk occupies the tail of full, spur is the head
-        first_close = next(
-            (idx for idx, pt in enumerate(full)
-             if _dist_to_line(pt[0], pt[1], trunk) <= PROXIMITY), -1
-        )
-        backward = full[:first_close + 1]
-        if len(backward) >= 2:
-            return backward
-
-        return None
-
     cdn_lines, other = [], []
     for f in features:
         if f['geometry']['type'] == 'LineString' and f['properties'].get('name'):
@@ -795,21 +762,13 @@ def deduplicate_lines(features: list) -> list:
                         break
 
                     if max(frac_ab, frac_ba) >= SUBSET_FRAC:
-                        # One line is a near-subset of the other: keep it as the
-                        # shared trunk and trim the longer one to just its unique spur.
-                        if frac_ab >= frac_ba:
-                            trunk, full_idx = ca, j  # ca inside cb
-                            spur = _to_spur(trunk, cb)
-                        else:
-                            trunk, full_idx = cb, i  # cb inside ca
-                            spur = _to_spur(trunk, ca)
-                        if spur:
-                            active[full_idx] = {
-                                **active[full_idx],
-                                'geometry': {'type': 'LineString', 'coordinates': spur},
-                            }
-                        else:
-                            active.pop(full_idx)
+                        # One line is a near-subset of the other: drop the shorter
+                        # one and keep the longer route intact.  A partial service
+                        # variant (e.g. Mysuru Road → Pattandur Agrahara) is always
+                        # covered by the full-line route (Challaghatta → Whitefield),
+                        # so removing it loses no geographic coverage.
+                        drop_idx = i if len(ca) <= len(cb) else j
+                        active.pop(drop_idx)
                         total_removed += 1
                         changed = True
                         break

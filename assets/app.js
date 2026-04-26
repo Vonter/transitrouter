@@ -2838,7 +2838,7 @@ const App = () => {
     const railInterchangeLayout = {
       'icon-image': ['match', ['get', 'mode'], 'metro', 'metro-station', 'monorail', 'monorail-station', 'rail-station'],
       'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.45, 22, 0.75],
-      'icon-allow-overlap': false,
+      'icon-allow-overlap': true,
       'text-field': ['get', 'name'],
       'text-font': ['Noto Sans Bold'],
       'text-size': ['interpolate', ['linear'], ['zoom'], 10, 10, 22, 16],
@@ -2924,15 +2924,6 @@ const App = () => {
       'rail-path',
     );
     map.addLayer({
-      id: 'rail-stations-interchange',
-      type: 'symbol',
-      source: 'rail',
-      filter: railInterchangeFilter,
-      minzoom: 10,
-      layout: railInterchangeLayout,
-      paint: railInterchangePaint,
-    });
-    map.addLayer({
       id: 'rail-stations',
       type: 'symbol',
       source: 'rail',
@@ -2940,6 +2931,15 @@ const App = () => {
       minzoom: 11,
       layout: railStationsLayout,
       paint: railStationsPaint,
+    });
+    map.addLayer({
+      id: 'rail-stations-interchange',
+      type: 'symbol',
+      source: 'rail',
+      filter: railInterchangeFilter,
+      minzoom: 10,
+      layout: railInterchangeLayout,
+      paint: railInterchangePaint,
     });
 
     // Create stops-highlight source and layers BEFORE setting up event handlers
