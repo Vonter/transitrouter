@@ -19,6 +19,7 @@ export const AVAILABLE_CITIES = [
   'kochi',
   'pune',
   'mumbai',
+  'hublidharwad',
   'telangana',
   'andhrapradesh',
   'ahmedabad',
@@ -157,6 +158,19 @@ export const CITY_CONFIGS = {
         upperLat: 19.31,
         lowerLong: 72.78,
         upperLong: 73.16,
+      },
+    }
+  },
+  hublidharwad: {
+    city: {
+      name: 'Hubli-Dharwad',
+      code: 'hublidharwad',
+      flag: '🇮🇳',
+      bounds: {
+        lowerLat: 15.27,
+        upperLat: 15.53,
+        lowerLong: 74.77,
+        upperLong: 75.35,
       },
     }
   },
