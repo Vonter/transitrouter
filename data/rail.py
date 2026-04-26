@@ -8,11 +8,11 @@ interchange status comes from OSM stop_area_group membership, not proximity.
 
 Examples:
     python3 rail.py --cdn-city bangalore    --output blr/rail.json
-    python3 rail.py --cdn-city mumbai       --overpass-bbox 18.85,72.75,19.35,73.20  --output mumbai/rail.json
+    python3 rail.py --cdn-city mumbai       --overpass-bbox 18.76,72.75,19.65,73.48  --output mumbai/rail.json
     python3 rail.py --cdn-city delhi        --output delhi/rail.json
     python3 rail.py --cdn-city chennai      --overpass-bbox 12.75,80.0,13.4,80.35    --output chennai/rail.json
     python3 rail.py --cdn-city pune         --output pune/rail.json
-    python3 rail.py --cdn-city hyderabad    --output telangana/rail.json
+    python3 rail.py --cdn-city hyderabad    --overpass-bbox 17.14,78.18,17.65,78.71  --output telangana/rail.json
     python3 rail.py --cdn-city ahmedabad    --output ahmedabad/rail.json
     python3 rail.py --cdn-city kochi        --output kochi/rail.json
     python3 rail.py --cdn-city indore       --output indore/rail.json
@@ -31,7 +31,7 @@ import urllib.request
 CDN_BASE          = 'https://cdn.organicmaps.app/subway'
 OVERPASS_API      = 'https://overpass-api.de/api/interpreter'
 INTERCHANGE_COLOR = '#ff2600'
-THRESHOLD         = 0.003  # degrees (~300 m) for line proximity
+THRESHOLD         = 0.005  # degrees (~500 m) for line proximity
 
 COLOR_SUBSTITUTIONS = {
     '#ffff00': '#FFD700',  # yellow → gold
@@ -45,30 +45,6 @@ LINE_COLOR_OVERRIDES = [
     (r'\bMonorail\b', '#56C8D8'),  # Mumbai Monorail: Icy Blue (distinct from Aqua Line)
 ]
 
-# (word-boundary regex, hex color) matched case-insensitively against OSM route name only.
-# Use specific line-name phrases (e.g. "Central Line") to avoid false positives from
-# station names like "Chennai Central" or "Mumbai Central" appearing in route names.
-COMMUTER_LINE_COLORS = [
-    (r'\bCentral\s+(Line|Railway)\b', '#10a038'),  # Mumbai Central Line
-    (r'\bHarbour\s+(Line|Railway)\b', '#303888'),  # Mumbai Harbour Line
-    (r'\bWestern\s+(Line|Railway)\b', '#e05838'),  # Mumbai Western Line
-    (r'\bNorth\b',                    '#1565C0'),  # Chennai Suburban North
-    (r'\bWest\b',                     '#C62828'),  # Chennai Suburban West
-    (r'\bSouth\b',                    '#2E7D32'),  # Chennai Suburban South
-]
-
-# (word-boundary regex, hex color) matched case-insensitively against OSM route name,
-# from, AND to tags. Terminal station names unambiguously identify the line even when
-# the route relation name omits the line name.
-COMMUTER_TERMINAL_COLORS = [
-    (r'\bChurchgate\b',                                    '#e05838'),  # Mumbai Western south terminus
-    (r'\b(Virar|Dahanu)\b',                                '#e05838'),  # Mumbai Western north termini
-    (r'\b(Ambivli|Kasara|Karjat)\b',                       '#10a038'),  # Mumbai Central east termini
-    (r'\bUran\b',                                          '#303888'),  # Mumbai Harbour east terminus
-    (r'\b(Tiruninravur|Thi?ruvallur|Arakonam|Arakkonam)\b',      '#C62828'),  # Chennai West suburban termini
-    (r'\b(Kavaraipettai|Kavaraippettai|Ponneri|Gummidipoondi)\b', '#1565C0'),  # Chennai North suburban termini
-    (r'\b(Chengalpattu|Tambaram)\b',                       '#2E7D32'),  # Chennai South suburban termini
-]
 COMMUTER_DEFAULT = '#795548'
 
 
@@ -118,26 +94,11 @@ def substitute_color(color: str) -> str:
     return COLOR_SUBSTITUTIONS.get(color.lower(), color)
 
 
-def _route_color(name: str, osm_color: str | None, from_: str = '', to: str = '') -> str:
-    for pattern, color in COMMUTER_LINE_COLORS:
-        if re.search(pattern, name, re.IGNORECASE):
-            return color
-    combined = ' '.join(filter(None, [name, from_, to]))
-    for pattern, color in COMMUTER_TERMINAL_COLORS:
-        if re.search(pattern, combined, re.IGNORECASE):
-            return color
-    if osm_color:
-        c = osm_color if osm_color.startswith('#') else f'#{osm_color}'
-        return substitute_color(c)
-    return COMMUTER_DEFAULT
-
-
-def _station_name_color(name: str) -> str | None:
-    """Return a line color for a station identified by its own name, or None."""
-    for pattern, color in COMMUTER_TERMINAL_COLORS:
-        if re.search(pattern, name, re.IGNORECASE):
-            return color
-    return None
+def _route_color(osm_color: str | None) -> str:
+    if not osm_color:
+        return COMMUTER_DEFAULT
+    c = osm_color if osm_color.startswith('#') else f'#{osm_color}'
+    return substitute_color(c)
 
 
 # ---------------------------------------------------------------------------
@@ -166,22 +127,22 @@ def _nearest_line_color(px: float, py: float, lines: list) -> str:
     return COMMUTER_DEFAULT
 
 
+def _cdn_mode(ref: str, name: str) -> str:
+    if ref.lower().startswith('mono') or 'monorail' in name.lower():
+        return 'monorail'
+    return 'metro'
+
+
 # ---------------------------------------------------------------------------
 # Overpass fetchers
 # ---------------------------------------------------------------------------
 
 def _fetch_way_colors(bbox: str) -> tuple[dict[int, set[str]], dict[int, str]]:
-    """Return (way_colors, stop_colors) from identifiable commuter/suburban rail route relations.
-
-    Fetches all train/railway route relations in the bbox, then filters to only
-    those whose name, from, or to tags match a known line pattern. This avoids
-    relying on the service tag (which is inconsistently applied) while still
-    ignoring unidentifiable intercity/freight routes.
+    """Return (way_colors, stop_colors) from OSM colour-tagged commuter rail route relations.
 
     way_colors: {way_id: set_of_colors} — used to color track segments by proximity.
     stop_colors: {node_id: color} — used to directly color station nodes that are
-    explicit stop members of an identified route relation. This handles routes whose
-    OSM relations list only stop nodes (no track way members).
+    explicit stop members of a colour-tagged route relation.
     """
     elements = _overpass(f'''[out:json][timeout:90];
 (relation["route"~"^(train|railway|commuter)$"]({bbox}););
@@ -203,9 +164,9 @@ out;''')
                 re.search(r'\bFreight\b|\bGoods\b', name, re.IGNORECASE) or
                 re.search(r'long.?distance|freight', service, re.IGNORECASE)):
             continue
-        color = _route_color(name, tags.get('colour') or tags.get('color'), from_, to)
+        color = _route_color(tags.get('colour') or tags.get('color'))
         if color == COMMUTER_DEFAULT:
-            continue  # Skip routes we can't identify by name or terminal
+            continue  # Skip routes without an OSM colour tag
         matched += 1
         print(f'    {name or "(unnamed)"}: {color}')
         for m in rel.get('members', []):
@@ -219,71 +180,211 @@ out;''')
     return way_colors, stop_colors
 
 
-def _seed_terminal_stop_colors(
-    bbox: str,
-    stop_colors: dict[int, str],
-    terminal_coords: dict[int, tuple[float, float]] | None = None,
-) -> None:
-    """Seed stop_colors from terminal station names for lines lacking route relations.
 
-    Queries all named station/halt nodes in the bbox and assigns a line color to
-    any node whose name matches COMMUTER_TERMINAL_COLORS but isn't already in
-    stop_colors.  These seeded nodes are later used by _fetch_tracks to bootstrap
-    way coloring via proximity + flood-fill, so lines with no OSM route relation
-    (e.g. Chennai Northern Line) still receive the correct color.
+def _assemble_way_coords(way_coords_list: list) -> list:
+    """Greedily chain OSM way coordinate sequences into one ordered LineString.
 
-    terminal_coords receives the coordinates of newly seeded nodes so that
-    _fetch_tracks can do a proximity-based seed when the station node is not
-    geometrically on the track way's node list.
+    Reverses individual ways as needed so each way's first point connects to
+    the previous way's last point.  Gaps (non-connecting consecutive ways) are
+    bridged by appending without a link — the dedup/splice logic downstream
+    tolerates approximate geometry.
     """
-    elements = _overpass(
-        f'[out:json][timeout:30];'
-        f'node["railway"~"station|halt"]["name"]({bbox});out body;'
-    )
-    seeded = 0
-    for e in elements:
-        nid = e['id']
-        if nid in stop_colors:
+    CONNECT_TOL = 0.001  # ~100 m
+    if not way_coords_list:
+        return []
+    result = list(way_coords_list[0])
+    for coords in way_coords_list[1:]:
+        if not coords:
             continue
-        name = e.get('tags', {}).get('name', '')
-        color = _station_name_color(name)
-        if color:
-            stop_colors[nid] = color
-            if terminal_coords is not None:
-                terminal_coords[nid] = (e['lat'], e['lon'])
-            seeded += 1
-    if seeded:
-        print(f'  {seeded} stop(s) seeded from terminal station names')
+        prev = result[-1]
+        if math.hypot(prev[0] - coords[0][0], prev[1] - coords[0][1]) <= CONNECT_TOL:
+            result.extend(coords[1:])
+        elif math.hypot(prev[0] - coords[-1][0], prev[1] - coords[-1][1]) <= CONNECT_TOL:
+            result.extend(list(reversed(coords))[1:])
+        else:
+            result.extend(coords)  # gap — bridge without a link point
+    return result
+
+
+def _split_at_junction(coords: list, label: str = '') -> list[list]:  # label used only for debug
+    """Split assembled paths that loop back or traverse a Y-junction.
+
+    OSM route relations sometimes include track ways for both directions of
+    travel, producing a path that either loops back to the origin (classic
+    out-and-back) or traverses both arms of a Y-junction through the shared
+    stem.  In both cases the shared section would render as double tracks.
+
+    For loops (start ≈ end): trim at the apex (farthest from start).
+    For Y-junctions: find the candidate split point T (maximises
+    min(dist_to_start, dist_to_end)) and only split if the second half
+    actually revisits the first half's geographic area — confirming genuine
+    track doubling rather than a simple V-shaped bend in the route.
+    """
+    if len(coords) < 20:
+        return [coords]
+
+    start, end = coords[0], coords[-1]
+    d_total = math.hypot(end[0] - start[0], end[1] - start[1])
+
+    if d_total < 0.01:
+        # Loop: start ≈ end.  Find apex (max dist from start) and trim there.
+        best_val, best_idx = 0, 0
+        for i, pt in enumerate(coords):
+            d = math.hypot(pt[0] - start[0], pt[1] - start[1])
+            if d > best_val:
+                best_val, best_idx = d, i
+        if best_idx > 5 and best_idx < len(coords) - 5:
+            return [coords[: best_idx + 1]]
+        return [coords]
+
+    # Y-junction: find point maximising min(dist_to_start, dist_to_end)
+    best_val, best_idx = 0, 0
+    for i, pt in enumerate(coords):
+        val = min(
+            math.hypot(pt[0] - start[0], pt[1] - start[1]),
+            math.hypot(pt[0] - end[0], pt[1] - end[1]),
+        )
+        if val > best_val:
+            best_val, best_idx = val, i
+
+    ratio = best_val / d_total
+    inner = 0.1 < best_idx / len(coords) < 0.9
+    if not (ratio > 0.6 and inner):
+        return [coords]
+
+    # Verify genuine track doubling: check if the INTERIOR of the second half
+    # revisits the interior of the first half.  Sample points well away from
+    # the junction so junction-area tracks don't create a false positive.
+    # A simple V-shaped bend (Thane→Vashi→Panvel) has no interior overlap;
+    # a Y-junction traversal (Panvel→CSMT→Goregaon) backtracks through the stem.
+    OVERLAP_PROX = 0.003   # ~300 m — wide enough to catch parallel tracks
+    MIN_OVERLAP = 3         # need at least this many sampled overlapping points
+    SKIP = 20               # skip this many points near the junction on each side
+    pre_junction = coords[: best_idx - SKIP : 5]    # interior of first half
+    post_junction = coords[best_idx + SKIP :: 5]    # interior of second half
+    if len(pre_junction) < 3 or len(post_junction) < 3:
+        return [coords]
+    overlap = sum(
+        1
+        for pt in post_junction
+        if any(
+            math.hypot(pt[0] - fp[0], pt[1] - fp[1]) < OVERLAP_PROX
+            for fp in pre_junction
+        )
+    )
+    if overlap < MIN_OVERLAP:
+        return [coords]
+
+    return [coords[: best_idx + 1], coords[best_idx:]]
+
+
+def _fetch_route_lines(bbox: str) -> tuple[list, set[int], list[dict], dict[int, set[str]]]:
+    """Assemble named, colour-tagged OSM route relations into GeoJSON LineStrings.
+
+    Queries all train/railway/commuter route relations that carry a 'colour'
+    tag in the bbox (covers any network whose OSM editors have set line
+    colours — e.g. Mumbai Suburban Railway, future extensions, new services).
+    Each relation's member ways are assembled in order into a LineString with
+    'name' and 'stroke' properties so deduplicate_lines can merge slow/fast
+    variants and splice branches automatically.
+
+    Returns (features, assembled_way_ids, route_stop_nodes, node_route_colors).
+    assembled_way_ids lets _fetch_tracks skip re-drawing those ways.
+    node_route_colors maps each stop node ID to the set of distinct line colors
+    it appears in — used by _fetch_stations for data-driven interchange detection.
+    """
+    elements = _overpass(f'''[out:json][timeout:120];
+(relation["route"~"^(train|railway|commuter)$"]["colour"]({bbox});)->.rels;
+.rels out body;
+way(r.rels)["railway"~"^(rail|light_rail|monorail|narrow_gauge|tram)$"];
+out body geom;
+node(r.rels)["name"];
+out body;''')
+
+    relations = [e for e in elements if e['type'] == 'relation']
+    way_geom: dict[int, list] = {
+        e['id']: [[n['lon'], n['lat']] for n in e['geometry']]
+        for e in elements if e['type'] == 'way' and 'geometry' in e
+    }
+    # Stop-position nodes from all route relations (railway=stop).
+    # route_stop_nodes carries full data (id, lon, lat, name) so _fetch_stations
+    # can (a) proximity-filter railway=station nodes, and (b) fall back to the
+    # stop_position itself for stations that have no railway=station node in OSM.
+    all_member_node_ids: set[int] = set()
+    for rel in relations:
+        all_member_node_ids.update(
+            m['ref'] for m in rel.get('members', []) if m['type'] == 'node'
+        )
+    node_lookup: dict[int, dict] = {
+        e['id']: e for e in elements if e['type'] == 'node' and e['id'] in all_member_node_ids
+    }
+    route_stop_nodes: list[dict] = [
+        {'id': e['id'], 'lon': e['lon'], 'lat': e['lat'],
+         'name': e.get('tags', {}).get('name', '')}
+        for e in node_lookup.values()
+    ]
+    print(f'  {len(relations)} colour-tagged rail route relations, {len(route_stop_nodes)} stop positions')
+
+    features: list = []
+    assembled_way_ids: set[int] = set()
+    node_route_colors: dict[int, set[str]] = {}
+    matched = 0
+
+    for rel in relations:
+        tags = rel.get('tags', {})
+        name = tags.get('name', '')
+        from_ = tags.get('from', '')
+        to = tags.get('to', '')
+        service = tags.get('service', '')
+
+        if (re.search(r'\b\d{5}\b', f'{name} {from_} {to}') or
+                re.search(r'\bFreight\b|\bGoods\b', name, re.IGNORECASE) or
+                re.search(r'long.?distance|freight', service, re.IGNORECASE)):
+            continue
+
+        stroke = _route_color(tags.get('colour') or tags.get('color'))
+        if stroke == COMMUTER_DEFAULT:
+            continue
+
+        member_node_ids = [m['ref'] for m in rel.get('members', []) if m['type'] == 'node']
+        for nid in member_node_ids:
+            if nid in all_member_node_ids:
+                node_route_colors.setdefault(nid, set()).add(stroke)
+
+        member_wids = [m['ref'] for m in rel.get('members', []) if m['type'] == 'way']
+        coords = _assemble_way_coords([way_geom[wid] for wid in member_wids if wid in way_geom])
+        if len(coords) < 2:
+            continue
+
+        features.append({
+            'type': 'Feature',
+            'properties': {'name': name, 'stroke': stroke},
+            'geometry': {'type': 'LineString', 'coordinates': coords},
+        })
+        assembled_way_ids.update(wid for wid in member_wids if wid in way_geom)
+        matched += 1
+        print(f'    {name or "(unnamed)"}: {stroke}')
+
+    print(f'  {matched} route lines assembled')
+    return features, assembled_way_ids, route_stop_nodes, node_route_colors
 
 
 def _fetch_tracks(
     bbox: str,
     way_colors: dict[int, set[str]],
     stop_colors: dict[int, str] | None = None,
-    terminal_coords: dict[int, tuple[float, float]] | None = None,
+    exclude_way_ids: set[int] | None = None,
 ) -> tuple[list, list]:
     """Return (line_features, commuter_lines) for railway tracks in bbox.
 
-    Uses node IDs to:
-      1. Seed way colors from stop_colors (station nodes that lie on track ways).
-      2. Proximity-seed from terminal_coords for stations that are near but not
-         geometrically on the track centerline (tighter 100 m threshold to avoid
-         spilling across adjacent lines at junctions).
-      3. Flood-fill identified colors to adjacent connected ways, stopping at
-         junctions where two different identified colors meet.
-
-    commuter_lines only contains identified (non-default) segments; default-colored
-    ways are excluded so that _nearest_line_color never lets an unidentified brown
-    segment shadow a nearby identified colored segment.
+    Seeds way colors from stop_colors (station nodes on track ways), then
+    flood-fills identified colors to adjacent connected ways, stopping at
+    junctions where two different identified colors meet.
     """
-    # ~100 m — tighter than THRESHOLD to avoid cross-line spill at junctions
-    SEED_PROXIMITY = 0.001
-
     elements = _overpass(
         f'[out:json][timeout:60];way["railway"="rail"][!"service"]({bbox});out body geom;'
     )
 
-    # Build node-adjacency index and cache per-way data
     node_to_ways: dict[int, list[int]] = {}
     way_nodes: dict[int, list[int]] = {}
     way_geom: dict[int, list] = {}
@@ -298,48 +399,12 @@ def _fetch_tracks(
             node_to_ways.setdefault(nid, []).append(wid)
 
     # Seed: exact node-ID match (station node sits on a track way node)
-    terminal_seeded_ways: set[int] = set()
     if stop_colors:
         for nid, color in stop_colors.items():
             for wid in node_to_ways.get(nid, []):
                 way_colors.setdefault(wid, set()).add(color)
-                if terminal_coords and nid in terminal_coords:
-                    terminal_seeded_ways.add(wid)
 
-    # Seed: proximity-based (station node is near but offset from the track)
-    if terminal_coords and stop_colors:
-        for nid, (lat, lon) in terminal_coords.items():
-            color = stop_colors[nid]
-            for wid, coords in way_geom.items():
-                if _dist_to_line(lon, lat, coords) <= SEED_PROXIMITY:
-                    way_colors.setdefault(wid, set()).add(color)
-                    terminal_seeded_ways.add(wid)
-
-    # Flood-fill Phase 1: propagate only from terminal-seeded ways.
-    # Route-relation ways already in way_colors are treated as implicit barriers
-    # because they're skipped by the "if wid in way_colors: continue" guard,
-    # preventing the route-relation wavefront from racing ahead and claiming
-    # track ways that belong to lines with no OSM route relation.
-    terminal_reachable = set(terminal_seeded_ways)
-    changed = True
-    while changed:
-        changed = False
-        for wid in way_nodes:
-            if wid in way_colors:
-                continue
-            adj_colors: set[str] = set()
-            for nid in way_nodes[wid]:
-                for adj_wid in node_to_ways.get(nid, []):
-                    if adj_wid != wid and adj_wid in terminal_reachable:
-                        adj_colors |= way_colors.get(adj_wid, set())
-            non_default = adj_colors - {COMMUTER_DEFAULT}
-            if len(non_default) == 1:
-                way_colors[wid] = non_default
-                terminal_reachable.add(wid)
-                changed = True
-
-    # Flood-fill Phase 2: propagate from all seeded ways (fills gaps left after
-    # Phase 1, e.g. route-relation lines whose ways aren't fully listed in OSM).
+    # Flood-fill: propagate colors to adjacent uncolored ways
     changed = True
     while changed:
         changed = False
@@ -362,11 +427,15 @@ def _fetch_tracks(
         if len(coords) < 2:
             continue
         for color in (way_colors.get(wid) or {COMMUTER_DEFAULT}):
-            features.append({
-                'type': 'Feature',
-                'properties': {'stroke': color},
-                'geometry': {'type': 'LineString', 'coordinates': coords},
-            })
+            # Ways already covered by a named route LineString are kept in
+            # commuter_lines for station proximity colouring but not rendered
+            # again as raw segments (avoids double-drawing).
+            if not (exclude_way_ids and wid in exclude_way_ids):
+                features.append({
+                    'type': 'Feature',
+                    'properties': {'stroke': color},
+                    'geometry': {'type': 'LineString', 'coordinates': coords},
+                })
             if color != COMMUTER_DEFAULT:
                 commuter_lines.append((coords, color))
     print(f'  {len(features)} track segments')
@@ -452,52 +521,342 @@ def _fetch_stations(
     commuter_lines: list,
     interchange_ids: set[int],
     stop_colors: dict[int, str] | None = None,
+    route_stop_nodes: list[dict] | None = None,
+    node_route_colors: dict[int, set[str]] | None = None,
 ) -> list:
-    """Fetch named railway stations; resolve color and interchange status."""
-    elements = _overpass(
-        f'[out:json][timeout:60];'
-        f'node["railway"~"station|halt"]["name"]["station"!="subway"]({bbox});out body;'
-    )
+    """Resolve named stations for commuter rail.
+
+    When route_stop_nodes is provided the function uses those nodes (direct
+    named members of colour-tagged route relations) as the authoritative station
+    set — no separate Overpass query is needed.  Deduplication by name handles
+    multiple route variants (slow/fast) sharing the same stop.  Falls back to a
+    bbox railway=station|halt query for cities with no colour-tagged relations.
+    """
+    # Build name → list[node] index so we can detect interchanges where two lines
+    # use different OSM nodes at the same physical station (same name, nearby).
+    name_nodes: dict[str, list[dict]] = {}
+    if route_stop_nodes:
+        for s in route_stop_nodes:
+            if s['name']:
+                name_nodes.setdefault(s['name'], []).append(s)
+
+    def _is_interchange(nid: int, lon: float, lat: float, name: str) -> bool:
+        if nid in interchange_ids:
+            return True
+        # Primary: node appears in 2+ route relations with distinct colors.
+        if node_route_colors:
+            colors = node_route_colors.get(nid, set()) - {COMMUTER_DEFAULT}
+            if len(colors) > 1:
+                return True
+        # Secondary: different OSM nodes with same name and different colors
+        # within ~300 m (~0.003°) — covers stations where each line has its own node.
+        if node_route_colors and name in name_nodes:
+            same_name = name_nodes[name]
+            if len(same_name) > 1:
+                node_colors_here = {
+                    c
+                    for s in same_name
+                    for c in (node_route_colors.get(s['id'], set()) - {COMMUTER_DEFAULT})
+                    if math.hypot(s['lon'] - lon, s['lat'] - lat) <= 0.003
+                }
+                if len(node_colors_here) > 1:
+                    return True
+        return False
+
+    def _resolve_color(nid: int, lon: float, lat: float, name: str) -> dict:
+        if _is_interchange(nid, lon, lat, name):
+            return {'name': name, 'station-color': INTERCHANGE_COLOR, 'interchange': True}
+        if stop_colors and nid in stop_colors:
+            return {'name': name, 'station-color': stop_colors[nid]}
+        # Fallback: proximity to line geometry (used when node_route_colors unavailable).
+        nearby = {c for coords, c in commuter_lines
+                  if _dist_to_line(lon, lat, coords) <= THRESHOLD}
+        nearby.discard(COMMUTER_DEFAULT)
+        color = next(iter(nearby)) if nearby else COMMUTER_DEFAULT
+        return {'name': name, 'station-color': color}
+
     features = []
-    for e in elements:
-        name = e.get('tags', {}).get('name')
-        if not name:
-            continue
-        px, py = e['lon'], e['lat']
-        if e['id'] in interchange_ids:
-            props = {'name': name, 'station-color': INTERCHANGE_COLOR, 'interchange': True}
-        elif stop_colors and e['id'] in stop_colors:
-            props = {'name': name, 'station-color': stop_colors[e['id']]}
-        else:
-            color = _nearest_line_color(px, py, commuter_lines)
-            if color == COMMUTER_DEFAULT:
-                color = _station_name_color(name) or color
-            props = {'name': name, 'station-color': color}
-        features.append({
-            'type': 'Feature',
-            'properties': props,
-            'geometry': {'type': 'Point', 'coordinates': [px, py]},
-        })
+
+    if route_stop_nodes:
+        # Primary path: emit named member nodes directly, deduplicated by name.
+        seen_names: set[str] = set()
+        for s in route_stop_nodes:
+            if not s['name'] or s['name'] in seen_names:
+                continue
+            seen_names.add(s['name'])
+            px, py = s['lon'], s['lat']
+            features.append({
+                'type': 'Feature',
+                'properties': _resolve_color(s['id'], px, py, s['name']),
+                'geometry': {'type': 'Point', 'coordinates': [px, py]},
+            })
+    else:
+        # Fallback for cities without colour-tagged route relations.
+        elements = _overpass(
+            f'[out:json][timeout:60];'
+            f'node["railway"~"station|halt"]["name"]["station"!="subway"]({bbox});out body;'
+        )
+        for e in elements:
+            name = e.get('tags', {}).get('name')
+            if not name:
+                continue
+            px, py = e['lon'], e['lat']
+            features.append({
+                'type': 'Feature',
+                'properties': _resolve_color(e['id'], px, py, name),
+                'geometry': {'type': 'Point', 'coordinates': [px, py]},
+            })
+
     print(f'  {len(features)} named stations')
     return features
 
 
 def fetch_overpass_commuter_rail(bbox: str) -> list:
     print(f'Querying Overpass for commuter rail ({bbox}) ...')
+    # Named route LineStrings (one per service, colour-tagged OSM relations).
+    # These go through deduplicate_lines later to merge slow/fast variants and
+    # splice branches — the assembled_way_ids are excluded from raw track output.
+    route_features, assembled_way_ids, route_stop_nodes, node_route_colors = _fetch_route_lines(bbox)
     way_colors, stop_colors = _fetch_way_colors(bbox)
-    terminal_coords: dict[int, tuple[float, float]] = {}
-    _seed_terminal_stop_colors(bbox, stop_colors, terminal_coords)
-    track_features, commuter_lines = _fetch_tracks(bbox, way_colors, stop_colors, terminal_coords)
+    _, commuter_lines = _fetch_tracks(bbox, way_colors, stop_colors, assembled_way_ids)
+    # Add named route geometries to commuter_lines for station proximity coloring.
+    for f in route_features:
+        stroke = f['properties'].get('stroke', '')
+        if stroke != COMMUTER_DEFAULT:
+            commuter_lines.append((f['geometry']['coordinates'], stroke))
     interchange_ids = _fetch_interchange_nodes(bbox, stop_colors)
-    return track_features + _fetch_stations(bbox, commuter_lines, interchange_ids, stop_colors)
+    return route_features + _fetch_stations(
+        bbox, commuter_lines, interchange_ids, stop_colors, route_stop_nodes, node_route_colors,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Post-processing
 # ---------------------------------------------------------------------------
 
+def deduplicate_lines(features: list) -> list:
+    """Deduplicate CDN metro LineStrings using full-path geometry and color.
+
+    Groups same-color named LineStrings, then iteratively applies three rules:
+
+    1. **Reverse-direction pairs** — both endpoints are swapped (a[0] ≈ b[-1]
+       AND a[-1] ≈ b[0]): remove the feature with fewer coordinate points.
+
+    2. **Branch/spur pairs** — exactly one endpoint is shared AND 5–90 % of
+       the path is geometrically shared (the lines share a common trunk but
+       diverge): splice at the junction into one LineString preserving both
+       termini.  Lines sharing only a terminal hub with 0 % path overlap (e.g.
+       three separate metro lines converging at one station) are left alone.
+
+    3. **Near-subset pairs** — ≥ 90 % of one line lies within ~30 m of the
+       other: remove the more-contained line (it adds no new territory).
+
+    Commuter-rail features (no 'name' property) are passed through unchanged.
+    """
+    PROXIMITY = 0.0003    # ~30 m — point-to-polyline closeness
+    ENDPOINT_TOL = 0.002  # ~200 m — station-level endpoint match
+    SUBSET_FRAC = 0.80    # one-directional overlap fraction → near-subset
+    MIN_SHARED = 0.05     # minimum shared-path fraction needed to attempt a splice
+
+    def _frac_close(ca, cb):
+        if len(ca) < 2:
+            return 0.0
+        return sum(1 for p in ca if _dist_to_line(p[0], p[1], cb) <= PROXIMITY) / len(ca)
+
+    def _ep(p, q):
+        return math.hypot(p[0] - q[0], p[1] - q[1]) <= ENDPOINT_TOL
+
+    def _splice_coords(ca, cb, frac_ab, frac_ba):
+        """Concatenate ca and cb at their single shared endpoint.
+
+        Guards (returns None if any fail):
+        - Exactly one endpoint pair must be close (2 shared = reverse pair / loop).
+        - max(frac_ab, frac_ba) >= MIN_SHARED: the lines must share actual path,
+          not merely terminate at the same hub (e.g. three separate metro lines
+          converging at one station but running completely different corridors).
+        - max(frac_ab, frac_ba) < SUBSET_FRAC: if either line is nearly entirely
+          inside the other it is a near-subset — let the subset-removal rule
+          handle it rather than creating a back-tracking splice.
+        - The resulting spliced path must not itself be a Y-junction backtrack
+          (i.e. _split_at_junction must not want to re-split it), which would
+          indicate two arms of the same junction being incorrectly re-joined.
+        """
+        ends = (
+            _ep(ca[-1], cb[0]),
+            _ep(ca[-1], cb[-1]),
+            _ep(ca[0],  cb[0]),
+            _ep(ca[0],  cb[-1]),
+        )
+        if sum(ends) != 1:
+            return None
+        shared = max(frac_ab, frac_ba)
+        if shared < MIN_SHARED or shared >= SUBSET_FRAC:
+            return None
+        if ends[0]:
+            candidate = ca + cb[1:]
+        elif ends[1]:
+            candidate = ca + list(reversed(cb))[1:]
+        elif ends[2]:
+            candidate = list(reversed(ca)) + cb[1:]
+        else:
+            candidate = cb + ca[1:]
+        # Don't splice if the result is a Y-junction backtrack that _split_at_junction
+        # would re-split — that means the two arms cover the same track and should stay
+        # separate (or be resolved by near-subset spur extraction instead).
+        if len(_split_at_junction(candidate)) > 1:
+            return None
+        return candidate
+
+    def _to_spur(trunk, full):
+        """Trim full to just the portion that extends beyond trunk.
+
+        Walks full's coordinates and finds the last point that lies close to
+        trunk — that's the divergence junction.  Returns full[junction:] as
+        the spur, or full[:junction+1] if trunk occupies the far end of full.
+        Returns None when no meaningful spur can be extracted (e.g. identical
+        paths or full is exhausted at the junction).
+        """
+        last_close = -1
+        for idx, pt in enumerate(full):
+            if _dist_to_line(pt[0], pt[1], trunk) <= PROXIMITY:
+                last_close = idx
+
+        if last_close < 0:
+            return None
+
+        # Forward spur: full continues past the junction
+        forward = full[last_close:]
+        if len(forward) >= 2:
+            return forward
+
+        # Backward spur: trunk occupies the tail of full, spur is the head
+        first_close = next(
+            (idx for idx, pt in enumerate(full)
+             if _dist_to_line(pt[0], pt[1], trunk) <= PROXIMITY), -1
+        )
+        backward = full[:first_close + 1]
+        if len(backward) >= 2:
+            return backward
+
+        return None
+
+    cdn_lines, other = [], []
+    for f in features:
+        if f['geometry']['type'] == 'LineString' and f['properties'].get('name'):
+            cdn_lines.append(f)
+        else:
+            other.append(f)
+
+    by_color: dict[str, list] = {}
+    for f in cdn_lines:
+        by_color.setdefault(substitute_color(f['properties'].get('stroke', '')), []).append(f)
+
+    deduped: list = []
+    total_removed = total_spliced = 0
+
+    for group in by_color.values():
+        active = list(group)
+
+        # Pass 1: remove reverse-direction pairs (endpoint swap)
+        changed = True
+        while changed:
+            changed = False
+            for i in range(len(active)):
+                for j in range(i + 1, len(active)):
+                    ca = active[i]['geometry']['coordinates']
+                    cb = active[j]['geometry']['coordinates']
+                    if _ep(ca[0], cb[-1]) and _ep(ca[-1], cb[0]):
+                        drop = j if len(ca) >= len(cb) else i
+                        active.pop(drop)
+                        total_removed += 1
+                        changed = True
+                        break
+                if changed:
+                    break
+
+        # Pass 2: splice diverging branches, then remove near-subsets (iterative)
+        changed = True
+        while changed and len(active) > 1:
+            changed = False
+            for i in range(len(active)):
+                for j in range(i + 1, len(active)):
+                    ca = active[i]['geometry']['coordinates']
+                    cb = active[j]['geometry']['coordinates']
+                    frac_ab = _frac_close(ca, cb)
+                    frac_ba = _frac_close(cb, ca)
+
+                    sc = _splice_coords(ca, cb, frac_ab, frac_ba)
+                    if sc is not None:
+                        active[i] = {**active[i], 'geometry': {
+                            'type': 'LineString', 'coordinates': sc}}
+                        active.pop(j)
+                        total_spliced += 1
+                        changed = True
+                        break
+
+                    if max(frac_ab, frac_ba) >= SUBSET_FRAC:
+                        # One line is a near-subset of the other: keep it as the
+                        # shared trunk and trim the longer one to just its unique spur.
+                        if frac_ab >= frac_ba:
+                            trunk, full_idx = ca, j  # ca inside cb
+                            spur = _to_spur(trunk, cb)
+                        else:
+                            trunk, full_idx = cb, i  # cb inside ca
+                            spur = _to_spur(trunk, ca)
+                        if spur:
+                            active[full_idx] = {
+                                **active[full_idx],
+                                'geometry': {'type': 'LineString', 'coordinates': spur},
+                            }
+                        else:
+                            active.pop(full_idx)
+                        total_removed += 1
+                        changed = True
+                        break
+
+                if changed:
+                    break
+
+        deduped.extend(active)
+
+    if total_removed:
+        print(f'  {total_removed} line(s) removed or trimmed to spur')
+    if total_spliced:
+        print(f'  {total_spliced} branch pair(s) spliced at shared junction')
+    return deduped + other
+
+
+def _post_dedup_trim(features: list) -> list:
+    """Split or trim assembled route LineStrings that loop back or cover Y-junctions.
+
+    Called AFTER deduplicate_lines so that spur extraction (which relies on loop
+    trunks having high frac coverage) has already completed.  Loops (e.g. Central
+    Line trunk Kalyan→CSMT→Kalyan) are trimmed to their apex; Y-junction paths
+    (e.g. Harbour Line Panvel→CSMT→Goregaon) are split into two separate features.
+    """
+    result = []
+    for f in features:
+        if f['geometry']['type'] != 'LineString' or not f['properties'].get('name'):
+            result.append(f)
+            continue
+        parts = _split_at_junction(f['geometry']['coordinates'], label=f['properties'].get('name',''))
+        if len(parts) == 1:
+            if len(parts[0]) != len(f['geometry']['coordinates']):
+                result.append({**f, 'geometry': {'type': 'LineString', 'coordinates': parts[0]}})
+            else:
+                result.append(f)
+        else:
+            for part in parts:
+                result.append({**f, 'geometry': {'type': 'LineString', 'coordinates': part}})
+    return result
+
+
 def assign_station_colors(features: list) -> list:
     """Assign station-color to CDN metro stations; pass commuter stations through."""
+    # lines stores (coords, stroke, line_key) where line_key is the CDN ref (if present)
+    # or the stroke color (for commuter lines without a ref).  Interchange detection
+    # groups nearby lines by line_key so bidirectional variants of the same metro line
+    # (same ref, opposite directions) don't falsely count as two distinct lines.
     lines, result = [], []
     for f in features:
         if f['geometry']['type'] != 'LineString':
@@ -512,25 +871,37 @@ def assign_station_colors(features: list) -> list:
             if re.search(pattern, name, re.IGNORECASE):
                 stroke = override
                 break
-        result.append({**f, 'properties': {**f['properties'], 'stroke': stroke}})
-        lines.append((f['geometry']['coordinates'], stroke))
+        ref = f['properties'].get('ref')
+        if ref:
+            mode = _cdn_mode(ref, name)
+            new_props = {**f['properties'], 'stroke': stroke, 'mode': mode}
+        else:
+            mode = 'rail'
+            new_props = {**f['properties'], 'stroke': stroke, 'mode': mode}
+        result.append({**f, 'properties': new_props})
+        line_key = ref or stroke  # CDN lines have ref; commuter lines use stroke
+        lines.append((f['geometry']['coordinates'], stroke, line_key, mode))
 
     for f in features:
         if f['geometry']['type'] != 'Point' or not f['properties'].get('name'):
             continue
         props = f['properties']
-        if 'station-color' in props:  # commuter rail: already resolved
-            result.append(f)
+        if 'station-color' in props:  # commuter rail: already resolved, tag mode
+            result.append({**f, 'properties': {**props, 'mode': 'rail'}})
             continue
         px, py = f['geometry']['coordinates']
-        nearby = {s for coords, s in lines if _dist_to_line(px, py, coords) <= THRESHOLD}
-        if len(nearby) > 1:
-            color, interchange = INTERCHANGE_COLOR, True
-        elif nearby:
-            color, interchange = next(iter(nearby)), False
+        # Color assignment: pick the nearest line's stroke and inherit its mode.
+        if lines:
+            nearest = min(lines, key=lambda lsrm: _dist_to_line(px, py, lsrm[0]))
+            color = nearest[1]
+            station_mode = nearest[3]
         else:
-            color, interchange = substitute_color(props.get('marker-color', '#797979')), False
-        sp = {'name': props['name'], 'station-color': color}
+            color = substitute_color(props.get('marker-color', '#797979'))
+            station_mode = 'metro'
+        # Interchange detection: trust the CDN pre-mark (marker-color == INTERCHANGE_COLOR)
+        # rather than proximity, which produces false positives for parallel lines.
+        interchange = substitute_color(props.get('marker-color', '')) == INTERCHANGE_COLOR
+        sp = {'name': props['name'], 'station-color': color, 'mode': station_mode}
         if interchange:
             sp['interchange'] = True
         result.append({**f, 'properties': sp})
@@ -545,18 +916,27 @@ def merge_interchanges(features: list) -> list:
             non_ix.append(f)
             continue
         base = re.sub(r'\s*\([^)]*\)', '', f['properties']['name']).strip()
-        groups.setdefault(base, []).append(f['geometry']['coordinates'])
-    return non_ix + [
-        {
+        props = f['properties']
+        entry = groups.setdefault(base, {'pts': [], 'modes': set()})
+        entry['pts'].append(f['geometry']['coordinates'])
+        if 'mode' in props:
+            entry['modes'].add(props['mode'])
+    result = []
+    for name, data in groups.items():
+        pts, modes = data['pts'], data['modes']
+        props = {'name': name, 'station-color': INTERCHANGE_COLOR, 'interchange': True}
+        # If all members share one mode keep it; mixed modes (e.g. metro+rail) omit mode.
+        if len(modes) == 1:
+            props['mode'] = next(iter(modes))
+        result.append({
             'type': 'Feature',
-            'properties': {'name': name, 'station-color': INTERCHANGE_COLOR, 'interchange': True},
+            'properties': props,
             'geometry': {'type': 'Point', 'coordinates': [
                 sum(c[0] for c in pts) / len(pts),
                 sum(c[1] for c in pts) / len(pts),
             ]},
-        }
-        for name, pts in groups.items()
-    ]
+        })
+    return non_ix + result
 
 
 # ---------------------------------------------------------------------------
@@ -575,7 +955,7 @@ def process(cdn_cities: list, output_file: str, overpass_bbox: str | None) -> No
     if overpass_bbox:
         features.extend(fetch_overpass_commuter_rail(overpass_bbox))
 
-    features = merge_interchanges(assign_station_colors(features))
+    features = merge_interchanges(assign_station_colors(_post_dedup_trim(deduplicate_lines(features))))
 
     n_ix = sum(1 for f in features if f['geometry']['type'] == 'Point' and f['properties'].get('interchange'))
     print(f'  {n_ix} interchange stations')
