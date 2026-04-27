@@ -2538,50 +2538,6 @@ const App = () => {
       data: railJSONPath,
     });
 
-    // Rail layer specs
-    const railLineFilter = ['all', ['==', ['geometry-type'], 'LineString'], ['has', 'stroke']];
-    const railLineLayout = { 'line-join': 'round', 'line-cap': 'round' };
-    const railInterchangeFilter = ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'interchange'], true]];
-    const railStationsFilter = ['all', ['==', ['geometry-type'], 'Point'], ['has', 'name'], ['!=', ['get', 'interchange'], true]];
-
-    const railInterchangeLayout = {
-      'icon-image': ['match', ['get', 'mode'], 'metro', 'metro-station', 'monorail', 'monorail-station', 'rail-station'],
-      'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.45, 22, 0.75],
-      'icon-allow-overlap': false,
-      'text-field': ['get', 'name'],
-      'text-font': ['Noto Sans Bold'],
-      'text-size': ['interpolate', ['linear'], ['zoom'], 10, 10, 22, 16],
-      'text-variable-anchor': ['left', 'right', 'top'],
-      'text-radial-offset': 1.1,
-      'text-optional': true,
-    };
-    const railInterchangePaint = {
-      'icon-color': C.text,
-      ...(isDark && { 'icon-halo-color': '#000', 'icon-halo-width': 0.5, 'icon-halo-blur': 1 }),
-      'text-color': C.text,
-      'text-halo-color': C.textHalo,
-      'text-halo-width': C.stationHaloWidth,
-    };
-    const railStationsLayout = {
-      'icon-image': ['match', ['get', 'mode'], 'metro', 'metro-station', 'monorail', 'monorail-station', 'rail-station'],
-      'icon-size': ['interpolate', ['linear'], ['zoom'], 11, 0.3, 22, 0.5],
-      'icon-allow-overlap': false,
-      'text-field': ['get', 'name'],
-      'text-font': ['Noto Sans Bold'],
-      'text-size': ['interpolate', ['linear'], ['zoom'], 11, 10, 22, 16],
-      'text-variable-anchor': ['left', 'right', 'top'],
-      'text-radial-offset': 1.1,
-      'text-optional': true,
-    };
-    const railStationsPaint = {
-      'icon-color': stationIconColor,
-      ...(isDark && { 'icon-halo-color': '#000', 'icon-halo-width': 0.5, 'icon-halo-blur': 1 }),
-      'text-color': stationTextColor,
-      'text-halo-color': C.textHalo,
-      'text-halo-width': C.stationHaloWidth,
-    };
-
-
     setMapLoaded(true);
 
     // Init popover drag-to-snap on mobile
@@ -2838,7 +2794,7 @@ const App = () => {
     const railInterchangeLayout = {
       'icon-image': ['match', ['get', 'mode'], 'metro', 'metro-station', 'monorail', 'monorail-station', 'rail-station'],
       'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.45, 22, 0.75],
-      'icon-allow-overlap': false,
+      'icon-allow-overlap': true,
       'text-field': ['get', 'name'],
       'text-font': ['Noto Sans Bold'],
       'text-size': ['interpolate', ['linear'], ['zoom'], 10, 10, 22, 16],
@@ -2848,8 +2804,10 @@ const App = () => {
     };
     const railInterchangePaint = {
       'icon-color': C.text,
+      'icon-opacity': ['interpolate', ['linear'], ['zoom'], 9, 0, 10, 1],
       ...(isDark && { 'icon-halo-color': '#000', 'icon-halo-width': 0.5, 'icon-halo-blur': 1 }),
       'text-color': C.text,
+      'text-opacity': ['interpolate', ['linear'], ['zoom'], 9, 0, 10, 1],
       'text-halo-color': C.textHalo,
       'text-halo-width': C.stationHaloWidth,
     };
@@ -2866,8 +2824,10 @@ const App = () => {
     };
     const railStationsPaint = {
       'icon-color': stationIconColor,
+      'icon-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0, 11, 1],
       ...(isDark && { 'icon-halo-color': '#000', 'icon-halo-width': 0.5, 'icon-halo-blur': 1 }),
       'text-color': stationTextColor,
+      'text-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0, 11, 1],
       'text-halo-color': C.textHalo,
       'text-halo-width': C.stationHaloWidth,
     };
@@ -2878,7 +2838,7 @@ const App = () => {
       type: 'line',
       source: 'rail',
       filter: railLineFilter,
-      minzoom: 9,
+      minzoom: 8,
       layout: railLineLayout,
       paint: {
         'line-color': ['get', 'stroke'],
@@ -2895,7 +2855,7 @@ const App = () => {
       type: 'line',
       source: 'rail',
       filter: ['all', ...railLineFilter.slice(1), ['==', ['get', 'mode'], 'rail']],
-      minzoom: 9,
+      minzoom: 8,
       layout: { ...railLineLayout, 'line-cap': 'butt' },
       paint: {
         'line-color': ['get', 'stroke'],
@@ -2910,7 +2870,7 @@ const App = () => {
         type: 'line',
         source: 'rail',
         filter: railLineFilter,
-        minzoom: 9,
+        minzoom: 8,
         layout: railLineLayout,
         paint: {
           'line-color': ['match', ['get', 'mode'], 'metro', C.stopCircleBg, 'monorail', '#FFF', ['get', 'stroke']],
@@ -2924,22 +2884,22 @@ const App = () => {
       'rail-path',
     );
     map.addLayer({
-      id: 'rail-stations-interchange',
-      type: 'symbol',
-      source: 'rail',
-      filter: railInterchangeFilter,
-      minzoom: 10,
-      layout: railInterchangeLayout,
-      paint: railInterchangePaint,
-    });
-    map.addLayer({
       id: 'rail-stations',
       type: 'symbol',
       source: 'rail',
       filter: railStationsFilter,
-      minzoom: 11,
+      minzoom: 10,
       layout: railStationsLayout,
       paint: railStationsPaint,
+    });
+    map.addLayer({
+      id: 'rail-stations-interchange',
+      type: 'symbol',
+      source: 'rail',
+      filter: railInterchangeFilter,
+      minzoom: 9,
+      layout: railInterchangeLayout,
+      paint: railInterchangePaint,
     });
 
     // Create stops-highlight source and layers BEFORE setting up event handlers
@@ -3153,15 +3113,36 @@ const App = () => {
       beforeLayerForSelected,
     );
 
-    requestIdleCallback(() => {
-      map.on('mouseenter', 'stops', () => {
-        mapCanvas.style.cursor = 'pointer';
-      });
+    // Cursor and dismiss handlers are lightweight — attach immediately
+    map.on('mouseenter', 'stops', () => {
+      mapCanvas.style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'stops', () => {
+      mapCanvas.style.cursor = '';
+      hideStopTooltip();
+    });
+    map.on('mouseout', hideStopTooltip);
+    map.on('movestart', hideStopTooltip);
+    map.on('mouseenter', 'stops-highlight', () => {
+      mapCanvas.style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'stops-highlight', () => {
+      mapCanvas.style.cursor = '';
+    });
 
-      if (supportsHover) {
+    // Defer the queryRenderedFeatures hover handler until idle (guaranteed within 2s)
+    if (supportsHover) {
+      requestIdleCallback(() => {
         let lastFeature = null;
         // RAF-throttled mousemove handler for smooth 60fps updates
         const handleMouseMove = rafThrottle((e) => {
+          if (map.isMoving() || map.getZoom() >= 16) {
+            if (lastFeature) {
+              lastFeature = null;
+              hideStopTooltip();
+            }
+            return;
+          }
           const { point } = e;
           // Build layers array, only including layers that exist
           const queryLayers = ['stops'].filter((layerId) =>
@@ -3175,7 +3156,7 @@ const App = () => {
             layers: queryLayers,
             validate: false,
           });
-          if (features.length && map.getZoom() < 16 && !map.isMoving()) {
+          if (features.length) {
             if (lastFeature && features[0].id === lastFeature.id) {
               return;
             }
@@ -3192,21 +3173,8 @@ const App = () => {
           }
         });
         map.on('mousemove', handleMouseMove);
-      }
-      map.on('mouseleave', 'stops', () => {
-        mapCanvas.style.cursor = '';
-        hideStopTooltip();
-      });
-      map.on('mouseout', hideStopTooltip);
-      map.on('movestart', hideStopTooltip);
-
-      map.on('mouseenter', 'stops-highlight', () => {
-        mapCanvas.style.cursor = 'pointer';
-      });
-      map.on('mouseleave', 'stops-highlight', () => {
-        mapCanvas.style.cursor = '';
-      });
-    });
+      }, { timeout: 2000 });
+    }
 
     // Transit service routes
     map.addSource('routes', {
@@ -3260,7 +3228,7 @@ const App = () => {
             16,
             -3,
             22,
-            ['*', ['zoom'], -3],
+            -8,
           ],
         },
       },
@@ -3289,7 +3257,7 @@ const App = () => {
             16,
             -3,
             22,
-            ['*', ['zoom'], -3],
+            -8,
           ],
         },
       },
@@ -3328,7 +3296,7 @@ const App = () => {
         },
         paint: {
           'text-color': C.metroPurple,
-          'text-opacity': 0.9,
+          'text-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0, 11, 0.9, 16, 0.9, 18, 0],
           'text-halo-color': C.textHalo,
           'text-halo-width': 2,
         },
@@ -3669,7 +3637,7 @@ const App = () => {
             16,
             -3,
             22,
-            ['*', ['zoom'], -3],
+            -8,
           ],
         },
       },
@@ -3752,7 +3720,7 @@ const App = () => {
       },
       paint: {
         'text-color': C.metroPurple,
-        'text-opacity': 0.8,
+        'text-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0, 11, 0.8, 16, 0.8, 18, 0],
         'text-halo-color': C.textHalo,
         'text-halo-width': 2,
       },
