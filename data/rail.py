@@ -118,6 +118,49 @@ def _dist_to_line(px, py, coords) -> float:
     )
 
 
+def _densify(coords, step):
+    """Return a denser point list so no segment exceeds `step` degrees.
+
+    Interpolated points are computation-only — they must never be written to
+    output JSON, as they add no visual information to the shape.
+    """
+    if len(coords) < 2:
+        return list(coords)
+    out = [coords[0]]
+    for i in range(len(coords) - 1):
+        ax, ay = coords[i][0], coords[i][1]
+        bx, by = coords[i + 1][0], coords[i + 1][1]
+        n = max(1, math.ceil(math.hypot(bx - ax, by - ay) / step))
+        for k in range(1, n):
+            t = k / n
+            out.append([ax + t * (bx - ax), ay + t * (by - ay)])
+        out.append(coords[i + 1])
+    return out
+
+
+def _densify_mapped(coords, step):
+    """Like _densify but also returns orig[d] = index in coords for dense point d.
+
+    For an interpolated point between coords[i] and coords[i+1], orig[d] = i.
+    For coords[i] itself, orig[d] = i.  Use orig to map a dense index back to
+    the nearest original coordinate index for output slicing.
+    """
+    if len(coords) < 2:
+        return list(coords), list(range(len(coords)))
+    dense, orig = [coords[0]], [0]
+    for i in range(len(coords) - 1):
+        ax, ay = coords[i][0], coords[i][1]
+        bx, by = coords[i + 1][0], coords[i + 1][1]
+        n = max(1, math.ceil(math.hypot(bx - ax, by - ay) / step))
+        for k in range(1, n):
+            t = k / n
+            dense.append([ax + t * (bx - ax), ay + t * (by - ay)])
+            orig.append(i)
+        dense.append(coords[i + 1])
+        orig.append(i + 1)
+    return dense, orig
+
+
 def _nearest_line_color(px: float, py: float, lines: list) -> str:
     nearby = {c for coords, c in lines if _dist_to_line(px, py, coords) <= THRESHOLD}
     if len(nearby) == 1:
@@ -661,7 +704,8 @@ def deduplicate_lines(features: list) -> list:
     def _frac_close(ca, cb):
         if len(ca) < 2:
             return 0.0
-        return sum(1 for p in ca if _dist_to_line(p[0], p[1], cb) <= PROXIMITY) / len(ca)
+        ca_d = _densify(ca, PROXIMITY)
+        return sum(1 for p in ca_d if _dist_to_line(p[0], p[1], cb) <= PROXIMITY) / len(ca_d)
 
     def _ep(p, q):
         return math.hypot(p[0] - q[0], p[1] - q[1]) <= ENDPOINT_TOL
@@ -710,34 +754,38 @@ def deduplicate_lines(features: list) -> list:
     def _to_spur(trunk, full):
         """Trim full to just the portion that extends beyond trunk.
 
-        Walks full's coordinates and finds the last point that lies close to
-        trunk — that's the divergence junction.  Returns full[junction:] as
-        the spur, or full[:junction+1] if trunk occupies the far end of full.
-        Returns None when no meaningful spur can be extracted (e.g. identical
-        paths or full is exhausted at the junction).
+        Uses a densified scan so sparse segments don't skew the divergence
+        point.  The returned spur is always a slice of the original `full`
+        coordinates — no interpolated points are included in the output.
         """
-        last_close = -1
-        for idx, pt in enumerate(full):
+        full_d, full_orig = _densify_mapped(full, PROXIMITY)
+
+        last_close_d = -1
+        for d, pt in enumerate(full_d):
             if _dist_to_line(pt[0], pt[1], trunk) <= PROXIMITY:
-                last_close = idx
-
-        if last_close < 0:
+                last_close_d = d
+        if last_close_d < 0:
             return None
+        last_close = full_orig[last_close_d]
 
-        # Forward spur: full continues past the junction
-        forward = full[last_close:]
-        if len(forward) >= 2:
-            return forward
+        # Forward spur: shared trunk is a prefix of full.
+        forward = full[max(0, last_close - 1):]
 
-        # Backward spur: trunk occupies the tail of full, spur is the head
-        first_close = next(
-            (idx for idx, pt in enumerate(full)
+        # Backward spur: shared trunk is a suffix of full (convergent lines).
+        first_close_d = next(
+            (d for d, pt in enumerate(full_d)
              if _dist_to_line(pt[0], pt[1], trunk) <= PROXIMITY), -1
         )
-        backward = full[:first_close + 1]
+        first_close = full_orig[first_close_d] if first_close_d >= 0 else -1
+        backward = full[:min(len(full), first_close + 2)] if first_close >= 0 else []
+
+        # Prefer the longer spur — handles both divergent and convergent cases.
+        if len(forward) >= 2 and len(backward) >= 2:
+            return forward if len(forward) >= len(backward) else backward
+        if len(forward) >= 2:
+            return forward
         if len(backward) >= 2:
             return backward
-
         return None
 
     cdn_lines, other = [], []
@@ -751,11 +799,14 @@ def deduplicate_lines(features: list) -> list:
     for f in cdn_lines:
         by_color.setdefault(substitute_color(f['properties'].get('stroke', '')), []).append(f)
 
+    print(f'  Deduplicating {len(cdn_lines)} named lines across {len(by_color)} color group(s)')
+
     deduped: list = []
     total_removed = total_spliced = 0
 
-    for group in by_color.values():
+    for color, group in by_color.items():
         active = list(group)
+        print(f'  [{color}] {len(active)} line(s): {[f["properties"].get("name","?") for f in active]}')
 
         # Pass 1: remove reverse-direction pairs (endpoint swap)
         changed = True
@@ -767,6 +818,8 @@ def deduplicate_lines(features: list) -> list:
                     cb = active[j]['geometry']['coordinates']
                     if _ep(ca[0], cb[-1]) and _ep(ca[-1], cb[0]):
                         drop = j if len(ca) >= len(cb) else i
+                        kept_idx = i if drop == j else j
+                        print(f'    reverse-drop: "{active[drop]["properties"].get("name","?")}" ({len(active[drop]["geometry"]["coordinates"])}pts) → kept "{active[kept_idx]["properties"].get("name","?")}"')
                         active.pop(drop)
                         total_removed += 1
                         changed = True
@@ -787,6 +840,8 @@ def deduplicate_lines(features: list) -> list:
 
                     sc = _splice_coords(ca, cb, frac_ab, frac_ba)
                     if sc is not None:
+                        na, nb = active[i]['properties'].get('name','?'), active[j]['properties'].get('name','?')
+                        print(f'    splice: "{na}" + "{nb}" → {len(sc)}pts (overlap {frac_ab:.0%}/{frac_ba:.0%})')
                         active[i] = {**active[i], 'geometry': {
                             'type': 'LineString', 'coordinates': sc}}
                         active.pop(j)
@@ -794,29 +849,143 @@ def deduplicate_lines(features: list) -> list:
                         changed = True
                         break
 
-                    if max(frac_ab, frac_ba) >= SUBSET_FRAC:
-                        # One line is a near-subset of the other: keep it as the
-                        # shared trunk and trim the longer one to just its unique spur.
-                        if frac_ab >= frac_ba:
-                            trunk, full_idx = ca, j  # ca inside cb
-                            spur = _to_spur(trunk, cb)
+                    # Compute endpoint matches once; reused by all rules below.
+                    e0 = _ep(ca[-1], cb[0])
+                    e1 = _ep(ca[-1], cb[-1])
+                    e2 = _ep(ca[0],  cb[0])
+                    e3 = _ep(ca[0],  cb[-1])
+                    n_ends = e0 + e1 + e2 + e3
+
+                    # Same-direction parallel: both lines share the same start AND end
+                    # point but take different geographic paths between them.  Keep the
+                    # longer; trim the shared prefix/suffix from the shorter, leaving
+                    # just its unique middle with 1-point buffers at each junction.
+                    if e1 and e2:
+                        if len(ca) >= len(cb):
+                            long_c, short_idx, short_c = ca, j, cb
                         else:
-                            trunk, full_idx = cb, i  # cb inside ca
-                            spur = _to_spur(trunk, ca)
-                        if spur:
-                            active[full_idx] = {
-                                **active[full_idx],
+                            long_c, short_idx, short_c = cb, i, ca
+                        # Densify for accurate proximity scanning; map results
+                        # back to original indices so output stays clean.
+                        short_d, short_orig = _densify_mapped(short_c, PROXIMITY)
+                        # First dense index NOT close to long (scanning forward).
+                        fwd_d = next(
+                            (d for d, pt in enumerate(short_d)
+                             if _dist_to_line(pt[0], pt[1], long_c) > PROXIMITY),
+                            len(short_d),
+                        )
+                        first_div_fwd = short_orig[fwd_d] if fwd_d < len(short_d) else len(short_c)
+                        # Last dense index NOT close to long (scanning backward).
+                        bwd_d = len(short_d) - 1 - next(
+                            (d for d, pt in enumerate(reversed(short_d))
+                             if _dist_to_line(pt[0], pt[1], long_c) > PROXIMITY),
+                            len(short_d),
+                        )
+                        first_div_bwd = short_orig[bwd_d] if bwd_d >= 0 else -1
+                        # Only act when there is a real shared prefix or suffix
+                        # (more than just the coincident endpoint points).
+                        if first_div_fwd > 1 or first_div_bwd < len(short_c) - 2:
+                            sn = active[short_idx]['properties'].get('name', '?')
+                            ln_name = active[i if short_idx == j else j]['properties'].get('name', '?')
+                            if first_div_fwd > first_div_bwd:
+                                # Short is 100% inside long → remove entirely.
+                                print(f'    parallel-remove: "{sn}" fully inside "{ln_name}"')
+                                active.pop(short_idx)
+                            else:
+                                # Keep the unique middle with 1-point buffers.
+                                buf_s = max(0, first_div_fwd - 1)
+                                buf_e = min(len(short_c), first_div_bwd + 2)
+                                unique = short_c[buf_s:buf_e]
+                                if len(unique) >= 2:
+                                    print(f'    parallel-trim: "{sn}" → unique middle {len(unique)}pts (kept "{ln_name}")')
+                                    active[short_idx] = {**active[short_idx], 'geometry': {
+                                        'type': 'LineString', 'coordinates': unique}}
+                                else:
+                                    print(f'    parallel-remove: "{sn}" unique middle too small, removed')
+                                    active.pop(short_idx)
+                            total_removed += 1
+                            changed = True
+                            break
+
+                    if max(frac_ab, frac_ba) >= SUBSET_FRAC:
+                        # Prioritise the longer feature. The shorter (more-contained)
+                        # line is either removed entirely (100% overlap — _to_spur
+                        # returns None) or trimmed to just its unique spur with a
+                        # 1-point buffer at the junction for smooth rendering.
+                        if len(ca) >= len(cb):
+                            long_coords, short_idx, short_coords = ca, j, cb
+                        else:
+                            long_coords, short_idx, short_coords = cb, i, ca
+                        sn = active[short_idx]['properties'].get('name', '?')
+                        ln_name = active[i if short_idx == j else j]['properties'].get('name', '?')
+                        spur = _to_spur(long_coords, short_coords)
+                        # If _to_spur returns the full line (no reduction), the short
+                        # line has no content outside the trunk — remove it entirely.
+                        if spur and len(spur) < len(short_coords):
+                            print(f'    subset-trim: "{sn}" → spur {len(spur)}pts (overlap {frac_ab:.0%}/{frac_ba:.0%}, kept "{ln_name}")')
+                            active[short_idx] = {
+                                **active[short_idx],
                                 'geometry': {'type': 'LineString', 'coordinates': spur},
                             }
                         else:
-                            active.pop(full_idx)
+                            print(f'    subset-remove: "{sn}" fully contained in "{ln_name}" (overlap {frac_ab:.0%}/{frac_ba:.0%})')
+                            active.pop(short_idx)
                         total_removed += 1
                         changed = True
                         break
 
+                    # Y-junction: two lines share exactly one endpoint (common terminus)
+                    # and a meaningful trunk, but splice was rejected because the candidate
+                    # path backtracks.  Keep the longer intact; trim the shorter to its
+                    # unique spur with a 1-point junction buffer.
+                    if n_ends == 1 and max(frac_ab, frac_ba) >= MIN_SHARED:
+                        # Orient both lines so they start from the shared endpoint.
+                        ca_fwd = ca if (e2 or e3) else list(reversed(ca))
+                        cb_fwd = cb if (e0 or e2) else list(reversed(cb))
+                        # Densified scans for accurate divergence-point detection.
+                        ca_fd, ca_forig = _densify_mapped(ca_fwd, PROXIMITY)
+                        cb_fd, cb_forig = _densify_mapped(cb_fwd, PROXIMITY)
+                        # Last dense index still close to the other line → divergence.
+                        div_a_d = max(
+                            (d for d, pt in enumerate(ca_fd)
+                             if _dist_to_line(pt[0], pt[1], cb) <= PROXIMITY),
+                            default=-1,
+                        )
+                        div_b_d = max(
+                            (d for d, pt in enumerate(cb_fd)
+                             if _dist_to_line(pt[0], pt[1], ca) <= PROXIMITY),
+                            default=-1,
+                        )
+                        div_a = ca_forig[div_a_d] if div_a_d >= 0 else -1
+                        div_b = cb_forig[div_b_d] if div_b_d >= 0 else -1
+                        if div_a >= 0 and div_b >= 0:
+                            # Keep the longer feature intact; trim the shorter
+                            # to its unique spur with a 1-point junction buffer.
+                            if len(ca_fwd) >= len(cb_fwd):
+                                # ca is longer → trim cb to spur
+                                spur = cb_fwd[max(0, div_b - 1):]
+                                if len(spur) >= 2:
+                                    print(f'    Y-trim: "{active[j]["properties"].get("name","?")}" → spur {len(spur)}pts (div@{div_b}, kept "{active[i]["properties"].get("name","?")}")')
+                                    active[j] = {**active[j], 'geometry': {
+                                        'type': 'LineString', 'coordinates': spur}}
+                                    total_removed += 1
+                                    changed = True
+                                    break
+                            else:
+                                # cb is longer → trim ca to spur
+                                spur = ca_fwd[max(0, div_a - 1):]
+                                if len(spur) >= 2:
+                                    print(f'    Y-trim: "{active[i]["properties"].get("name","?")}" → spur {len(spur)}pts (div@{div_a}, kept "{active[j]["properties"].get("name","?")}")')
+                                    active[i] = {**active[i], 'geometry': {
+                                        'type': 'LineString', 'coordinates': spur}}
+                                    total_removed += 1
+                                    changed = True
+                                    break
+
                 if changed:
                     break
 
+        print(f'    → {len(active)} line(s) remaining: {[f["properties"].get("name","?") for f in active]}')
         deduped.extend(active)
 
     if total_removed:
