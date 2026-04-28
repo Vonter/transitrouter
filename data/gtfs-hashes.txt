@@ -13,7 +13,7 @@ goa:
 greyhound:
   gtfs.zip: c53b1d46bb80b9edb019332a80c57d7a802626ab19d0a72041609df2a8dd6e89
 hublidharwad:
-  gtfs_compat.zip: 3e5db0cd7e26f33656144b4e9e180e48c8b23c042da8fbd29ffa605800a434cb
+  gtfs_compat.zip: 933fea6aa4269e6a887c457f71e26a86a1497ca12637343ba57b424014ed85bb
 indore:
   gtfs.zip: c7e274726819c29ca9399018fe980ecdd76b2b9d0f60b62a4f9247f841db38cf
 kochi:
