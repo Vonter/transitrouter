@@ -9,7 +9,7 @@ permissions:
   deployments: write
 
 concurrency:
-  group: preview-${{ github.ref }}
+  group: preview
   cancel-in-progress: true
 
 jobs:

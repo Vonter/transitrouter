@@ -197,11 +197,15 @@ a:active {
   background: rgba(0, 0, 0, 0);
   z-index: 100;
   pointer-events: none;
-  transition: background 0.3s ease-in-out;
+  /* pointer-events: none alone is unreliable on iOS Safari fixed elements; visibility: hidden is required */
+  visibility: hidden;
+  transition: background 0.3s ease-in-out, visibility 0s linear 0.3s;
 }
 #city-drawer-overlay.open {
   background: rgba(0, 0, 0, 0.35);
   pointer-events: auto;
+  visibility: visible;
+  transition: background 0.3s ease-in-out, visibility 0s linear 0s;
 }
 #city-drawer {
   position: absolute;
@@ -216,7 +220,9 @@ a:active {
   flex-direction: column;
   overflow-y: auto;
   transform: translateX(-100%);
-  transition: transform 0.3s ease-in-out;
+  /* iOS Safari caches hit regions after transforms; visibility: hidden clears it after slide-out */
+  visibility: hidden;
+  transition: transform 0.3s ease-in-out, visibility 0s linear 0.3s;
   font-size: 0.9em;
   line-height: 1.4;
   padding-top: env(safe-area-inset-top);
@@ -238,6 +244,8 @@ a:active {
 }
 #city-drawer-overlay.open #city-drawer {
   transform: translateX(0);
+  visibility: visible;
+  transition: transform 0.3s ease-in-out, visibility 0s linear 0s;
 }
 .drawer-handle {
   display: none;
