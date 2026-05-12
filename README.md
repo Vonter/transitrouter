@@ -69,19 +69,16 @@ Refer to [DATA.md](DATA.md) for more details on the data sources and processing 
 
 ## TODO
 
-- Bus Diagram
-    - Enhance design and rendering of stop diagrams on `diagram/` page
 - User Experience
     - Show stop suffix in title of arrivals page
     - Navigation flow
     - Typography/styling of elements
-- Extend Support:
-    - CI Pipeline to process all GTFS
     - More cities
 - Release Collaterals:
     - Update styling for OpenFreeMap tiles to resemble original PMTiles
     - New custom assets for TransitRouter
 - Future Goals:
+    - Enhance design and rendering of stop diagrams on `diagram/` page
     - `bus-pois/` page for visualizing POIs accessible by routes passing through the selected stop (POIs by category, distance from stop, etc.)
     - Interchange stops support
     - Multi-operator support

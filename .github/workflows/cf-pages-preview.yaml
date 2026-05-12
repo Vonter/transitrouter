@@ -1,18 +1,23 @@
-name: Deploy to Cloudflare Pages
+name: Deploy to Cloudflare Pages (Preview)
 
 on:
-  workflow_dispatch:
+  push:
+  pull_request:
 
 permissions:
   contents: read
   deployments: write
 
 concurrency:
-  group: production
-  cancel-in-progress: false
+  group: preview-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   deploy:
+    # Only run on parent repository, not on forks
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,4 +42,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=transitrouter --branch=master
+          command: pages deploy dist --project-name=transitrouter --branch=${{ github.head_ref || github.ref_name }}

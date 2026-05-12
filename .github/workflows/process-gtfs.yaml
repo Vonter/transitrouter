@@ -1,0 +1,66 @@
+name: Process GTFS Feeds
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gtfs
+  cancel-in-progress: false
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: data
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: data/requirements.txt
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Process GTFS feeds
+        run: python3 process.py
+
+      - name: Detect changed cities
+        id: detect-changes
+        working-directory: ${{ github.workspace }}
+        run: |
+          cities=$(git status --porcelain | grep ' data/.*/schedule/' | \
+            awk '{print $NF}' | sed 's|^data/||; s|/.*||' | sort -u | tr '\n' ' ')
+          echo "cities=${cities% }" >> $GITHUB_OUTPUT
+          echo "Cities with schedule changes: ${cities:-(none)}"
+
+      - name: Commit processed data
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'Update GTFS data [skip ci]'
+
+      - name: Configure AWS credentials for R2
+        if: steps.detect-changes.outputs.cities != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          aws-region: auto
+
+      - name: Sync schedule data to R2
+        if: steps.detect-changes.outputs.cities != ''
+        run: |
+          for city in ${{ steps.detect-changes.outputs.cities }}; do
+            if [ -d "$city/schedule" ]; then
+              echo "Syncing $city..."
+              aws s3 sync --delete "$city/schedule/" "s3://transitrouter-data/$city/schedule/" \
+                --endpoint-url "${{ secrets.R2_ENDPOINT_URL }}"
+            fi
+          done
