@@ -373,6 +373,7 @@ function StopTimetablePage({ stopId, stopsData, flData }) {
   const [timeLeft, setTimeLeft] = useState(null);
   const [timeDate, setTimeDate] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [servicesData, setServicesData] = useState(null);
 
   const currentStopName = stopFullName(stopsData, stopId);
 
@@ -432,6 +433,10 @@ function StopTimetablePage({ stopId, stopsData, flData }) {
   }, [stopId, flData]);
 
   useEffect(() => {
+    fetchCache(servicesJSONPath, 24 * 60).then(setServicesData).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     const tick = () => {
       const d = new Date();
       setTimeDate(d);
@@ -446,17 +451,37 @@ function StopTimetablePage({ stopId, stopsData, flData }) {
   const hasMultiDay = hasSat || hasSun;
   const rowspan = 1 + (hasSat ? 1 : 0) + (hasSun ? 1 : 0);
 
+  const downstreamStops = useMemo(() => {
+    if (!servicesData || !data.length) return {};
+    const result = {};
+    for (const [svc] of data.map((d) => [d[0]])) {
+      const route = servicesData[svc];
+      if (!route) continue;
+      const stopSet = new Set();
+      for (const [dest, variants] of Object.entries(route)) {
+        if (dest === 'name' || !Array.isArray(variants?.[0])) continue;
+        const stops = variants[0];
+        const idx = stops.indexOf(stopId);
+        if (idx === -1) continue;
+        for (let i = idx + 1; i < stops.length; i++) stopSet.add(stops[i]);
+      }
+      result[svc] = [...stopSet];
+    }
+    return result;
+  }, [servicesData, data, stopId]);
+
   const fuse = useMemo(() => {
     if (!data.length) return null;
     return new Fuse(
       data.map((d) => ({
         service: d[0],
         dest: (destinations[d[0]] || []).map((id) => stopName(stopsData, id)).join(' '),
+        downstream: (downstreamStops[d[0]] || []).map((id) => stopFullName(stopsData, id)).join(' '),
         row: d,
       })),
-      { keys: ['service', 'dest'], threshold: 0.35 },
+      { keys: ['service', 'dest', { name: 'downstream', weight: 0.5 }], threshold: 0.35 },
     );
-  }, [data, destinations, stopsData]);
+  }, [data, destinations, stopsData, downstreamStops]);
 
   const filteredData = useMemo(() => {
     if (!searchQuery || !fuse) return data;
