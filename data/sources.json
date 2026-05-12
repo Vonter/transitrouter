@@ -1,0 +1,18 @@
+{
+  "blr": {
+    "url": "https://github.com/Vonter/bmtc-gtfs/raw/refs/heads/main/gtfs/bmtc.zip",
+    "filename": "gtfs.zip"
+  },
+  "pune": {
+    "url": "https://github.com/croyla/pmpml-gtfs/raw/refs/heads/main/pmpml_gtfs_compat.zip",
+    "filename": "gtfs.zip"
+  },
+  "mumbai": {
+    "url": "https://github.com/croyla/mumbai-gtfs/raw/refs/heads/main/gtfs_compat.zip",
+    "filename": "gtfs_compat.zip"
+  },
+  "ahmedabad": {
+    "url": "https://github.com/croyla/amd-gtfs/raw/refs/heads/main/gtfs_compat.zip",
+    "filename": "gtfs.zip"
+  }
+}

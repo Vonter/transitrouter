@@ -2,6 +2,16 @@ name: Process GTFS Feeds
 
 on:
   workflow_dispatch:
+    inputs:
+      city:
+        description: City
+        required: true
+        type: choice
+        options:
+          - ahmedabad
+          - blr
+          - mumbai
+          - pune
 
 permissions:
   contents: write
@@ -30,7 +40,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Process GTFS feeds
-        run: python3 process.py
+        run: python3 process.py ${{ inputs.city }}
 
       - name: Detect changed cities
         id: detect-changes

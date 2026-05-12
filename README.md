@@ -57,6 +57,14 @@ pnpm run build
 
 This runs the full pipeline: data preparation, Parcel build, and post-build steps (headers generation, static asset copying).
 
+### CI/CD Pipelines
+
+The following are configured as GitHub Actions workflows:
+
+- [Preview deploy](https://github.com/Vonter/transitrouter/actions/workflows/cf-pages-preview.yaml): On every push/PR, build and deploy to a Cloudflare Pages preview URL for the branch or PR. Not applicable for forks.
+- [Production deploy](https://github.com/Vonter/transitrouter/actions/workflows/cf-pages.yaml): On manual trigger, build and deploy to the Cloudflare Pages production URL.
+- [Process GTFS feeds](https://github.com/Vonter/transitrouter/actions/workflows/process-gtfs.yaml): On manual trigger, for the selected city, download the feed configured for the city in [sources.json](data/sources.json), run the processing pipeline, commit the output, and sync schedule data to R2.
+
 ### Notes
 
 - **Service workers** are automatically disabled on localhost so that code changes are reflected immediately without stale caches.

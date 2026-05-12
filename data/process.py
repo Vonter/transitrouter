@@ -6,8 +6,10 @@ Logs during processing are saved to parse.log.
 
 import argparse
 import hashlib
+import json
 import subprocess
 import sys
+import urllib.request
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +24,7 @@ SCRIPTS = [
 
 LOG_FILE = 'parse.log'
 HASH_FILE = 'gtfs-hashes.txt'
+SOURCES_FILE = 'sources.json'
 TIMEOUT = 3600  # 1 hour
 SCRIPT_DIR = Path(__file__).parent
 
@@ -32,6 +35,42 @@ def get_available_cities() -> list[str]:
         item.name for item in SCRIPT_DIR.iterdir()
         if item.is_dir() and not item.name.startswith('.') and list(item.glob('*.zip'))
     )
+
+
+def load_sources() -> dict:
+    """Load GTFS feed sources from sources.json."""
+    sources_path = SCRIPT_DIR / SOURCES_FILE
+    if not sources_path.exists():
+        return {}
+    with open(sources_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def download_feed(city: str, url: str, filename: str) -> bool:
+    """Download a GTFS feed ZIP for a city. Returns True on success."""
+    city_dir = SCRIPT_DIR / city
+    city_dir.mkdir(exist_ok=True)
+    dest = city_dir / filename
+    log_message(f"Downloading {city} GTFS feed...")
+    try:
+        urllib.request.urlretrieve(url, dest)
+        log_message(f"✓ Downloaded {city}: {filename}")
+        return True
+    except Exception as e:
+        log_message(f"✗ Failed to download {city}: {e}")
+        return False
+
+
+def download_feeds(cities: list[str] | None = None) -> list[str]:
+    """Download GTFS feeds for cities listed in sources.json.
+    Returns list of cities that failed to download."""
+    sources = load_sources()
+    if not sources:
+        return []
+
+    targets = [c for c in (cities or sources.keys()) if c in sources]
+    return [city for city in targets
+            if not download_feed(city, sources[city]['url'], sources[city]['filename'])]
 
 
 def calculate_file_hash(file_path: Path) -> str:
@@ -223,13 +262,22 @@ Examples:
     parser.add_argument('--force-reprocess', action='store_true',
                        help='Force reprocessing of all cities, ignoring saved hashes')
     args = parser.parse_args()
-    
+
+    # Initialize log file
+    if (log_file := Path(LOG_FILE)).exists():
+        log_file.unlink()
+
+    # Download configured feeds before scanning for available cities
+    failed_downloads = download_feeds(args.cities or None)
+    if failed_downloads:
+        log_message(f"Warning: Failed to download feeds for: {', '.join(failed_downloads)}")
+
     # Determine cities to process
     cities_to_process = args.cities or get_available_cities()
     if not cities_to_process:
         print("Error: No city directories with GTFS files found")
         return 1
-    
+
     # Validate cities
     available_cities = set(get_available_cities())
     invalid_cities = [c for c in cities_to_process if c not in available_cities]
@@ -237,11 +285,7 @@ Examples:
         print(f"Error: The following cities are not available: {', '.join(invalid_cities)}")
         print(f"Available cities: {', '.join(sorted(available_cities))}")
         return 1
-    
-    # Initialize log file
-    if (log_file := Path(LOG_FILE)).exists():
-        log_file.unlink()
-    
+
     log_message("=" * 80)
     log_message("Starting batch processing of cities")
     log_message("=" * 80)
