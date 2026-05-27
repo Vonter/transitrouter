@@ -479,20 +479,23 @@ function StopTimetablePage({ stopId, stopsData, flData }) {
         downstream: (downstreamStops[d[0]] || []).map((id) => stopFullName(stopsData, id)),
         row: d,
       })),
-      { keys: ['service', 'dest', { name: 'downstream', weight: 0.5 }], threshold: 0.35 },
+      { keys: ['service', 'dest', { name: 'downstream', weight: 0.5 }], threshold: 0.35, includeMatches: true },
     );
   }, [data, destinations, stopsData, downstreamStops]);
 
   const filteredData = useMemo(() => {
-    if (!searchQuery || !fuse) return data;
-    return fuse.search(searchQuery).map((r) => r.item.row);
+    if (!searchQuery || !fuse) return data.map((row) => ({ row, matchedDest: null }));
+    return fuse.search(searchQuery).map((r) => {
+      const downstreamMatch = r.matches?.find((m) => m.key === 'downstream');
+      return { row: r.item.row, matchedDest: downstreamMatch?.value || null };
+    });
   }, [searchQuery, fuse, data]);
 
-  const renderRow = (d) => {
+  const renderRow = ({ row: d, matchedDest }) => {
     const [service, wd1, wd2, sat1, sat2, sun1, sun2] = d;
     const onClick = () => navigate('route-overview', { routeNo: service, stopId });
     const count = tripCounts[service] || 0;
-    const destNames = (destinations[service] || []).map((id) => stopName(stopsData, id)).join(', ');
+    const destNames = matchedDest || (destinations[service] || []).map((id) => stopName(stopsData, id)).join(', ');
 
     const dayRow = (first, last, label) => (
       <tr onClick={onClick}>
