@@ -724,6 +724,7 @@ const App = () => {
   const betweenPopover = useRef(null);
   const servicePopover = useRef(null);
   const vehicleTracker = useRef(null);
+  const workerReadyRef = useRef(null);
   const geolocateBtn = useRef(null);
   const geolocateControlRef = useRef(null);
   const hasPannedToLocationOnLoad = useRef(false);
@@ -2392,7 +2393,7 @@ const App = () => {
 
     // Transfer data to the worker: it builds Fuse indices and handles all
     // future search, closest-stop, and between-routes requests off-thread.
-    const workerReady = initDataWorker({
+    workerReadyRef.current = initDataWorker({
       stopsArr: stopsDataArr.map((s) => ({
         number: s.number,
         name: s.name,
@@ -3741,7 +3742,7 @@ const App = () => {
     renderRoute();
 
     // Re-run search if the user typed something while the worker was initialising
-    workerReady.then(() => {
+    workerReadyRef.current?.then(() => {
       if (searchField.current?.value) handleSearch();
     });
 
