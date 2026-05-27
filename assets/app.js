@@ -125,7 +125,7 @@ function initPopoverDrag(popoverEl, onDismiss) {
   const handle = popoverEl.querySelector('.popover-handle');
   if (!handle) return;
 
-  let startY, startH, dragging, lastY, lastTime, velocity;
+  let startY, startH, dragging, lastY, lastTime, velocity, pendingY, rafId;
   const vh = () => window.innerHeight;
 
   const onStart = (e) => {
@@ -136,26 +136,22 @@ function initPopoverDrag(popoverEl, onDismiss) {
     lastY = startY;
     lastTime = Date.now();
     velocity = 0;
+    pendingY = startY;
+    rafId = null;
     dragging = true;
     popoverEl.classList.add('dragging');
-    // Attach move/end listeners only for the duration of this drag so that
-    // passive:false on touchmove doesn't block scrolling when no drag is active.
-    document.addEventListener('touchmove', onMove, { passive: false });
+    // .popover-handle has touch-action:none so the browser won't attempt to
+    // scroll for this touch — passive:true is safe and keeps the scroll thread
+    // unblocked throughout the drag.
+    document.addEventListener('touchmove', onMove, { passive: true });
     document.addEventListener('touchend', onEnd);
     document.addEventListener('touchcancel', onEnd);
   };
 
   const onMove = (e) => {
     if (!dragging) return;
-    e.preventDefault();
     const touch = e.touches[0];
     const y = touch.clientY;
-    const delta = y - startY;
-    const newH = Math.max(50, Math.min(vh() - 40, startH - delta));
-    popoverEl.style.maxHeight = newH + 'px';
-    // Also update transform so the popover bottom stays anchored to viewport bottom
-    popoverEl.style.transform =
-      'translateY(calc(-' + newH + 'px - var(--keyboard-height, 0px)))';
 
     const now = Date.now();
     const dt = now - lastTime;
@@ -164,11 +160,27 @@ function initPopoverDrag(popoverEl, onDismiss) {
       lastY = y;
       lastTime = now;
     }
+
+    pendingY = y;
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      const delta = pendingY - startY;
+      const newH = Math.max(50, Math.min(vh() - 40, startH - delta));
+      popoverEl.style.maxHeight = newH + 'px';
+      // Keep the popover bottom anchored to the viewport bottom during drag.
+      popoverEl.style.transform =
+        'translateY(calc(-' + newH + 'px - var(--keyboard-height, 0px)))';
+    });
   };
 
   const onEnd = () => {
     if (!dragging) return;
     dragging = false;
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
     document.removeEventListener('touchmove', onMove);
     document.removeEventListener('touchend', onEnd);
     document.removeEventListener('touchcancel', onEnd);

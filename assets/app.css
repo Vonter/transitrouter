@@ -406,7 +406,7 @@ a:active {
   transform: translateY(55%);
   display: flex;
   flex-direction: column;
-  transition: all 0.3s ease-in-out;
+  transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
 }
 @supports (top: min(1px)) {
   #search-popover {
@@ -452,7 +452,7 @@ a:active {
 #arrivals-popover,
 #service-popover {
   top: 101%;
-  transition: all 0.3s 0.1s ease-in-out;
+  transition: transform 0.3s 0.1s ease-in-out, max-height 0.3s 0.1s ease-in-out;
   max-height: 50vh;
   max-height: 50dvh;
   display: flex;
@@ -463,6 +463,7 @@ a:active {
 #arrivals-popover.expand,
 #service-popover.expand {
   transform: translateY(calc(-101% - var(--keyboard-height, 0px)));
+  will-change: transform;
 }
 #stop-popover.expand {
   z-index: 3;
@@ -555,7 +556,6 @@ a:active {
 #service-popover .popover-scroll {
   flex: 1;
   overflow: auto;
-  -webkit-overflow-scrolling: touch;
   padding: 12px;
 }
 #stop-popover .service-tag {
@@ -823,7 +823,6 @@ a:active {
 }
 #arrivals-popover .popover-scroll {
   overflow: auto;
-  -webkit-overflow-scrolling: touch;
   flex-grow: 1;
   display: flex;
   flex-direction: column;
@@ -986,7 +985,6 @@ a:active {
   list-style: none;
   overflow: auto;
   overflow-x: hidden;
-  -webkit-overflow-scrolling: touch;
 }
 .popover-list.loading {
   opacity: 0.5;
@@ -1627,7 +1625,6 @@ a.service-tag:hover {
 }
 .float-pill .services-list {
   overflow: auto;
-  -webkit-overflow-scrolling: touch;
   max-height: 25vh;
 }
 .float-pill .services-list .service-tag {

@@ -24,7 +24,7 @@ export default function ScrollableContainer(props) {
     const scrollable = scrollHeight > offsetHeight + 5; // Magic threshold
     if (scrollable) {
       handleScroll();
-      el.addEventListener('scroll', handleScroll);
+      el.addEventListener('scroll', handleScroll, { passive: true });
     } else {
       setScrollShadow('');
     }
