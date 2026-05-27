@@ -3,7 +3,7 @@ ahmedabad:
 andhrapradesh:
   gtfs.zip: 6ca4bf51c63fa5868026cb0301fe0c2837d6f81001d992303aabde8296fa3a32
 blr:
-  gtfs.zip: f518500b7fdfe87c3e33f20284ebe7c1ae0ec7be055f05890ea4f39f05f92b60
+  gtfs.zip: 0d3587fbcbb3cb911e35a21f53d712dfe13f6585a414b18437b346305956302e
 chennai:
   gtfs.zip: cb2b1de54af6420c3d3dff7796e9e1f0abe3cfb6e36f8dd9c95e330bc4ac8095
 delhi:
