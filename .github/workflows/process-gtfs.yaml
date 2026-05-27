@@ -46,10 +46,15 @@ jobs:
         id: detect-changes
         working-directory: ${{ github.workspace }}
         run: |
-          cities=$(git status --porcelain | grep ' data/.*/schedule/' | \
-            awk '{print $NF}' | sed 's|^data/||; s|/.*||' | sort -u | tr '\n' ' ')
-          echo "cities=${cities% }" >> $GITHUB_OUTPUT
-          echo "Cities with schedule changes: ${cities:-(none)}"
+          city="${{ inputs.city }}"
+          schedule_dir="data/$city/schedule"
+          if [ -d "$schedule_dir" ] && [ -n "$(ls -A "$schedule_dir" 2>/dev/null)" ]; then
+            echo "cities=$city" >> $GITHUB_OUTPUT
+            echo "City to sync to R2: $city"
+          else
+            echo "cities=" >> $GITHUB_OUTPUT
+            echo "No schedule data found at $schedule_dir, skipping R2 sync"
+          fi
 
       - name: Commit processed data
         uses: stefanzweifel/git-auto-commit-action@v5

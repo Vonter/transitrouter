@@ -21,6 +21,9 @@ import requests
 
 SCRIPT_DIR = Path(__file__).parent
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_HEADERS = {
+    "User-Agent": "transitrouter-pois/1.0 (https://github.com/Vonter/transitrouter)"
+}
 BBOX_PAD = 0.05  # degrees padding around stops bounding box
 
 
@@ -52,7 +55,12 @@ def run_overpass_query(query: str, label: str, retries: int = 3) -> list[dict]:
     for attempt in range(retries):
         try:
             print(f"  Fetching {label} (attempt {attempt + 1})...")
-            response = requests.post(OVERPASS_URL, data={"data": query}, timeout=90)
+            response = requests.post(
+                OVERPASS_URL,
+                data={"data": query},
+                headers=OVERPASS_HEADERS,
+                timeout=90,
+            )
             response.raise_for_status()
             return response.json().get("elements", [])
         except (requests.exceptions.Timeout, requests.exceptions.HTTPError) as e:
