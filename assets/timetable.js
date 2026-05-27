@@ -476,7 +476,7 @@ function StopTimetablePage({ stopId, stopsData, flData }) {
       data.map((d) => ({
         service: d[0],
         dest: (destinations[d[0]] || []).map((id) => stopName(stopsData, id)).join(' '),
-        downstream: (downstreamStops[d[0]] || []).map((id) => stopFullName(stopsData, id)).join(' '),
+        downstream: (downstreamStops[d[0]] || []).map((id) => stopFullName(stopsData, id)),
         row: d,
       })),
       { keys: ['service', 'dest', { name: 'downstream', weight: 0.5 }], threshold: 0.35 },
