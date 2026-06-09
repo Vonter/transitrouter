@@ -23,7 +23,13 @@ export function filterStaleArrivalsFromService(service) {
   if (!service) return service;
   const list = service.arrivals
     ? [...service.arrivals]
-    : [service.next, service.next2, service.next3, service.next4, service.next5].filter(Boolean);
+    : [
+        service.next,
+        service.next2,
+        service.next3,
+        service.next4,
+        service.next5,
+      ].filter(Boolean);
   const fresh = list.filter((trip) => !isArrivalStale(trip));
   const result = { ...service };
   result.next = fresh[0] ?? null;
@@ -154,6 +160,8 @@ export function formatArrivalTime(durationMs) {
  * @param {string|number} stationId - The station/stop ID
  * @param {AbortSignal} [signal] - Optional AbortSignal for cancellation
  * @returns {Promise<{services: Array, servicesArrivals: Object}|null>}
+ *   An object (with possibly-empty `services`) on a successful response, or
+ *   `null` when the fetch fails — letting callers tell "no buses" from an error.
  */
 export async function fetchStopRoutes(apiPath, stationId, signal) {
   if (!apiPath || !stationId || isApiDisabled()) return null;
@@ -167,7 +175,9 @@ export async function fetchStopRoutes(apiPath, stationId, signal) {
     }
 
     const data = await response.json();
-    if (!data?.services?.length) return null;
+    // Valid response with no services is "online but empty", not an error —
+    // callers distinguish this (empty result) from a fetch failure (null).
+    if (!data?.services?.length) return { services: [], servicesArrivals: {} };
 
     const services = data.services
       .map(filterStaleArrivalsFromService)

@@ -18,6 +18,7 @@ import {
   filterStaleArrivalsFromService,
   fetchStopRoutes,
 } from '../utils/fetchArrivals';
+import { scheduleETAByRoute } from '../utils/scheduleArrivals';
 
 import ArrivalTimeText from './ArrivalTimeText';
 
@@ -40,6 +41,9 @@ export default function BusServicesArrival({
   const [isLoading, setIsLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [servicesArrivals, setServicesArrivals] = useState({});
+  // True when live arrivals are unavailable; the whole stop falls back to the
+  // static schedule (every route shows its next scheduled departure).
+  const [staticFallback, setStaticFallback] = useState(false);
   const [servicesIssues, setServicesIssues] = useState([]);
   const [oneServiceHasMultipleDirections, setOneServiceHasMultipleDirections] =
     useState(false);
@@ -133,6 +137,8 @@ export default function BusServicesArrival({
         stopRoutesApiPath || cityConfig?.liveArrivals?.apiPath;
 
       if (!arrivalsApiPath) {
+        // No live arrivals for this city: rely entirely on the static schedule.
+        setStaticFallback(true);
         setIsLoading(false);
         setHasError(false);
         onErrorChange?.(false);
@@ -146,6 +152,7 @@ export default function BusServicesArrival({
       if (routeData) {
         const { services, servicesArrivals } = routeData;
         setServicesArrivals(servicesArrivals);
+        setStaticFallback(false);
         setIsLoading(false);
         setHasError(false);
         onErrorChange?.(false);
@@ -172,10 +179,22 @@ export default function BusServicesArrival({
         });
         setServicesIssues(servicesWithIssues);
         setOneServiceHasMultipleDirections(servicesWithIssues.length > 0);
+      } else {
+        // null means the live fetch failed (an empty-but-valid response comes
+        // back as { services: [] }). Fall back to the static schedule, surface
+        // the error indicator, and drop any stale live ETAs.
+        setServicesArrivals({});
+        setStaticFallback(true);
+        setHasError(true);
+        onErrorChange?.(true);
+        setIsLoading(false);
+        onLoadingChange?.(false);
       }
     } catch (error) {
       if (error.name !== 'AbortError') {
         console.error('Error fetching arrivals:', error);
+        setServicesArrivals({});
+        setStaticFallback(true);
         setHasError(true);
         onErrorChange?.(true);
         setIsLoading(false);
@@ -208,7 +227,9 @@ export default function BusServicesArrival({
   useEffect(() => {
     let intervalID;
     if (active) {
-      const sec = isDevMode() ? Number(localStorage.getItem('refreshInterval') ?? 60) : 60;
+      const sec = isDevMode()
+        ? Number(localStorage.getItem('refreshInterval') ?? 60)
+        : 60;
       if (sec > 0) intervalID = setRafInterval(fetchServices, sec * 1000);
     }
     return () => {
@@ -321,8 +342,45 @@ export default function BusServicesArrival({
     };
   }, [services, stopData, scheduleData, servicesArrivals]);
 
-  // Renders a list of service tags for a given set of service numbers,
-  // sorted by soonest arrival first, then alphabetically for those without arrivals.
+  // Next scheduled departure (ms) per route, computed each render to stay current:
+  //   scheduleOriginETAs — only routes that originate at this stop (live tracking
+  //     has no data there until the bus departs), used alongside live arrivals.
+  //   scheduleAllETAs — every route passing this stop, used as a full static
+  //     fallback when live arrivals are unavailable.
+  const scheduleOriginETAs = scheduleETAByRoute(scheduleData, {
+    originStopId: id,
+  });
+  const scheduleAllETAs = scheduleETAByRoute(scheduleData);
+
+  // ETA for a route: live tracking ETA when available, otherwise a schedule ETA.
+  // In static fallback (live data unavailable) every route uses its schedule ETA;
+  // otherwise only origin-stop routes do. `scheduled` flags the schedule-based
+  // ones so they can be styled differently.
+  const getServiceETA = (service) => {
+    const live = servicesArrivals[service];
+    if (live) return { ms: live, scheduled: false };
+    const sched = (staticFallback ? scheduleAllETAs : scheduleOriginETAs).get(
+      service,
+    );
+    if (sched != null) return { ms: sched, scheduled: true };
+    return null;
+  };
+
+  // Renders the ETA badge for a route. Schedule-based ETAs (origin stops) are
+  // italicised and prefixed with "~" to distinguish them from live ETAs.
+  const renderETA = (service) => {
+    const eta = getServiceETA(service);
+    if (!eta) return null;
+    return (
+      <span class={eta.scheduled ? 'scheduled-eta' : ''}>
+        {eta.scheduled && '~'}
+        <ArrivalTimeText ms={eta.ms} />
+      </span>
+    );
+  };
+
+  // Renders a list of service tags. Routes with a live ETA come first (soonest
+  // first), then origin-stop routes shown with their schedule ETA, then the rest.
   const renderServiceTags = (serviceList) => (
     <p
       class={`services-list ${isLoading ? 'loading' : ''}`}
@@ -330,11 +388,13 @@ export default function BusServicesArrival({
     >
       {[...serviceList]
         .sort((a, b) => {
-          const aMs = servicesArrivals[a],
-            bMs = servicesArrivals[b];
-          if (aMs && !bMs) return -1;
-          if (!aMs && bMs) return 1;
-          if (aMs && bMs) return aMs - bMs;
+          const ea = getServiceETA(a),
+            eb = getServiceETA(b);
+          const rank = (e) => (e ? (e.scheduled ? 1 : 0) : 2);
+          const ra = rank(ea),
+            rb = rank(eb);
+          if (ra !== rb) return ra - rb;
+          if (ea && eb) return ea.ms - eb.ms;
           return sortServices(a, b);
         })
         .map((service) => (
@@ -348,11 +408,7 @@ export default function BusServicesArrival({
               }`}
             >
               {service}
-              {servicesArrivals[service] && (
-                <span>
-                  <ArrivalTimeText ms={servicesArrivals[service]} />
-                </span>
-              )}
+              {renderETA(service)}
             </a>{' '}
           </>
         ))}
@@ -384,11 +440,7 @@ export default function BusServicesArrival({
           >
             {service}
             {servicesIssues.includes(service) && ' ⚠️'}
-            {servicesArrivals[service] && (
-              <span>
-                <ArrivalTimeText ms={servicesArrivals[service]} />
-              </span>
-            )}
+            {renderETA(service)}
           </a>{' '}
         </>
       ))}

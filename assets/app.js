@@ -671,6 +671,7 @@ const App = () => {
   const [services, setServices] = useState([]);
   const [stops, setStops] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [stopsFirst, setStopsFirst] = useState(false);
   const [expandSearch, setExpandSearch] = useState(false);
   const [expandedSearchOnce, setExpandedSearchOnce] = useState(false);
   const [shrinkSearch, setShrinkSearch] = useState(false);
@@ -820,6 +821,11 @@ const App = () => {
         const seq = ++searchSeq.current;
         const { services, stops } = await workerSearch(value);
         if (seq !== searchSeq.current) return; // stale — a newer query is in flight
+        // Order results by the dominant character class in the query: stop names
+        // first for mostly-alphabetic input, route numbers first for numeric input.
+        const letters = (value.match(/[a-z]/gi) || []).length;
+        const digits = (value.match(/\d/g) || []).length;
+        setStopsFirst(letters > digits);
         setServices(services);
         setStops(stops);
         setSearching(true);
@@ -859,6 +865,7 @@ const App = () => {
     searchField.current?.blur();
     searchField.current.value = '';
     setSearching(false);
+    setStopsFirst(false);
     setServices(servicesDataArr);
     // Show closest stops if location is available, otherwise empty
     setStops(currentLocation ? closestStops : []);
@@ -3957,6 +3964,89 @@ const App = () => {
     stopsData &&
     findStopKey(route.value);
 
+  const servicesResults = services.length
+    ? (expandedSearchOnce ? services : services.slice(0, 25)).map((s) => {
+        const isServicePage = route.page === 'service';
+        const checked =
+          route.value && route.value.split('~').includes(s.number);
+        return (
+          <li key={s.number}>
+            <a
+              href={`#${route.cityPrefix}/services/${encodeURIComponent(s.number)}`}
+              class={checked ? 'current' : ''}
+              onMouseEnter={() => previewRoute(s.number)}
+              onMouseLeave={unpreviewRoute}
+            >
+              <b class="service-tag">{s.number}</b> {s.name}
+            </a>
+            <label hidden={!isServicePage}>
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={(e) => {
+                  const { checked } = e.target;
+                  let newServices = [];
+                  if (checked) {
+                    newServices = route.value.split('~').concat(s.number);
+                  } else {
+                    newServices = route.value
+                      .split('~')
+                      .filter((service) => service !== s.number);
+                  }
+                  newServices.sort(sortServices);
+                  setTimeout(() => {
+                    if (newServices.length) {
+                      navigateTo(
+                        `/services/${newServices.map((s) => encodeURIComponent(s)).join('~')}`,
+                        route,
+                      );
+                    } else {
+                      navigateTo('/', route);
+                    }
+                  }, 250);
+                }}
+              />
+            </label>
+          </li>
+        );
+      })
+    : !searching &&
+      !closestStops.length &&
+      [1, 2, 3, 4, 5, 6, 7, 8].map((s, i) => (
+        <li key={s}>
+          <a href={`#${route.cityPrefix}/`}>
+            <b class="service-tag">&nbsp;&nbsp;&nbsp;</b>
+            <span class="placeholder">
+              █████{i % 3 == 0 ? '███' : ''} ███
+              {i % 2 == 0 ? '████' : ''}
+            </span>
+          </a>
+        </li>
+      ));
+
+  const stopsResults =
+    searching &&
+    !!stops.length &&
+    stops.map((s) => (
+      <li key={s.number}>
+        <a
+          href={`#${route.cityPrefix}/stops/${s.number}`}
+          onClick={(e) => {
+            if (directionsOrigin || editingBetweenStop) {
+              e.preventDefault();
+              selectDirectionsDestination(s.number);
+            }
+          }}
+        >
+          <b class="stop-tag">{s.number}</b>
+          <span class="stop-name-with-suffix">
+            <span class="stop-name">{s.name}</span>
+            {s.suffix && <span class="stop-suffix">{s.suffix}</span>}
+          </span>
+        </a>
+      </li>
+    ));
+
   return (
     <>
       <div
@@ -4193,90 +4283,17 @@ const App = () => {
                   </a>
                 </li>
               ))}
-            {services.length
-              ? (expandedSearchOnce ? services : services.slice(0, 25)).map(
-                  (s) => {
-                    const isServicePage = route.page === 'service';
-                    const checked =
-                      route.value && route.value.split('~').includes(s.number);
-                    return (
-                      <li key={s.number}>
-                        <a
-                          href={`#${route.cityPrefix}/services/${encodeURIComponent(s.number)}`}
-                          class={checked ? 'current' : ''}
-                          onMouseEnter={() => previewRoute(s.number)}
-                          onMouseLeave={unpreviewRoute}
-                        >
-                          <b class="service-tag">{s.number}</b> {s.name}
-                        </a>
-                        <label hidden={!isServicePage}>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(e) => {
-                              const { checked } = e.target;
-                              let newServices = [];
-                              if (checked) {
-                                newServices = route.value
-                                  .split('~')
-                                  .concat(s.number);
-                              } else {
-                                newServices = route.value
-                                  .split('~')
-                                  .filter((service) => service !== s.number);
-                              }
-                              newServices.sort(sortServices);
-                              setTimeout(() => {
-                                if (newServices.length) {
-                                  navigateTo(
-                                    `/services/${newServices.map((s) => encodeURIComponent(s)).join('~')}`,
-                                    route,
-                                  );
-                                } else {
-                                  navigateTo('/', route);
-                                }
-                              }, 250);
-                            }}
-                          />
-                        </label>
-                      </li>
-                    );
-                  },
-                )
-              : !searching &&
-                !closestStops.length &&
-                [1, 2, 3, 4, 5, 6, 7, 8].map((s, i) => (
-                  <li key={s}>
-                    <a href={`#${route.cityPrefix}/`}>
-                      <b class="service-tag">&nbsp;&nbsp;&nbsp;</b>
-                      <span class="placeholder">
-                        █████{i % 3 == 0 ? '███' : ''} ███
-                        {i % 2 == 0 ? '████' : ''}
-                      </span>
-                    </a>
-                  </li>
-                ))}
-            {searching &&
-              !!stops.length &&
-              stops.map((s) => (
-                <li key={s.number}>
-                  <a
-                    href={`#${route.cityPrefix}/stops/${s.number}`}
-                    onClick={(e) => {
-                      if (directionsOrigin || editingBetweenStop) {
-                        e.preventDefault();
-                        selectDirectionsDestination(s.number);
-                      }
-                    }}
-                  >
-                    <b class="stop-tag">{s.number}</b>
-                    <span class="stop-name-with-suffix">
-                      <span class="stop-name">{s.name}</span>
-                      {s.suffix && <span class="stop-suffix">{s.suffix}</span>}
-                    </span>
-                  </a>
-                </li>
-              ))}
+            {stopsFirst ? (
+              <>
+                {stopsResults}
+                {servicesResults}
+              </>
+            ) : (
+              <>
+                {servicesResults}
+                {stopsResults}
+              </>
+            )}
             {searching && !stops.length && !services.length && (
               <li class="nada">No results.</li>
             )}

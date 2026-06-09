@@ -28,6 +28,7 @@ import Fuse from 'fuse.js';
 import { encode } from './utils/specialID';
 import fetchCache from './utils/fetchCache';
 import { filterStaleArrivalsFromService } from './utils/fetchArrivals';
+import { upcomingDepartures } from './utils/scheduleArrivals';
 import setIcon from '../utils/setIcon';
 import { stopMetrics } from './utils/metricsPage';
 
@@ -125,6 +126,7 @@ const Bus = ({
   duration_ms,
   type,
   load,
+  scheduled,
   _ghost,
   _id,
   maxDuration_ms,
@@ -159,7 +161,10 @@ const Bus = ({
       <span class="bus-float">
         <img {...busImage} />
         <br />
-        <span class={`time time-${load.toLowerCase()}`}>
+        <span
+          class={`time time-${load.toLowerCase()}${scheduled ? ' scheduled' : ''}`}
+        >
+          {scheduled && '~'}
           <ArrivalTimeText ms={duration_ms} />
         </span>
       </span>
@@ -284,11 +289,17 @@ const BusLane = ({ index, no, buses, maxDuration_ms, isFirstFetch }) => {
 };
 
 // Data conversion
-const convertScheduleToArrival = (scheduleData) => {
+// When `originStopId` is provided, only routes that start at this stop are
+// included — used to supplement live results, which have no data at origin
+// stops until the bus departs. All trips are flagged `scheduled` so the UI can
+// distinguish them from live arrivals.
+const convertScheduleToArrival = (
+  scheduleData,
+  { originStopId = null } = {},
+) => {
   if (!scheduleData?.services) return [];
 
   const now = new Date();
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
   const createTrip = (duration_ms, origin, destination) => ({
     duration_ms,
     type: 'SD',
@@ -297,27 +308,15 @@ const convertScheduleToArrival = (scheduleData) => {
     visit_number: 1,
     origin_code: origin,
     destination_code: destination,
+    scheduled: true,
   });
 
   const allUpcomingTrips = [];
   scheduleData.services.forEach((service) => {
     const { no, origin, destination, trips } = service;
-    trips.forEach((timeStr) => {
-      // Optimized time parsing - avoid split/map for better performance
-      const colonIdx = timeStr.indexOf(':');
-      const hours = parseInt(timeStr.substring(0, colonIdx), 10);
-      const minutes = parseInt(timeStr.substring(colonIdx + 1), 10);
-      const tripMinutes = hours * 60 + minutes;
-      const duration_ms = (tripMinutes - currentMinutes) * 60 * 1000;
-      if (duration_ms > 0) {
-        allUpcomingTrips.push({
-          no,
-          origin,
-          destination,
-          minutes: tripMinutes,
-          duration_ms,
-        });
-      }
+    if (originStopId != null && String(origin) !== String(originStopId)) return;
+    upcomingDepartures(trips, now).forEach(({ minutes, duration_ms }) => {
+      allUpcomingTrips.push({ no, origin, destination, minutes, duration_ms });
     });
   });
 
@@ -918,6 +917,9 @@ function ArrivalTimes() {
   const [fetchServicesStatus, setFetchServicesStatus] = useState(null);
   const [fetchServicesError, setFetchServicesError] = useState(false);
   const [services, setServices] = useState(null);
+  // Origin-only scheduled arrivals, used to supplement live results for routes
+  // that start at this stop (live tracking has no data there until departure).
+  const [originSchedule, setOriginSchedule] = useState([]);
   const [servicesData, setServicesData] = useState(null);
   const [pinnedServices, setPinnedServices] = useState(() => {
     try {
@@ -1143,6 +1145,8 @@ function ArrivalTimes() {
           convertedServices.length > 0 ? 'static' : 'error',
         );
         setServices(convertedServices.length > 0 ? convertedServices : []);
+        // Static mode already renders the full schedule, so no separate supplement.
+        setOriginSchedule([]);
         isFirstFetchRef.current = false;
         scheduleRetry(id, 30000);
       })
@@ -1150,9 +1154,22 @@ function ArrivalTimes() {
         console.error('Fallback schedule fetch failed:', error);
         setFetchServicesStatus('error');
         setServices([]);
+        setOriginSchedule([]);
         isFirstFetchRef.current = false;
         scheduleRetry(id, 3000);
       });
+  };
+
+  // Supplements live results with scheduled departures for routes originating at
+  // this stop. Recomputed each cycle (off the cached schedule) so ETAs stay fresh.
+  const loadOriginSchedule = (id) => {
+    fetchCache(`${DATA_PATHS.schedule}/${id}.json`, 60)
+      .then((scheduleData) => {
+        setOriginSchedule(
+          convertScheduleToArrival(scheduleData, { originStopId: id }),
+        );
+      })
+      .catch(() => setOriginSchedule([]));
   };
 
   const fetchServices = (id) => {
@@ -1189,6 +1206,7 @@ function ArrivalTimes() {
           setFetchServicesStatus('online');
           setFetchServicesError(false);
           setServices([]);
+          loadOriginSchedule(id);
           isFirstFetchRef.current = false;
           scheduleRetry(id);
         } else {
@@ -1198,6 +1216,7 @@ function ArrivalTimes() {
           setFetchServicesStatus('online');
           setFetchServicesError(false);
           setServices(filtered);
+          loadOriginSchedule(id);
           isFirstFetchRef.current = false;
           scheduleRetry(id);
 
@@ -1231,6 +1250,7 @@ function ArrivalTimes() {
               setFetchServicesStatus('online');
               setFetchServicesError(false);
               setServices([]);
+              loadOriginSchedule(id);
               isFirstFetchRef.current = false;
               scheduleRetry(id);
               return;
@@ -1240,12 +1260,11 @@ function ArrivalTimes() {
             );
             const filtered = liveServices
               .map(filterStaleArrivalsFromService)
-              .filter(
-                (s) => s.next || (s.arrivals && s.arrivals.length > 0),
-              );
+              .filter((s) => s.next || (s.arrivals && s.arrivals.length > 0));
             setFetchServicesStatus('online');
             setFetchServicesError(false);
             setServices(filtered);
+            loadOriginSchedule(id);
             isFirstFetchRef.current = false;
             scheduleRetry(id);
 
@@ -1690,8 +1709,12 @@ function ArrivalTimes() {
 
     const groups = {};
     let maxDuration = 0;
+    // Route numbers that already have live arrivals. Origin-stop schedule entries
+    // only fill in routes missing from the live feed, so any route with a live
+    // ETA is never supplemented (even if live/schedule use different dest codes).
+    const liveServiceNumbers = new Set();
 
-    services.forEach((service) => {
+    const addService = (service, isOriginSupplement) => {
       // Support both old format (next through next5) and new format (arrivals array)
       const arrivals = service.arrivals || [
         service.next,
@@ -1700,6 +1723,11 @@ function ArrivalTimes() {
         service.next4,
         service.next5,
       ];
+      if (
+        isOriginSupplement &&
+        liveServiceNumbers.has(toServiceNoStr(service.no))
+      )
+        return;
       const firstArrival = arrivals.find(Boolean);
       const key = `${service.no}-${service.destination || firstArrival?.destination_code || ''}`;
       if (!groups[key]) {
@@ -1717,7 +1745,12 @@ function ArrivalTimes() {
         }
       });
       groups[key].frequency += service.frequency || 0;
-    });
+      if (!isOriginSupplement)
+        liveServiceNumbers.add(toServiceNoStr(service.no));
+    };
+
+    services.forEach((service) => addService(service, false));
+    originSchedule.forEach((service) => addService(service, true));
 
     // Only keep groups that have at least one bus within maxArrivalTime
     const withUpcoming = Object.values(groups).filter((g) =>
@@ -1740,7 +1773,7 @@ function ArrivalTimes() {
       groupedServices: sorted,
       maxDuration_ms: Math.max(maxDuration, minDuration),
     };
-  }, [services, pinnedSet]);
+  }, [services, originSchedule, pinnedSet]);
 
   // Build a Fuse index over all downstream stop names for this stop.
   // Rebuilt only when the set of routes or stop data changes (not on every filter keystroke).

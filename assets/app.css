@@ -13,8 +13,9 @@ body {
 body {
   margin: 0;
   padding: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
-    Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
+    Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
   text-size-adjust: none;
   color: #000;
   background-color: #f9f5ed;
@@ -199,13 +200,17 @@ a:active {
   pointer-events: none;
   /* pointer-events: none alone is unreliable on iOS Safari fixed elements; visibility: hidden is required */
   visibility: hidden;
-  transition: background 0.3s ease-in-out, visibility 0s linear 0.3s;
+  transition:
+    background 0.3s ease-in-out,
+    visibility 0s linear 0.3s;
 }
 #city-drawer-overlay.open {
   background: rgba(0, 0, 0, 0.35);
   pointer-events: auto;
   visibility: visible;
-  transition: background 0.3s ease-in-out, visibility 0s linear 0s;
+  transition:
+    background 0.3s ease-in-out,
+    visibility 0s linear 0s;
 }
 #city-drawer {
   position: absolute;
@@ -222,7 +227,9 @@ a:active {
   transform: translateX(-100%);
   /* iOS Safari caches hit regions after transforms; visibility: hidden clears it after slide-out */
   visibility: hidden;
-  transition: transform 0.3s ease-in-out, visibility 0s linear 0.3s;
+  transition:
+    transform 0.3s ease-in-out,
+    visibility 0s linear 0.3s;
   font-size: 0.9em;
   line-height: 1.4;
   padding-top: env(safe-area-inset-top);
@@ -245,7 +252,9 @@ a:active {
 #city-drawer-overlay.open #city-drawer {
   transform: translateX(0);
   visibility: visible;
-  transition: transform 0.3s ease-in-out, visibility 0s linear 0s;
+  transition:
+    transform 0.3s ease-in-out,
+    visibility 0s linear 0s;
 }
 .drawer-handle {
   display: none;
@@ -358,31 +367,62 @@ a:active {
   max-width: 55%;
 }
 .dev-toggle-track {
-  width: 44px; height: 24px;
-  border-radius: 12px; background: #ccc;
-  position: relative; cursor: pointer;
-  transition: background 0.25s; flex-shrink: 0;
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  background: #ccc;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.25s;
+  flex-shrink: 0;
 }
-.dev-toggle-track.active { background: #007aff; }
+.dev-toggle-track.active {
+  background: #007aff;
+}
 .dev-toggle-thumb {
-  position: absolute; top: 2px; left: 2px;
-  width: 20px; height: 20px; border-radius: 50%;
-  background: #fff; transition: transform 0.25s;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.25s;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
-.dev-toggle-track.active .dev-toggle-thumb { transform: translateX(20px); }
-.drawer-dev-settings { padding: 0 0 4px; }
-.drawer-dev-item { padding-left: 28px; }
-.dev-buttons { margin-top: 4px; }
-.dev-buttons .popover-button { font-weight: normal; font-size: 0.8em; }
+.dev-toggle-track.active .dev-toggle-thumb {
+  transform: translateX(20px);
+}
+.drawer-dev-settings {
+  padding: 0 0 4px;
+}
+.drawer-dev-item {
+  padding-left: 28px;
+}
+.dev-buttons {
+  margin-top: 4px;
+}
+.dev-buttons .popover-button {
+  font-weight: normal;
+  font-size: 0.8em;
+}
 .dev-journey-btn {
   background: transparent;
   color: #666;
   border: 1.5px dashed #aaa;
   box-shadow: none;
 }
-.dev-journey-btn:hover { border-color: #007aff; color: #007aff; }
-.footer-secondary-group { flex: none; width: calc(50% - 3.5px); min-width: 0; display: flex; gap: 7px; }
+.dev-journey-btn:hover {
+  border-color: #007aff;
+  color: #007aff;
+}
+.footer-secondary-group {
+  flex: none;
+  width: calc(50% - 3.5px);
+  min-width: 0;
+  display: flex;
+  gap: 7px;
+}
 
 .popover {
   position: fixed;
@@ -406,7 +446,9 @@ a:active {
   transform: translateY(55%);
   display: flex;
   flex-direction: column;
-  transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
+  transition:
+    transform 0.3s ease-in-out,
+    opacity 0.3s ease-in-out;
 }
 @supports (top: min(1px)) {
   #search-popover {
@@ -452,7 +494,9 @@ a:active {
 #arrivals-popover,
 #service-popover {
   top: 101%;
-  transition: transform 0.3s 0.1s ease-in-out, max-height 0.3s 0.1s ease-in-out;
+  transition:
+    transform 0.3s 0.1s ease-in-out,
+    max-height 0.3s 0.1s ease-in-out;
   max-height: 50vh;
   max-height: 50dvh;
   display: flex;
@@ -795,7 +839,7 @@ a:active {
   display: flex;
 }
 .callout.iconic:before {
-  margin-right: .5em;
+  margin-right: 0.5em;
 }
 .warning {
   background-color: papayawhip;
@@ -1427,6 +1471,12 @@ span.legend-opposite {
   font-family: inherit;
 }
 
+.dest-filter::-webkit-search-cancel-button,
+.dest-filter::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 .dest-filter:focus {
   outline: none;
   border-color: #1a1a1a;
@@ -1504,6 +1554,10 @@ a.service-tag:hover {
 }
 .service-tag span.close:hover {
   color: #f01b48;
+}
+.service-tag span.scheduled-eta {
+  color: #aaa;
+  font-style: italic;
 }
 
 .stop-tag {
@@ -1748,10 +1802,10 @@ a.service-tag:hover {
 .stop-header-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 .stop-header-row h1 {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   margin-bottom: 0;
 }
@@ -1768,7 +1822,9 @@ a.service-tag:hover {
   align-items: center;
   justify-content: center;
   padding: 0;
-  transition: background-color 0.15s, transform 0.1s;
+  transition:
+    background-color 0.15s,
+    transform 0.1s;
 }
 .directions-btn:hover {
   background-color: #007aff44;
@@ -1833,8 +1889,14 @@ a.service-tag:hover {
   background: rgba(255, 255, 255, 0.35);
 }
 @keyframes directions-banner-in {
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Between popover header */
@@ -1890,7 +1952,9 @@ a.service-tag:hover {
   align-items: center;
   justify-content: center;
   padding: 0;
-  transition: background-color 0.15s, transform 0.15s;
+  transition:
+    background-color 0.15s,
+    transform 0.15s;
   margin-top: -2px;
 }
 .between-swap-btn:hover {
@@ -2187,7 +2251,8 @@ a.service-tag:hover {
   animation: glowing-gradient 1s linear 2s 10 alternate both;
 }
 [data-scroll-shadow='both'] {
-  background: linear-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0)),
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0)),
     linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.1));
   background-position: top, bottom;
 }
@@ -2788,10 +2853,20 @@ html.dark {
     color: #e0e0e0;
     border-color: #444;
   }
-  .dev-toggle-track { background: #555; }
-  .dev-toggle-track.active { background: #4da3ff; }
-  .dev-journey-btn { color: #999; border-color: #555; }
-  .dev-journey-btn:hover { border-color: #4da3ff; color: #4da3ff; }
+  .dev-toggle-track {
+    background: #555;
+  }
+  .dev-toggle-track.active {
+    background: #4da3ff;
+  }
+  .dev-journey-btn {
+    color: #999;
+    border-color: #555;
+  }
+  .dev-journey-btn:hover {
+    border-color: #4da3ff;
+    color: #4da3ff;
+  }
 
   /* ── Popovers (search, stop, between, service, arrivals) ───────────────────── */
 
@@ -2799,7 +2874,9 @@ html.dark {
     background-color: #0d0d0d;
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-bottom: none;
-    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.8), 0 -1px 0 rgba(255, 255, 255, 0.06);
+    box-shadow:
+      0 -4px 20px rgba(0, 0, 0, 0.8),
+      0 -1px 0 rgba(255, 255, 255, 0.06);
   }
   @supports (backdrop-filter: blur(10px)) {
     .popover {
@@ -2934,7 +3011,9 @@ html.dark {
     color: #4da3ff;
   }
   .popover-button.primary {
-    box-shadow: inset 0 0 0 2px #4da3ff, 0 1px 5px rgba(77, 163, 255, 0.4);
+    box-shadow:
+      inset 0 0 0 2px #4da3ff,
+      0 1px 5px rgba(77, 163, 255, 0.4);
     background-color: #111;
   }
 
@@ -3007,6 +3086,9 @@ html.dark {
   .service-tag span {
     background-color: rgba(255, 255, 255, 0.06);
     color: #888;
+  }
+  .service-tag span.scheduled-eta {
+    color: #666;
   }
   .service-tag span.close:hover {
     color: #ff4d6d;
@@ -3254,7 +3336,11 @@ html.dark {
   /* ── Standalone gradient ───────────────────────────────────────────────────── */
 
   .standalone:before {
-    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0));
+    background: linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0.7),
+      rgba(0, 0, 0, 0)
+    );
   }
 
   /* ── Stop suffix / name ────────────────────────────────────────────────────── */
