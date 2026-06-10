@@ -938,6 +938,11 @@ a:active {
   width: 100%;
   box-sizing: border-box;
 }
+.popover-search input[type='search']::-webkit-search-cancel-button,
+.popover-search input[type='search']::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
 .popover-search input[type='search']:focus {
   background-color: rgba(255, 255, 255, 0.5);
 }

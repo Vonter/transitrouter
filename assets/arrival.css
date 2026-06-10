@@ -702,6 +702,12 @@ footer {
   font-family: inherit;
 }
 
+.dest-filter::-webkit-search-cancel-button,
+.dest-filter::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 .dest-filter:focus {
   outline: none;
   border-color: #007aff;
