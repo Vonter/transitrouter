@@ -2852,7 +2852,8 @@ const App = () => {
       'text-halo-width': C.stationHaloWidth,
     };
 
-    // Rail layers — always above bus stops
+    // Rail line paths sit below the bus stops layer so overlapping bus stops
+    // stay visible; the rail station icons (added later) remain above.
     map.addLayer({
       id: 'rail-path',
       type: 'line',
@@ -2863,13 +2864,14 @@ const App = () => {
       paint: {
         'line-color': ['get', 'stroke'],
         'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3, 16, 4, 22, 6],
-        'line-opacity': ['match', ['get', 'mode'],
-          'monorail', 1,
-          'rail', 0.01,
-          C.routeLineOpacity,
+        // Fade metro lines down as the map zooms past the subway-entrance
+        // threshold (z15) so other features become easier to read
+        'line-opacity': ['interpolate', ['linear'], ['zoom'],
+          15, ['match', ['get', 'mode'], 'monorail', 1, 'rail', 0.01, C.routeLineOpacity],
+          18, ['match', ['get', 'mode'], 'monorail', 1, 'rail', 0.01, C.routeLineOpacity * 0.45],
         ],
       },
-    });
+    }, 'stops');
     map.addLayer({
       id: 'rail-path-dots',
       type: 'line',
@@ -2883,7 +2885,7 @@ const App = () => {
         'line-opacity': 1,
         'line-dasharray': [3, 3],
       },
-    });
+    }, 'stops');
     map.addLayer(
       {
         id: 'rail-path-case',
@@ -2898,7 +2900,10 @@ const App = () => {
             16, ['match', ['get', 'mode'], 'monorail', 0.85, 'rail', 5, 9],
             22, ['match', ['get', 'mode'], 'monorail', 12, 'rail', 7, 12],
           ],
-          'line-opacity': ['match', ['get', 'mode'], 'monorail', 0.5, 'rail', 0.75, 0.5],
+          'line-opacity': ['interpolate', ['linear'], ['zoom'],
+            15, ['match', ['get', 'mode'], 'monorail', 0.5, 'rail', 0.75, 0.5],
+            18, ['match', ['get', 'mode'], 'monorail', 0.5, 'rail', 0.75, 0.15],
+          ],
         },
       },
       'rail-path',
