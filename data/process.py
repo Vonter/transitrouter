@@ -168,20 +168,20 @@ def run_script(script_name: str, city: str, args: list) -> tuple[bool, str]:
         return False, f"Error running script: {e}"
 
 
-def process_city(city: str) -> dict:
-    """Process all scripts for a single city. Returns status dictionary."""
+def process_city(city: str, scripts: list = SCRIPTS) -> dict:
+    """Process the given scripts for a single city. Returns status dictionary."""
     city_dir = Path(city)
-    
+
     if not city_dir.exists():
         return {'status': 'error', 'message': f"City directory '{city}' does not exist", 'scripts': {}}
-    
+
     zip_files = list(city_dir.glob('*.zip'))
     if not zip_files:
         return {'status': 'error', 'message': f"No GTFS files found in '{city}' directory", 'scripts': {}}
-    
+
     results = {'status': 'success', 'scripts': {}}
-    
-    for script_name, script_args in SCRIPTS:
+
+    for script_name, script_args in scripts:
         log_message(f"Running {script_name} for {city}...")
         success, error_msg = run_script(script_name, city, script_args)
         
@@ -261,7 +261,11 @@ Examples:
     parser.add_argument('cities', nargs='*', help='List of cities to process (default: all available cities)')
     parser.add_argument('--force-reprocess', action='store_true',
                        help='Force reprocessing of all cities, ignoring saved hashes')
+    parser.add_argument('--skip-pois', action='store_true',
+                       help='Skip generating points of interest (pois.py)')
     args = parser.parse_args()
+
+    scripts = [s for s in SCRIPTS if not (args.skip_pois and s[0] == 'pois.py')]
 
     # Initialize log file
     if (log_file := Path(LOG_FILE)).exists():
@@ -321,7 +325,7 @@ Examples:
         log_message(f"Processing city: {city}")
         log_message(f"{'='*80}")
         
-        city_results[city] = process_city(city)
+        city_results[city] = process_city(city, scripts)
         log_city_summary(city, city_results[city])
     
     # Final summary

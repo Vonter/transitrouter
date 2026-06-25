@@ -1,17 +1,28 @@
 name: Process GTFS Feeds
 
 on:
+  schedule:
+    - cron: '0 0 * * 0'
   workflow_dispatch:
     inputs:
       city:
-        description: City
-        required: true
+        description: City to process
+        required: false
         type: choice
+        default: all
         options:
+          - all
           - ahmedabad
           - blr
+          - hublidharwad
           - mumbai
           - pune
+          - rajkot
+      generate_pois:
+        description: Also generate points of interest (POIs)
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -39,21 +50,44 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Process GTFS feeds
-        run: python3 process.py ${{ inputs.city }}
+      - name: Determine cities to process
+        id: cities
+        env:
+          REQUESTED_CITY: ${{ inputs.city }}
+        run: |
+          configured=$(python3 -c "import json; print(' '.join(json.load(open('sources.json')).keys()))")
+          if [ -n "$REQUESTED_CITY" ] && [ "$REQUESTED_CITY" != "all" ]; then
+            if ! echo " $configured " | grep -q " $REQUESTED_CITY "; then
+              echo "::error::City '$REQUESTED_CITY' has no GTFS source configured in sources.json (configured: $configured)"
+              exit 1
+            fi
+            cities="$REQUESTED_CITY"
+          else
+            cities="$configured"
+          fi
+          echo "list=$cities" >> "$GITHUB_OUTPUT"
+          echo "Cities to process: $cities"
+
+      - name: Fetch and process GTFS feeds
+        run: python3 process.py ${{ steps.cities.outputs.list }} ${{ inputs.generate_pois == true && '' || '--skip-pois' }}
 
       - name: Detect changed cities
         id: detect-changes
         working-directory: ${{ github.workspace }}
         run: |
-          city="${{ inputs.city }}"
-          schedule_dir="data/$city/schedule"
-          if [ -d "$schedule_dir" ] && [ -n "$(ls -A "$schedule_dir" 2>/dev/null)" ]; then
-            echo "cities=$city" >> $GITHUB_OUTPUT
-            echo "City to sync to R2: $city"
+          changed=""
+          for city in ${{ steps.cities.outputs.list }}; do
+            schedule_dir="data/$city/schedule"
+            if [ -d "$schedule_dir" ] && [ -n "$(ls -A "$schedule_dir" 2>/dev/null)" ]; then
+              changed="$changed $city"
+            fi
+          done
+          changed="$(echo "$changed" | xargs)"
+          echo "cities=$changed" >> "$GITHUB_OUTPUT"
+          if [ -n "$changed" ]; then
+            echo "Cities to sync to R2: $changed"
           else
-            echo "cities=" >> $GITHUB_OUTPUT
-            echo "No schedule data found at $schedule_dir, skipping R2 sync"
+            echo "No schedule data found, skipping R2 sync"
           fi
 
       - name: Commit processed data

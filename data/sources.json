@@ -14,5 +14,13 @@
   "ahmedabad": {
     "url": "https://github.com/croyla/amd-gtfs/raw/refs/heads/main/gtfs_compat.zip",
     "filename": "gtfs.zip"
+  },
+  "hublidharwad": {
+    "url": "https://github.com/croyla/hdbrts-gtfs/raw/refs/heads/main/gtfs_compat.zip",
+    "filename": "gtfs_compat.zip"
+  },
+  "rajkot": {
+    "url": "https://github.com/croyla/rrl-gtfs/raw/refs/heads/main/gtfs_compat.zip",
+    "filename": "gtfs.zip"
   }
 }
