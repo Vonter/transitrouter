@@ -50,6 +50,42 @@ export default function BusServicesArrival({
   const [scheduleData, setScheduleData] = useState(null);
   const route = getRoute();
 
+  // Next scheduled departure (ms) per route, computed each render to stay current:
+  //   scheduleOriginETAs — only routes that originate at this stop (live tracking
+  //     has no data there until the bus departs), used alongside live arrivals.
+  //   scheduleAllETAs — every route passing this stop, used as a full static
+  //     fallback when live arrivals are unavailable.
+  const scheduleOriginETAs = scheduleETAByRoute(scheduleData, {
+    originStopId: id,
+  });
+  const scheduleAllETAs = scheduleETAByRoute(scheduleData);
+
+  // ETA for a route: live tracking ETA when available, otherwise a schedule ETA.
+  // In static fallback (live data unavailable) every route uses its schedule ETA;
+  // otherwise only origin-stop routes do. `scheduled` flags the schedule-based
+  // ones so they can be styled differently.
+  const getServiceETA = (service) => {
+    const live = servicesArrivals[service];
+    if (live) return { ms: live, scheduled: false };
+    const sched = (staticFallback ? scheduleAllETAs : scheduleOriginETAs).get(
+      service,
+    );
+    if (sched != null) return { ms: sched, scheduled: true };
+    return null;
+  };
+
+  // Routes arriving within the city's maxArrivalTime window are shown in the
+  // primary set; routes arriving later (or with no known ETA) are split out into
+  // a separate second set, so the soon-arriving routes aren't buried among them.
+  // A third set holds routes with no ETA at all (no live tracking and no
+  // schedule). Each service falls into exactly one bucket.
+  const maxArrivalTime = getConfigForCity(route.city)?.maxArrivalTime;
+  const arrivalBucket = (service) => {
+    const eta = getServiceETA(service);
+    if (eta == null) return 'noETA';
+    return eta.ms <= maxArrivalTime ? 'withinWindow' : 'beyondWindow';
+  };
+
   // When filter is active, group services by which downstream stop name fuzzy-matches.
   // Each service may appear under multiple matching stop names.
   // Returns null when no filter is active.
@@ -265,17 +301,25 @@ export default function BusServicesArrival({
 
   const servicesValue = route.value?.split('~') || [];
 
-  // Group by arrival status (upcoming vs scheduled) and then by terminal destination.
-  // Only used when no destination filter is active.
+  // Split routes into three sets — arriving within the maxArrivalTime window,
+  // arriving later, and with no ETA at all — then group each set by terminal
+  // destination. Only used when no destination filter is active.
   const groupedByDestination = useMemo(() => {
+    const withinWindowServices = services.filter(
+      (s) => arrivalBucket(s) === 'withinWindow',
+    );
+    const beyondWindowServices = services.filter(
+      (s) => arrivalBucket(s) === 'beyondWindow',
+    );
+    const noETAServices = services.filter((s) => arrivalBucket(s) === 'noETA');
+
     if (!stopData?.destinationGroups) {
       // Fallback to old format if destinationGroups not available
-      const upcomingServices = services.filter((s) => servicesArrivals[s]);
-      const scheduledServices = services.filter((s) => !servicesArrivals[s]);
       return {
         hasGroups: false,
-        upcomingServices: upcomingServices.sort(sortServices),
-        scheduledServices: scheduledServices.sort(sortServices),
+        withinWindowServices: withinWindowServices.sort(sortServices),
+        beyondWindowServices: beyondWindowServices.sort(sortServices),
+        noETAServices: noETAServices.sort(sortServices),
       };
     }
 
@@ -286,10 +330,6 @@ export default function BusServicesArrival({
         serviceTripCounts.set(serviceData.no, serviceData.trip_count || 0);
       });
     }
-
-    // Separate services into upcoming (with arrivals) and scheduled (without arrivals)
-    const upcomingServices = services.filter((s) => servicesArrivals[s]);
-    const scheduledServices = services.filter((s) => !servicesArrivals[s]);
 
     // Helper function to group services by destination
     const groupServicesByDestination = (serviceList) => {
@@ -332,39 +372,26 @@ export default function BusServicesArrival({
       });
     };
 
-    const upcomingDestinations = groupServicesByDestination(upcomingServices);
-    const scheduledDestinations = groupServicesByDestination(scheduledServices);
+    const withinWindowDestinations =
+      groupServicesByDestination(withinWindowServices);
+    const beyondWindowDestinations =
+      groupServicesByDestination(beyondWindowServices);
+    const noETADestinations = groupServicesByDestination(noETAServices);
 
     return {
       hasGroups: true,
-      upcomingDestinations,
-      scheduledDestinations,
+      withinWindowDestinations,
+      beyondWindowDestinations,
+      noETADestinations,
     };
-  }, [services, stopData, scheduleData, servicesArrivals]);
-
-  // Next scheduled departure (ms) per route, computed each render to stay current:
-  //   scheduleOriginETAs — only routes that originate at this stop (live tracking
-  //     has no data there until the bus departs), used alongside live arrivals.
-  //   scheduleAllETAs — every route passing this stop, used as a full static
-  //     fallback when live arrivals are unavailable.
-  const scheduleOriginETAs = scheduleETAByRoute(scheduleData, {
-    originStopId: id,
-  });
-  const scheduleAllETAs = scheduleETAByRoute(scheduleData);
-
-  // ETA for a route: live tracking ETA when available, otherwise a schedule ETA.
-  // In static fallback (live data unavailable) every route uses its schedule ETA;
-  // otherwise only origin-stop routes do. `scheduled` flags the schedule-based
-  // ones so they can be styled differently.
-  const getServiceETA = (service) => {
-    const live = servicesArrivals[service];
-    if (live) return { ms: live, scheduled: false };
-    const sched = (staticFallback ? scheduleAllETAs : scheduleOriginETAs).get(
-      service,
-    );
-    if (sched != null) return { ms: sched, scheduled: true };
-    return null;
-  };
+  }, [
+    services,
+    stopData,
+    scheduleData,
+    servicesArrivals,
+    staticFallback,
+    maxArrivalTime,
+  ]);
 
   // Renders the ETA badge for a route. Schedule-based ETAs (origin stops) are
   // italicised and prefixed with "~" to distinguish them from live ETAs.
@@ -491,17 +518,25 @@ export default function BusServicesArrival({
         <>
           {groupedByDestination.hasGroups ? (
             <>
-              {groupedByDestination.upcomingDestinations.length > 0 && (
+              {groupedByDestination.withinWindowDestinations.length > 0 && (
                 <div class="service-arrival-group">
-                  {groupedByDestination.upcomingDestinations.map((dest) =>
+                  {groupedByDestination.withinWindowDestinations.map((dest) =>
                     renderDestinationGroup(dest),
                   )}
                 </div>
               )}
 
-              {groupedByDestination.scheduledDestinations.length > 0 && (
+              {groupedByDestination.beyondWindowDestinations.length > 0 && (
                 <div class="service-arrival-group">
-                  {groupedByDestination.scheduledDestinations.map((dest) =>
+                  {groupedByDestination.beyondWindowDestinations.map((dest) =>
+                    renderDestinationGroup(dest),
+                  )}
+                </div>
+              )}
+
+              {groupedByDestination.noETADestinations.length > 0 && (
+                <div class="service-arrival-group">
+                  {groupedByDestination.noETADestinations.map((dest) =>
                     renderDestinationGroup(dest),
                   )}
                 </div>
@@ -509,15 +544,21 @@ export default function BusServicesArrival({
             </>
           ) : (
             <>
-              {groupedByDestination.upcomingServices.length > 0 && (
+              {groupedByDestination.withinWindowServices.length > 0 && (
                 <div class="service-arrival-group">
-                  {renderServiceList(groupedByDestination.upcomingServices)}
+                  {renderServiceList(groupedByDestination.withinWindowServices)}
                 </div>
               )}
 
-              {groupedByDestination.scheduledServices.length > 0 && (
+              {groupedByDestination.beyondWindowServices.length > 0 && (
                 <div class="service-arrival-group">
-                  {renderServiceList(groupedByDestination.scheduledServices)}
+                  {renderServiceList(groupedByDestination.beyondWindowServices)}
+                </div>
+              )}
+
+              {groupedByDestination.noETAServices.length > 0 && (
+                <div class="service-arrival-group">
+                  {renderServiceList(groupedByDestination.noETAServices)}
                 </div>
               )}
             </>
