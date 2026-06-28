@@ -100,17 +100,12 @@ jobs:
         with:
           commit_message: 'Update GTFS data [skip ci]'
 
-      - name: Configure AWS credentials for R2
-        if: steps.detect-changes.outputs.cities != ''
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          aws-region: auto
-          sts-endpoint: ${{ secrets.R2_ENDPOINT_URL }}
-
       - name: Sync schedule data to R2
         if: steps.detect-changes.outputs.cities != ''
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
         run: |
           for city in ${{ steps.detect-changes.outputs.cities }}; do
             if [ -d "$city/schedule" ]; then
