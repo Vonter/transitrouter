@@ -2591,18 +2591,21 @@ const App = () => {
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
+    let lastKh = -1;
     const update = () => {
       const kh = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      // Only write when it actually changes so iOS toolbar-collapse scrolls
+      // don't churn the custom property and trigger transform repaints.
+      if (kh === lastKh) return;
+      lastKh = kh;
       document.documentElement.style.setProperty(
         '--keyboard-height',
         `${kh}px`,
       );
     };
     vv.addEventListener('resize', update);
-    vv.addEventListener('scroll', update);
     return () => {
       vv.removeEventListener('resize', update);
-      vv.removeEventListener('scroll', update);
     };
   }, []);
 

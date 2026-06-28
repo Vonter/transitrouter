@@ -494,9 +494,7 @@ a:active {
 #arrivals-popover,
 #service-popover {
   top: 101%;
-  transition:
-    transform 0.3s 0.1s ease-in-out,
-    max-height 0.3s 0.1s ease-in-out;
+  transition: transform 0.3s 0.1s ease-in-out;
   max-height: 50vh;
   max-height: 50dvh;
   display: flex;
@@ -507,7 +505,6 @@ a:active {
 #arrivals-popover.expand,
 #service-popover.expand {
   transform: translateY(calc(-101% - var(--keyboard-height, 0px)));
-  will-change: transform;
 }
 #stop-popover.expand {
   z-index: 3;
@@ -2642,6 +2639,12 @@ input[type='checkbox']:checked:after {
   /* Disable transitions while actively dragging */
   .popover.dragging {
     transition: none !important;
+  }
+
+  /* Drop the blur mid-drag */
+  .popover.dragging,
+  .popover.dragging .popover-inner {
+    backdrop-filter: none !important;
   }
 }
 
