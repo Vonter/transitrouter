@@ -1,5 +1,5 @@
 ahmedabad:
-  gtfs.zip: daae88157d36927b9ad4d7b0e0d87eba7d58b9d051c876bab184cbf0f0ffa6e9
+  gtfs.zip: 2673d1cfefb8e30e730d2b04f7902fe0e864415251aad9fe3e1d8dd0f32ce2c9
 andhrapradesh:
   gtfs.zip: 6ca4bf51c63fa5868026cb0301fe0c2837d6f81001d992303aabde8296fa3a32
 blr:
@@ -13,18 +13,18 @@ goa:
 greyhound:
   gtfs.zip: c53b1d46bb80b9edb019332a80c57d7a802626ab19d0a72041609df2a8dd6e89
 hublidharwad:
-  gtfs_compat.zip: 933fea6aa4269e6a887c457f71e26a86a1497ca12637343ba57b424014ed85bb
+  gtfs_compat.zip: c7e0726f18fcb8303469a267ec3b62a5fc4c58c1a61b16181b02c3b86ecd587d
 indore:
   gtfs.zip: c7e274726819c29ca9399018fe980ecdd76b2b9d0f60b62a4f9247f841db38cf
 kochi:
   gtfs.zip: 3312f4cccb48ad2c09e8b2ff3e6004d3a4eb69b3d963e4d7d4a86ae05e35ce2b
 mumbai:
-  gtfs_compat.zip: aa40451f5c02ba8380a52d9fa554bb1aa257c6b3ab741244fb30b905c46c1607
+  gtfs_compat.zip: 53344bff7d8c472c12151af7b89bdb3d0ab48630ad051c0f62a98683ca7e1719
 nyc:
   gtfs.zip: f17612e9586f2f621af0e2c1f987d7a8eda01abb52769ee0599a975514ec59a1
 pune:
-  gtfs.zip: d96d13521a108b0656b1a1538638832af718b716cd57acdc8a32a8839e6a7c82
+  gtfs.zip: dfbd8f31c841bad617f59eca4a7bc37f8f887e1cc0ac0c9cf4abedadad42d528
 railways:
   gtfs.zip: b4d1d2f9392d2751ea478f6b500ff4899ac491665da1eccc492ced9749605478
 rajkot:
-  gtfs.zip: 3ef48ccf2ffa180f2028f6a9f6a1f0ce074b8d41c483d5a6957ff8a4610a837c
+  gtfs.zip: c8bf1cee757d4e2b310d7fc5c514c7a6a2a48bc4b72b96bd7452f300f67f5d7f
