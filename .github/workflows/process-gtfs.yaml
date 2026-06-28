@@ -23,6 +23,11 @@ on:
         required: false
         type: boolean
         default: false
+      force_reprocess:
+        description: Force re-parse even if the GTFS hash is unchanged
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -69,7 +74,7 @@ jobs:
           echo "Cities to process: $cities"
 
       - name: Fetch and process GTFS feeds
-        run: python3 process.py ${{ steps.cities.outputs.list }} ${{ inputs.generate_pois == true && '' || '--skip-pois' }}
+        run: python3 process.py ${{ steps.cities.outputs.list }} ${{ inputs.generate_pois == true && '' || '--skip-pois' }} ${{ inputs.force_reprocess == true && '--force-reprocess' || '' }}
 
       - name: Detect changed cities
         id: detect-changes
@@ -102,6 +107,7 @@ jobs:
           aws-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           aws-region: auto
+          sts-endpoint: ${{ secrets.R2_ENDPOINT_URL }}
 
       - name: Sync schedule data to R2
         if: steps.detect-changes.outputs.cities != ''
