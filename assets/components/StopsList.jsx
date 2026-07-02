@@ -51,7 +51,7 @@ function areOpposite(stop1, stop2, stopsData) {
 export default function StopsList(props) {
   const route = getRoute();
 
-  const { routes, stopsData, vehicles = [], onStopClick, onVehicleClick } = props;
+  const { routes, stopsData, cityCode, vehicles = [], onStopClick, onVehicleClick } = props;
   
   if (
     !routes ||
@@ -156,17 +156,20 @@ export default function StopsList(props) {
 
   const StopLink = ({ stop }) => {
     if (!stop) return null;
-    
+
     const cityConfig = getConfigForCity(route.city);
     const disableStopID = cityConfig?.disableStopID || false;
-    
+    const stopHref = cityCode && route.city === 'all'
+      ? `#/all/stops/${cityCode}^${stop}`
+      : `#${route.cityPrefix}/stops/${stop}`;
+
     return (
       <a
-        href={`#${route.cityPrefix}/stops/${stop}`}
+        href={stopHref}
         data-stop={stop}
         onClick={(e) => {
           e.preventDefault();
-          location.hash = `#${route.cityPrefix}/stops/${stop}`;
+          location.hash = stopHref;
           if (onStopClick) {
             onStopClick(stop);
           }

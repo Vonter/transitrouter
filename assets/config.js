@@ -4,6 +4,7 @@ import {
   AVAILABLE_CITIES as SHARED_AVAILABLE_CITIES,
   CITY_CONFIGS,
   getConfigForCity as sharedGetConfigForCity,
+  isAlphaEnabled,
 } from './city-config';
 
 export const DEFAULT_CITY = SHARED_DEFAULT_CITY;
@@ -20,11 +21,17 @@ export const getCurrentCity = () => {
 };
 
 export const isCitySupported = (cityCode) => {
+  if (cityCode === 'all') return isAlphaEnabled();
   return !!CITY_CONFIGS[cityCode];
 };
 
+// India/South-Asia initial extent used when city === 'all'
+const ALL_MODE_BOUNDS = [66, 6, 98, 38];
+
 export const getCityBounds = () => {
-  const config = getConfigForCity(getCurrentCity());
+  const currentCity = getCurrentCity();
+  if (currentCity === 'all') return ALL_MODE_BOUNDS;
+  const config = getConfigForCity(currentCity);
   if (!config?.city?.bounds) {
     console.error('Invalid city config:', config);
     return [0, 0, 0, 0]; // Safe fallback

@@ -29,6 +29,8 @@ export default function BusServicesArrival({
   active,
   showBusesOnMap,
   stopData, // Added to access destination groups
+  cityCode, // Optional city override for all-mode stop popovers
+  stopsData: stopsDataProp, // Optional stopsData override for all-mode (avoids window._data)
   onLoadingChange, // Callback to notify parent of loading state
   onErrorChange, // Callback to notify parent of error state
   cancelRef, // Ref to expose cancel function to parent
@@ -49,6 +51,14 @@ export default function BusServicesArrival({
     useState(false);
   const [scheduleData, setScheduleData] = useState(null);
   const route = getRoute();
+  const isAllMode = route.city === 'all';
+  const resolvedCity = cityCode ?? route.city;
+  const resolvedCityPrefix = cityCode ? `/${cityCode}` : route.cityPrefix;
+  // In all-mode, service links use city-qualified #/all/services/city^service format
+  const makeServiceHref = (service) =>
+    isAllMode && cityCode
+      ? `#/all/services/${cityCode}^${encodeURIComponent(service)}`
+      : `#${resolvedCityPrefix}/services/${encodeURIComponent(service)}`;
 
   // Next scheduled departure (ms) per route, computed each render to stay current:
   //   scheduleOriginETAs — only routes that originate at this stop (live tracking
@@ -103,7 +113,7 @@ export default function BusServicesArrival({
           const idx = routeStops.indexOf(stopData.number);
           if (idx === -1) return;
           routeStops.slice(idx + 1).forEach((stopId) => {
-            const stopName = window._data?.stopsData?.[stopId]?.name;
+            const stopName = (stopsDataProp ?? window._data?.stopsData)?.[stopId]?.name;
             if (stopName) names.add(stopName);
           });
         });
@@ -133,7 +143,7 @@ export default function BusServicesArrival({
           const idx = routeStops.indexOf(stopData.number);
           if (idx === -1) return;
           routeStops.slice(idx + 1).forEach((stopId) => {
-            const stopName = window._data?.stopsData?.[stopId]?.name;
+            const stopName = (stopsDataProp ?? window._data?.stopsData)?.[stopId]?.name;
             if (
               stopName &&
               fuzzyMatches.has(stopName) &&
@@ -167,7 +177,7 @@ export default function BusServicesArrival({
     const { signal } = controllerRef.current;
 
     try {
-      const cityConfig = getConfigForCity(route.city);
+      const cityConfig = getConfigForCity(resolvedCity);
       const stopRoutesApiPath = cityConfig?.stopRoutes?.apiPath;
       const arrivalsApiPath =
         stopRoutesApiPath || cityConfig?.liveArrivals?.apiPath;
@@ -247,8 +257,8 @@ export default function BusServicesArrival({
   useEffect(() => {
     if (!id) return;
 
-    const cityConfig = getConfigForCity(route.city);
-    const scheduleJSONPath = `https://data.transitrouter.vonter.in/${route.city}/schedule`;
+    const cityConfig = getConfigForCity(resolvedCity);
+    const scheduleJSONPath = `https://data.transitrouter.vonter.in/${resolvedCity}/schedule`;
 
     fetchCache(`${scheduleJSONPath}/${id}.json`, 60 * 60) // Cache for 1 hour
       .then((data) => {
@@ -258,7 +268,7 @@ export default function BusServicesArrival({
         console.error('Failed to fetch schedule data:', error);
         setScheduleData(null);
       });
-  }, [id, route.city]);
+  }, [id, resolvedCity]);
 
   useEffect(() => {
     let intervalID;
@@ -343,7 +353,7 @@ export default function BusServicesArrival({
             if (!destinationMap.has(destId)) {
               destinationMap.set(destId, {
                 id: destId,
-                name: window._data?.stopsData?.[destId]?.name || destId,
+                name: (stopsDataProp ?? window._data?.stopsData)?.[destId]?.name || destId,
                 services: [],
                 maxStopCount: 0,
                 totalTripCount: 0,
@@ -427,7 +437,7 @@ export default function BusServicesArrival({
         .map((service) => (
           <>
             <a
-              href={`#${route.cityPrefix}/services/${encodeURIComponent(service)}`}
+              href={makeServiceHref(service)}
               class={`service-tag ${
                 route.page === 'service' && servicesValue.includes(service)
                   ? 'current'
@@ -458,7 +468,7 @@ export default function BusServicesArrival({
       {serviceList.map((service) => (
         <>
           <a
-            href={`#${route.cityPrefix}/services/${encodeURIComponent(service)}`}
+            href={makeServiceHref(service)}
             class={`service-tag ${
               route.page === 'service' && servicesValue.includes(service)
                 ? 'current'

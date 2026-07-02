@@ -1503,6 +1503,21 @@ span.legend-opposite {
   margin: 8px 0 0;
 }
 
+.popover-list li.popover-city-header {
+  padding: 10px 14px 4px;
+  font-size: 0.75em;
+  font-weight: 500;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: none;
+  pointer-events: none;
+}
+.popover-list li.popover-city-header strong {
+  color: inherit;
+  font-weight: inherit;
+}
+
 .service-destination-group {
   margin-bottom: 16px;
   padding-bottom: 8px;
@@ -3231,6 +3246,10 @@ html.dark {
   .no-eta-section-header {
     color: #777;
     border-top-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .popover-list li.popover-city-header {
+    color: #777;
   }
 
   /* ── Service destination ───────────────────────────────────────────────────── */
