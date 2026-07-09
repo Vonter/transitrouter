@@ -643,6 +643,32 @@ a:active {
 
 #between-popover .between-block {
   margin: 1em 0;
+  animation: between-view-in-list 0.22s ease-out both;
+}
+
+#between-popover .itinerary-detail {
+  animation: between-view-in-detail 0.22s ease-out both;
+}
+
+@keyframes between-view-in-list {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes between-view-in-detail {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 #between-popover .between-nada {
@@ -824,6 +850,112 @@ a:active {
 }
 #between-popover .between-stops .betweens-6:before {
   width: 35px;
+}
+
+#between-popover .between-item-leg-city {
+  margin-top: 4px;
+  font-size: 10px;
+  color: #666;
+  text-align: right;
+}
+
+/* Single-itinerary vertical detail card (between-popover result-num view).
+   Dot/line colors are set inline per-instance (a start→end gradient across
+   the whole trip — see timelineColor() in BetweenRoutes.js) rather than here,
+   to echo the same red→purple language as the list's .between-stops dots. */
+#between-popover .itin-stop-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 28px;
+}
+#between-popover .itin-seg-row {
+  display: flex;
+  gap: 12px;
+  min-height: 34px;
+}
+#between-popover .itin-rail {
+  flex-shrink: 0;
+  width: 16px;
+  display: flex;
+  justify-content: center;
+}
+#between-popover .itin-stop-row .itin-rail {
+  align-items: center;
+}
+#between-popover .itin-seg-row .itin-rail {
+  align-self: stretch;
+}
+#between-popover .itin-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 100px;
+  border: 3px solid;
+  background-color: #fff;
+}
+#between-popover .itin-line {
+  width: 3px;
+  border-radius: 2px;
+  align-self: stretch;
+}
+#between-popover .itin-seg-row.walk .itin-line {
+  width: 0;
+  border-left: 3px dotted;
+  background: none;
+}
+#between-popover .itin-stop-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+  font-size: 13px;
+  min-width: 0;
+}
+#between-popover .itin-stop-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#between-popover .itin-time {
+  display: block;
+  font-size: 11px;
+  color: #666;
+  font-variant-numeric: tabular-nums;
+}
+#between-popover .itin-stop-extra {
+  font-size: 11px;
+  color: #999;
+  font-style: italic;
+}
+#between-popover .itin-seg-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  padding-left: 2px;
+}
+#between-popover .itin-seg-alternates {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: #999;
+  font-style: italic;
+}
+#between-popover .itin-walk-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #666;
+}
+#between-popover .itin-walk-label:before {
+  content: '';
+  display: block;
+  width: 14px;
+  height: 14px;
+  background: url(images/walk.svg) no-repeat center;
+  background-size: 14px;
+  opacity: 0.6;
 }
 
 .callout {
@@ -3090,6 +3222,25 @@ html.dark {
   #between-popover .nearby-start .between-stops .start:before,
   #between-popover .nearby-end .between-stops .end:before {
     background-color: #111;
+  }
+  #between-popover .between-item-leg-city {
+    color: #999;
+  }
+
+  #between-popover .itin-dot {
+    background-color: #111;
+  }
+  #between-popover .itin-time {
+    color: #999;
+  }
+  #between-popover .itin-stop-extra {
+    color: #888;
+  }
+  #between-popover .itin-walk-label {
+    color: #999;
+  }
+  #between-popover .itin-seg-alternates {
+    color: #888;
   }
 
   /* ── Stop / service tags ───────────────────────────────────────────────────── */

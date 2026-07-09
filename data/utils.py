@@ -2,10 +2,49 @@
 """
 Common utilities for GTFS processing scripts.
 """
+import csv
+import io
 import zipfile
 import polars as pl
 from pathlib import Path
 from typing import Dict, List
+
+
+def _read_csv_lenient(file_obj, schema_overrides: Dict[str, pl.DataType]) -> pl.DataFrame:
+    """Fallback for GTFS files whose quoting polars' stricter CSV parser
+    rejects - e.g. a field with a stray, unescaped `"` that was never
+    opened (seen in a real Delhi GTFS `stops.txt` stop_name: `Foo Bar)",`
+    with no leading quote). Polars loses track of quoted-field boundaries
+    from that point on and misreads the rest of the file as one giant row.
+
+    Python's csv module doesn't have this failure mode: a `"` that isn't the
+    first character of a field is treated as a literal character rather than
+    entering quoted mode, so it parses this kind of malformed-but-common
+    real-world CSV correctly - at the cost of being slower and not doing
+    polars' fast type inference (columns come back as strings; only the
+    `schema_overrides` types matter to callers, so that's cast explicitly)."""
+    text = io.TextIOWrapper(file_obj, encoding='utf-8-sig', newline='')
+    reader = csv.reader(text)
+    try:
+        header = next(reader)
+    except StopIteration:
+        return pl.DataFrame()
+
+    columns: Dict[str, List] = {name: [] for name in header}
+    width = len(header)
+    for row in reader:
+        if len(row) < width:
+            row = row + [''] * (width - len(row))
+        elif len(row) > width:
+            row = row[:width]
+        for name, value in zip(header, row):
+            columns[name].append(value if value != '' else None)
+
+    df = pl.DataFrame(columns, schema={name: pl.Utf8 for name in header})
+    for col, dtype in schema_overrides.items():
+        if col in df.columns:
+            df = df.with_columns(pl.col(col).cast(dtype, strict=False))
+    return df
 
 
 def read_gtfs_file(zip_path: str, filename: str) -> pl.DataFrame:
@@ -25,11 +64,16 @@ def read_gtfs_file(zip_path: str, filename: str) -> pl.DataFrame:
         if filename not in z.namelist():
             # Return empty DataFrame with expected schema if file doesn't exist
             return pl.DataFrame()
-        return pl.read_csv(
-            z.open(filename),
-            schema_overrides=schema_overrides,
-            infer_schema_length=10000
-        )
+        try:
+            return pl.read_csv(
+                z.open(filename),
+                schema_overrides=schema_overrides,
+                infer_schema_length=10000
+            )
+        except pl.exceptions.ComputeError as e:
+            print(f"  Warning: polars rejected {filename} ({e}); "
+                  f"retrying with Python's csv module (tolerates malformed quoting)")
+            return _read_csv_lenient(z.open(filename), schema_overrides)
 
 
 def find_gtfs_files(city_dir: str) -> List[str]:

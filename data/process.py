@@ -222,6 +222,47 @@ def get_status_counts(city_results: dict) -> dict:
     return Counter(r['status'] for r in city_results.values())
 
 
+def run_global_transfers():
+    """Run globaltransfers.py once, after all cities have been processed, to
+    build the cross-city walkable-transfer graph used by all-mode routing."""
+    log_message("Running globaltransfers.py (global transfer graph)...")
+    cmd = [sys.executable, str(SCRIPT_DIR / 'globaltransfers.py')]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
+        if result.returncode == 0:
+            log_message("✓ globaltransfers.py completed successfully")
+            if result.stdout.strip():
+                log_message(result.stdout.strip())
+        else:
+            error = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            log_message(f"✗ globaltransfers.py failed: {error}")
+    except subprocess.TimeoutExpired:
+        log_message(f"✗ globaltransfers.py timed out after {TIMEOUT // 3600} hour")
+    except Exception as e:
+        log_message(f"✗ Error running globaltransfers.py: {e}")
+
+
+def run_global_frequency():
+    """Run globalfrequency.py once, after schedule.py has produced each city's
+    schedule/ directory, to build the nationwide per-stop trip-frequency
+    index used by all-mode routing's search cost function."""
+    log_message("Running globalfrequency.py (global frequency index)...")
+    cmd = [sys.executable, str(SCRIPT_DIR / 'globalfrequency.py')]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
+        if result.returncode == 0:
+            log_message("✓ globalfrequency.py completed successfully")
+            if result.stdout.strip():
+                log_message(result.stdout.strip())
+        else:
+            error = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            log_message(f"✗ globalfrequency.py failed: {error}")
+    except subprocess.TimeoutExpired:
+        log_message(f"✗ globalfrequency.py timed out after {TIMEOUT // 3600} hour")
+    except Exception as e:
+        log_message(f"✗ Error running globalfrequency.py: {e}")
+
+
 def log_final_summary(city_results: dict, cities_to_process: list, status_counts: dict):
     """Log final processing summary."""
     log_message(f"\n{'='*80}")
@@ -316,6 +357,8 @@ Examples:
     
     if not cities_to_process_list:
         log_message("\nAll cities are already processed. Use --force-reprocess to reprocess.")
+        run_global_transfers()
+        run_global_frequency()
         return 0
     
     # Process each city that needs processing
@@ -331,7 +374,10 @@ Examples:
     # Final summary
     status_counts = get_status_counts(city_results)
     log_final_summary(city_results, cities_to_process_list, status_counts)
-    
+
+    run_global_transfers()
+    run_global_frequency()
+
     log_message(f"\n{'='*80}")
     log_message("Batch processing completed")
     log_message(f"{'='*80}\n")

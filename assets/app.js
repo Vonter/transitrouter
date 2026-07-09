@@ -47,6 +47,7 @@ import {
 } from './utils/workerClient';
 
 import { encode, decode } from './utils/specialID';
+import { buildGlobalRouteIndex, computeRaptorRoute, refineWithSchedule } from './utils/raptor';
 import { sortServices } from './utils/bus';
 import fetchCache from './utils/fetchCache';
 import getRoute from './utils/getRoute';
@@ -66,7 +67,7 @@ import {
 import BusServicesArrival from './components/BusServicesArrival';
 import { CLOSE_SVG } from './components/CloseControl';
 import GeolocateControl, { GEOLOCATE_SVG } from './components/GeolocateControl';
-import BetweenRoutes from './components/BetweenRoutes';
+import BetweenRoutes, { sortAndFilterResults } from './components/BetweenRoutes';
 import ScrollableContainer from './components/ScrollableContainer';
 import StopsList from './components/StopsList.jsx';
 
@@ -533,44 +534,68 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Auto-locate nearest city when default is "auto" and user is at root
+// Auto-locate nearest city when default is "auto" and user is at root.
+function nearestCityTo(latitude, longitude) {
+  let nearest = null;
+  let minDist = Infinity;
+  AVAILABLE_CITIES.forEach((code) => {
+    const cfg = getConfigForCity(code);
+    const b = cfg.city.bounds;
+    if (
+      latitude >= b.lowerLat &&
+      latitude <= b.upperLat &&
+      longitude >= b.lowerLong &&
+      longitude <= b.upperLong
+    ) {
+      const dist = Math.hypot(
+        latitude - (b.lowerLat + b.upperLat) / 2,
+        longitude - (b.lowerLong + b.upperLong) / 2,
+      );
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = code;
+      }
+    }
+  });
+  return nearest;
+}
+
 if (
   localStorage.getItem('defaultCity') === 'auto' &&
   (!location.hash || location.hash === '#' || location.hash === '#/')
 ) {
-  navigator.geolocation?.getCurrentPosition(
-    (pos) => {
-      const { latitude, longitude } = pos.coords;
-      let nearest = null;
-      let minDist = Infinity;
-      AVAILABLE_CITIES.forEach((code) => {
-        const cfg = getConfigForCity(code);
-        const b = cfg.city.bounds;
-        if (
-          latitude >= b.lowerLat &&
-          latitude <= b.upperLat &&
-          longitude >= b.lowerLong &&
-          longitude <= b.upperLong
-        ) {
-          const dist = Math.hypot(
-            latitude - (b.lowerLat + b.upperLat) / 2,
-            longitude - (b.lowerLong + b.upperLong) / 2,
-          );
-          if (dist < minDist) {
-            minDist = dist;
-            nearest = code;
-          }
-        }
-      });
-      // If no city bbox contains the user, fall back to FALLBACK_CITY (blr)
-      if ((nearest || city) !== city) {
+  // Fast path: Cloudflare's edge-populated request.cf (city/lat/lon), read via
+  // a same-origin Function (functions/api/map/geolocator.js) - no
+  // navigator.geolocation permission prompt, and no external IP-lookup
+  // service (the data is already on the request that reaches the Function).
+  fetch('/api/map/geolocator')
+    .then((res) => res.json())
+    .catch(() => null)
+    .then((geo) => {
+      const nearest = geo && nearestCityTo(geo.latitude, geo.longitude);
+      if (nearest && nearest !== city) {
         location.hash = `/${nearest}/`;
         location.reload();
+        return;
       }
-    },
-    () => {},
-    { timeout: 5000 },
-  );
+      if (nearest) return; // matched current city, nothing to do
+
+      // Fallback: geolocator gave nothing usable (e.g. local dev without a
+      // real Cloudflare edge, or no city-bbox match) - fall back to the
+      // browser's own (slower, permission-gated) geolocation.
+      navigator.geolocation?.getCurrentPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
+          const geoNearest = nearestCityTo(latitude, longitude);
+          if ((geoNearest || city) !== city) {
+            location.hash = `/${geoNearest}/`;
+            location.reload();
+          }
+        },
+        () => {},
+        { timeout: 5000 },
+      );
+    });
 }
 
 let rafST;
@@ -766,6 +791,68 @@ const processStopsForCity = (rawStops) => {
   return { cityStopsData, cityStopsDataArr };
 };
 
+// Fetches and merges a city's stops/services/routes JSON into `cityDataMap`
+// only — no map sources/layers. This is all `runAllModeBetween`'s RAPTOR
+// search needs (a route-major graph to search over), so between-queries don't
+// have to pay for rendering every stop of every city touched during the
+// search onto the map. `loadCity` (full load, below) reuses this and adds the
+// map layers on top when a city needs to actually be browsable/visible.
+const loadCityDataPromises = new Map(); // cityCode → Promise<void>, data-only fetch in flight
+const loadCityData = (cityCode) => {
+  if (cityDataMap.has(cityCode)) return Promise.resolve();
+  if (loadCityPromises.has(cityCode)) return loadCityPromises.get(cityCode);
+  if (loadCityDataPromises.has(cityCode)) return loadCityDataPromises.get(cityCode);
+  const promise = _fetchCityDataImpl(cityCode);
+  loadCityDataPromises.set(cityCode, promise);
+  promise.finally(() => loadCityDataPromises.delete(cityCode));
+  return promise;
+};
+
+const _fetchCityDataImpl = async (cityCode) => {
+  const dp = `/data/${cityCode}`;
+  const [rawStops, citySvcsData, cityRoutesData] = await Promise.all([
+    fetch(`${dp}/stops.min.json`).then((r) => r.json()),
+    fetch(`${dp}/services.min.json`).then((r) => r.json()),
+    fetch(`${dp}/routes.min.json`).then((r) => r.json()),
+  ]);
+
+  const { cityStopsData, cityStopsDataArr } = processStopsForCity(rawStops);
+
+  Object.keys(citySvcsData).forEach((svcNum) => {
+    const svc = citySvcsData[svcNum];
+    Object.keys(svc).forEach((dest) => {
+      if (dest === 'name') return;
+      svc[dest].forEach((route, vi) => {
+        route.forEach((stop, stopIdx) => {
+          if (!cityStopsData[stop]) return;
+          if (!cityStopsData[stop].services.includes(svcNum))
+            cityStopsData[stop].services.push(svcNum);
+          const rk = `${svcNum}|${dest}|${vi}`;
+          if (!cityStopsData[stop].routes.includes(rk)) {
+            cityStopsData[stop].routes.push(rk);
+            if (!cityStopsData[stop].destinationGroups) cityStopsData[stop].destinationGroups = {};
+            if (!cityStopsData[stop].destinationGroups[svcNum]) cityStopsData[stop].destinationGroups[svcNum] = {};
+            if (!cityStopsData[stop].destinationGroups[svcNum][dest]) {
+              cityStopsData[stop].destinationGroups[svcNum][dest] = { destination: dest, routes: [], stopCount: 0 };
+            }
+            const dg = cityStopsData[stop].destinationGroups[svcNum][dest];
+            dg.routes.push(route);
+            const remaining = route.length - stopIdx - 1;
+            if (remaining > dg.stopCount) dg.stopCount = remaining;
+          }
+        });
+      });
+    });
+  });
+
+  cityDataMap.set(cityCode, {
+    stopsData: cityStopsData,
+    stopsDataArr: cityStopsDataArr,
+    servicesData: citySvcsData,
+    routesData: cityRoutesData,
+  });
+};
+
 const loadCity = (cityCode) => {
   if (loadedCities.has(cityCode)) return Promise.resolve();
   if (loadCityPromises.has(cityCode)) return loadCityPromises.get(cityCode);
@@ -778,50 +865,14 @@ const loadCity = (cityCode) => {
 const _loadCityImpl = async (cityCode) => {
   loadingCities.add(cityCode);
   try {
-    const dp = `/data/${cityCode}`;
-    const [rawStops, citySvcsData, cityRoutesData] = await Promise.all([
-      fetch(`${dp}/stops.min.json`).then((r) => r.json()),
-      fetch(`${dp}/services.min.json`).then((r) => r.json()),
-      fetch(`${dp}/routes.min.json`).then((r) => r.json()),
-    ]);
-
-    const { cityStopsData, cityStopsDataArr } = processStopsForCity(rawStops);
-
-    Object.keys(citySvcsData).forEach((svcNum) => {
-      const svc = citySvcsData[svcNum];
-      Object.keys(svc).forEach((dest) => {
-        if (dest === 'name') return;
-        svc[dest].forEach((route, vi) => {
-          route.forEach((stop, stopIdx) => {
-            if (!cityStopsData[stop]) return;
-            if (!cityStopsData[stop].services.includes(svcNum))
-              cityStopsData[stop].services.push(svcNum);
-            const rk = `${svcNum}|${dest}|${vi}`;
-            if (!cityStopsData[stop].routes.includes(rk)) {
-              cityStopsData[stop].routes.push(rk);
-              if (!cityStopsData[stop].destinationGroups) cityStopsData[stop].destinationGroups = {};
-              if (!cityStopsData[stop].destinationGroups[svcNum]) cityStopsData[stop].destinationGroups[svcNum] = {};
-              if (!cityStopsData[stop].destinationGroups[svcNum][dest]) {
-                cityStopsData[stop].destinationGroups[svcNum][dest] = { destination: dest, routes: [], stopCount: 0 };
-              }
-              const dg = cityStopsData[stop].destinationGroups[svcNum][dest];
-              dg.routes.push(route);
-              const remaining = route.length - stopIdx - 1;
-              if (remaining > dg.stopCount) dg.stopCount = remaining;
-            }
-          });
-        });
-      });
-    });
-
-    cityDataMap.set(cityCode, {
-      stopsData: cityStopsData,
-      stopsDataArr: cityStopsDataArr,
-      servicesData: citySvcsData,
-      routesData: cityRoutesData,
-    });
-
+    // Reuse an in-flight/completed data-only fetch (e.g. from a between query)
+    // instead of re-requesting the same JSON.
+    if (!cityDataMap.has(cityCode)) {
+      await (loadCityDataPromises.get(cityCode) || _fetchCityDataImpl(cityCode));
+    }
     if (!map || map.getSource(`stops-${cityCode}`)) return;
+    const { stopsDataArr: cityStopsDataArr, servicesData: citySvcsData } = cityDataMap.get(cityCode) || {};
+    if (!cityStopsDataArr) return; // data fetch failed
 
     const cityConfig = getConfigForCity(cityCode);
     const disableStopID = cityConfig?.disableStopID || false;
@@ -1059,6 +1110,25 @@ const unloadCity = (cityCode) => {
   onCityUnloadedCallback?.(cityCode);
 };
 
+// Unload any currently-loaded city that isn't pinned (`activeSelectionCities`)
+// and is outside the current viewport. `checkViewport` only re-evaluates this
+// on the next pan/zoom, so a selection (service view, between query) that
+// pinned cities outside the viewport would otherwise leave them loaded
+// indefinitely once dismissed — call this right after clearing/updating
+// `activeSelectionCities` to release them immediately.
+const releaseUnpinnedCities = () => {
+  if (!map) return;
+  const vp = map.getBounds();
+  const zoom = map.getZoom();
+  [...loadedCities].forEach((cityCode) => {
+    if (activeSelectionCities.has(cityCode)) return;
+    const minZoom = CITY_CONFIGS[cityCode]?.city?.bounds?.minZoom;
+    const b = cityStopsBounds.get(cityCode);
+    if (minZoom != null && b && viewportOverlapsBounds(vp, b) && zoom >= minZoom) return;
+    unloadCity(cityCode);
+  });
+};
+
 // Fetch lightweight name/number index for ALL cities upfront so search works globally.
 // The full stop/service objects are NOT retained — just { number, name, city }.
 const preindexAllCities = async () => {
@@ -1210,8 +1280,22 @@ const App = () => {
   }, [stopPopoverDestFilter, stopPopoverDestFilterExact]);
 
   const [showBetweenPopover, setShowBetweenPopover] = useState(false);
+  // Lags one step behind showBetweenPopover: keeps the last non-null data around
+  // while the popover slides shut, so its content doesn't vanish mid-transition
+  // (mirrors stopPopoverData, which is likewise never nulled on close).
+  const [betweenPopoverData, setBetweenPopoverData] = useState(null);
+  useEffect(() => {
+    if (showBetweenPopover) setBetweenPopoverData(showBetweenPopover);
+  }, [showBetweenPopover]);
   const [betweenStartStop, setBetweenStartStop] = useState(null);
   const [betweenEndStop, setBetweenEndStop] = useState(null);
+  // All-mode (cross-city) `between` result: { startId, endId, startStop, endStop, itineraries, loading, error }
+  const [allModeBetween, setAllModeBetween] = useState(null);
+  // Same lag as betweenPopoverData, for the all-mode variant.
+  const [allModeBetweenData, setAllModeBetweenData] = useState(null);
+  useEffect(() => {
+    if (allModeBetween) setAllModeBetweenData(allModeBetween);
+  }, [allModeBetween]);
   const [directionsOrigin, setDirectionsOrigin] = useState(null);
   const [editingBetweenStop, setEditingBetweenStop] = useState(null);
   const [currentLocation, setCurrentLocation] = useState(null);
@@ -1227,6 +1311,11 @@ const App = () => {
   const stopPopover = useRef(null);
   const floatPill = useRef(null);
   const betweenPopover = useRef(null);
+  // Cache key for the last-run between query — lets navigating list ↔ detail
+  // (which only changes route.subpage) skip re-running the RAPTOR search /
+  // worker-based route computation, since the query itself hasn't changed.
+  const lastAllModeBetweenQuery = useRef(null);
+  const lastBetweenQuery = useRef(null);
   const servicePopover = useRef(null);
   const vehicleTracker = useRef(null);
   const workerReadyRef = useRef(null);
@@ -1789,8 +1878,9 @@ const App = () => {
     if (!result?.startRoute || !startStop?.coordinates || !endStop?.coordinates)
       return;
 
-    // Selection highlighting
-    const clickedItem = e.target.closest('.between-item');
+    // Selection highlighting (skipped when called without a click event, e.g.
+    // restoring a selection from a deep-linked result URL)
+    const clickedItem = e?.target?.closest('.between-item');
     if (clickedItem) {
       const container = clickedItem.closest('.between-block');
       if (container) {
@@ -2022,6 +2112,253 @@ const App = () => {
     });
   };
 
+  // Nationwide precomputed indices for all-mode routing, fetched once and
+  // cached: the walkable-transfer graph (data/all/transfers.min.json) and the
+  // per-stop trip-frequency index (data/all/frequency.min.json) the RAPTOR
+  // search's cost function looks up synchronously (no network calls inside
+  // the round loop — see raptor.js's header comment for why that matters).
+  let globalTransfersPromise = null;
+  const loadGlobalTransfers = () => {
+    if (!globalTransfersPromise) {
+      globalTransfersPromise = fetchCache('/data/all/transfers.min.json', 24 * 60);
+    }
+    return globalTransfersPromise;
+  };
+  let globalFrequencyPromise = null;
+  const loadGlobalFrequency = () => {
+    if (!globalFrequencyPromise) {
+      globalFrequencyPromise = fetchCache('/data/all/frequency.min.json', 24 * 60);
+    }
+    return globalFrequencyPromise;
+  };
+
+  /**
+   * All-mode `between`: runs unscoped (cross-city) RAPTOR over every city's
+   * route graph. The search itself needs every city's stop/route data in
+   * memory (it doesn't know upfront which cities a path will cross), so this
+   * fetches data-only for every city via `loadCityData` — no map sources or
+   * layers, just the routing graph. Only the cities actually touched by the
+   * resulting itineraries (plus the two endpoint cities) get their stops/
+   * routes fully loaded onto the map afterwards, and are pinned in
+   * `activeSelectionCities` so panning the map while viewing the result can't
+   * unload them. Additive to, and independent of, single-city `between`'s
+   * worker-based search.
+   */
+  const runAllModeBetween = async (startGlobalId, endGlobalId) => {
+    const [startCity, startNumber] = startGlobalId.split('^');
+    const [endCity, endNumber] = endGlobalId.split('^');
+    activeSelectionCities.clear();
+    activeSelectionCities.add(startCity);
+    activeSelectionCities.add(endCity);
+    setAllModeBetween({
+      startId: startGlobalId,
+      endId: endGlobalId,
+      startStop: null,
+      endStop: null,
+      itineraries: [],
+      loading: true,
+      error: null,
+    });
+
+    try {
+      const [, transfers, frequencyIndex] = await Promise.all([
+        Promise.all(AVAILABLE_CITIES.map((c) => loadCityData(c))),
+        loadGlobalTransfers(),
+        loadGlobalFrequency(),
+      ]);
+
+      const startStop = cityDataMap.get(startCity)?.stopsData?.[startNumber];
+      const endStop = cityDataMap.get(endCity)?.stopsData?.[endNumber];
+      if (!startStop || !endStop) {
+        setAllModeBetween((prev) =>
+          prev && prev.startId === startGlobalId && prev.endId === endGlobalId
+            ? { ...prev, loading: false, error: 'Stop not found.' }
+            : prev,
+        );
+        return;
+      }
+
+      const globalIndex = buildGlobalRouteIndex(cityDataMap);
+      const { itineraries } = computeRaptorRoute({
+        globalIndex,
+        transfers,
+        frequencyIndex,
+        startId: startGlobalId,
+        endId: endGlobalId,
+      });
+      if (itineraries.length) await refineWithSchedule(itineraries, globalIndex);
+
+      // Render/pin only the cities the result actually touches — everything
+      // else stays data-only (fetched above for the search, but never added
+      // to the map).
+      const touchedCities = new Set([startCity, endCity]);
+      itineraries.forEach((it) => {
+        it.legs.forEach((leg) => touchedCities.add(leg.to.split('^')[0]));
+      });
+      touchedCities.forEach((c) => activeSelectionCities.add(c));
+      await Promise.all([...touchedCities].map((c) => loadCity(c)));
+      // Release cities pinned by a previous between query that this one
+      // doesn't touch and that are outside the viewport.
+      releaseUnpinnedCities();
+
+      setAllModeBetween((prev) =>
+        prev && prev.startId === startGlobalId && prev.endId === endGlobalId
+          ? {
+              ...prev,
+              startStop: { ...startStop, city: startCity },
+              endStop: { ...endStop, city: endCity },
+              itineraries,
+              loading: false,
+              error: itineraries.length ? null : 'No route found.',
+            }
+          : prev,
+      );
+    } catch (error) {
+      console.error('runAllModeBetween failed:', error);
+      setAllModeBetween((prev) =>
+        prev && prev.startId === startGlobalId && prev.endId === endGlobalId
+          ? { ...prev, loading: false, error: 'Something went wrong.' }
+          : prev,
+      );
+    }
+  };
+
+  /** Draws one all-mode itinerary's legs (rides + walks) on the map, resolving
+   * each leg's polyline/stop data from the correct city's `cityDataMap` entry. */
+  const renderAllModeBetweenRoute = (itinerary) => {
+    if (!itinerary?.legs?.length) return;
+
+    const stopAt = (globalId) => {
+      const [city, number] = globalId.split('^');
+      const stop = cityDataMap.get(city)?.stopsData?.[number];
+      return stop ? { ...stop, city, number } : null;
+    };
+
+    const highlightStops = [];
+    const addHighlight = (globalId, type) => {
+      const stop = stopAt(globalId);
+      if (stop?.coordinates) highlightStops.push({ ...stop, _type: type });
+    };
+    addHighlight(itinerary.startId, 'end');
+    addHighlight(itinerary.endId, 'end');
+    itinerary.legs.slice(0, -1).forEach((leg) => addHighlight(leg.to, 'intersect'));
+
+    const stopsHighlightSource = map.getSource('stops-highlight');
+    if (stopsHighlightSource) {
+      stopsHighlightSource.setData({
+        type: 'FeatureCollection',
+        features: highlightStops.map((stop) => ({
+          type: 'Feature',
+          id: encode(`${stop.city}^${stop.number}`),
+          properties: { name: stop.name, number: stop.number, type: stop._type, left: stop.left },
+          geometry: { type: 'Point', coordinates: stop.coordinates },
+        })),
+      });
+    }
+
+    requestAnimationFrame(() => {
+      const geometries = [];
+      itinerary.legs.forEach((leg) => {
+        const fromStop = stopAt(leg.fromStop);
+        const toStop = stopAt(leg.to);
+        if (!fromStop?.coordinates || !toStop?.coordinates) return;
+
+        if (leg.kind === 'walk') {
+          geometries.push({
+            type: 'walk',
+            geometry: {
+              type: 'LineString',
+              coordinates: [fromStop.coordinates, toStop.coordinates],
+            },
+          });
+          return;
+        }
+
+        const cityRoutes = cityDataMap.get(fromStop.city)?.routesData;
+        const servicePolylines = cityRoutes?.[leg.service];
+        let cropped = null;
+        if (servicePolylines?.length) {
+          let bestDistance = Infinity;
+          for (const encodedPolyline of servicePolylines) {
+            const polyline = decodePolyline(encodedPolyline);
+            if (!polyline?.coordinates?.length) continue;
+            const startClosest = findClosestPointOnPolyline(fromStop.coordinates, polyline.coordinates);
+            const endClosest = findClosestPointOnPolyline(toStop.coordinates, polyline.coordinates);
+            if (!startClosest.point || !endClosest.point) continue;
+            const totalDist = startClosest.distance + endClosest.distance;
+            if (totalDist < bestDistance) {
+              const candidate = cropPolylineBetweenPoints(polyline.coordinates, fromStop.coordinates, toStop.coordinates);
+              if (Array.isArray(candidate) && candidate.length >= 2) {
+                bestDistance = totalDist;
+                cropped = candidate;
+              }
+            }
+          }
+        }
+        geometries.push({
+          type: 'ride',
+          geometry: cropped
+            ? { type: 'LineString', coordinates: cropped }
+            : { type: 'LineString', coordinates: [fromStop.coordinates, toStop.coordinates] },
+        });
+      });
+
+      const routesBetweenSource = map.getSource('routes-between');
+      if (routesBetweenSource) {
+        routesBetweenSource.setData({
+          type: 'FeatureCollection',
+          features: geometries.map(({ type, geometry }, i) => ({
+            type: 'Feature',
+            properties: { type: type === 'ride' ? (i === 0 ? 'start' : 'end') : 'walk' },
+            geometry,
+          })),
+        });
+      }
+
+      const bounds = new maplibregl.LngLatBounds();
+      let hasValidBounds = false;
+      highlightStops.forEach((stop) => {
+        bounds.extend(stop.coordinates);
+        hasValidBounds = true;
+      });
+      if (hasValidBounds) {
+        map.fitBounds(bounds, {
+          padding: BREAKPOINT()
+            ? { top: 80, right: (betweenPopover.current?.offsetWidth || 0) + 80, bottom: 80, left: 80 }
+            : { top: 80, right: 80, bottom: (betweenPopover.current?.offsetHeight || 0) + 80, left: 80 },
+        });
+      }
+    });
+  };
+
+  // Deep-linking a specific result (`.../between/<query>/<result-num>`) should
+  // draw that itinerary on the map even if the user never clicked it — e.g. a
+  // shared link, or the back/forward buttons restoring a selection.
+  useEffect(() => {
+    if (route.page !== 'between' || !route.subpage) return;
+    const idx = parseInt(route.subpage, 10) - 1;
+    if (!Number.isInteger(idx) || idx < 0) return;
+
+    if (IS_ALL_MODE) {
+      const itinerary = allModeBetween?.itineraries?.[idx];
+      if (itinerary) renderAllModeBetweenRoute(itinerary);
+    } else if (showBetweenPopover) {
+      const sorted = sortAndFilterResults(
+        showBetweenPopover.results || [],
+        showBetweenPopover.arrivalData,
+        showBetweenPopover.staticFrequency,
+      );
+      const result = sorted[idx];
+      if (result) {
+        renderBetweenRoute({
+          startStop: showBetweenPopover.startStop,
+          endStop: showBetweenPopover.endStop,
+          result,
+        });
+      }
+    }
+  }, [route.page, route.subpage, allModeBetween, showBetweenPopover]);
+
   const defaultURL = document.querySelector('meta[property="og:url"]').content;
   const defaultImg = document.querySelector(
     'meta[property="og:image"]',
@@ -2058,6 +2395,7 @@ const App = () => {
       $map.classList.remove('fade-out');
       setShowServicePopover(false);
       setShowBetweenPopover(false);
+      if (route.page !== 'between') setAllModeBetween(null);
       vehicleTracker.current?.stop();
       setRouteLoading(false);
 
@@ -2083,6 +2421,14 @@ const App = () => {
       }
 
       if (route.page === 'service' && route.value) {
+        // Leaving a between-detail view (e.g. via a leg's service-tag link)
+        // must not leave its itinerary line/highlight drawn on the map -
+        // the single-city path clears these unconditionally on every
+        // navigation, but all-mode's per-page branches don't share that
+        // reset, so this branch needs its own clear.
+        map.getSource('routes-between')?.setData({ type: 'FeatureCollection', features: [] });
+        map.getSource('stops-highlight')?.setData({ type: 'FeatureCollection', features: [] });
+
         // Parse all city^service segments from the value (supports multi-route via ~)
         const qualifiedParts = route.value.split('~').filter((p) => p.includes('^'));
         if (qualifiedParts.length) {
@@ -2122,6 +2468,7 @@ const App = () => {
 
             activeSelectionCities.clear();
             Object.keys(cityGroups).forEach((c) => activeSelectionCities.add(c));
+            releaseUnpinnedCities();
             setExpandSearch(false);
             setShrinkSearch(true);
             setRouteServices(allSvcNums);
@@ -2277,13 +2624,46 @@ const App = () => {
         } else {
           setShowStopPopover(false);
         }
+      } else if (route.page === 'between' && route.value) {
+        map.getSource('routes')?.setData({ type: 'FeatureCollection', features: [] });
+        const [rawStart, rawEnd] = route.value.split(/[,-]/);
+        const parseQualified = (v) => {
+          const caret = v?.indexOf('^') ?? -1;
+          return caret !== -1 ? `${v.slice(0, caret)}^${v.slice(caret + 1)}` : null;
+        };
+        const startGlobalId = parseQualified(rawStart);
+        const endGlobalId = parseQualified(rawEnd);
+        if (!startGlobalId || !endGlobalId) {
+          navigateTo('/', route);
+        } else {
+          setHead({
+            title: `Routes between ${startGlobalId} and ${endGlobalId} - ${t('app.name')}`,
+            url: `/all/between/${route.value}`,
+          });
+          setExpandSearch(false);
+          setShrinkSearch(true);
+          // Navigating back to the result list (subpage dropped, e.g. closing
+          // the detail view) leaves no itinerary selected — clear the
+          // previously drawn detail line/highlight so it doesn't linger.
+          if (!route.subpage) {
+            map.getSource('stops-highlight')?.setData({ type: 'FeatureCollection', features: [] });
+            map.getSource('routes-between')?.setData({ type: 'FeatureCollection', features: [] });
+          }
+          const queryKey = `${startGlobalId}|${endGlobalId}`;
+          if (lastAllModeBetweenQuery.current !== queryKey) {
+            lastAllModeBetweenQuery.current = queryKey;
+            runAllModeBetween(startGlobalId, endGlobalId);
+          }
+        }
       } else {
         activeSelectionCities.clear();
+        releaseUnpinnedCities();
         setShowStopPopover(false);
         setHead(defaultHead);
         // Clear route/stop highlight sources when returning home
         map.getSource('routes')?.setData({ type: 'FeatureCollection', features: [] });
         map.getSource('routes-path')?.setData({ type: 'FeatureCollection', features: [] });
+        map.getSource('routes-between')?.setData({ type: 'FeatureCollection', features: [] });
         map.getSource('stops-highlight')?.setData({ type: 'FeatureCollection', features: [] });
         // Restore city stop layers in case we came from a service view
         loadedCities.forEach((c) => {
@@ -2816,7 +3196,23 @@ const App = () => {
           map.setPaintProperty('dim-overlay', 'fill-opacity', isDark ? 0.5 : 0.4);
         }
 
-        // Fetch arrivals for start stop and filter routes
+        // Navigating back to the result list (subpage dropped, e.g. closing the
+        // detail view) leaves no itinerary selected — clear the previously
+        // drawn detail line/highlight so it doesn't linger on the map.
+        if (!route.subpage) {
+          map.getSource('stops-highlight')?.setData({ type: 'FeatureCollection', features: [] });
+          map.getSource('routes-between')?.setData({ type: 'FeatureCollection', features: [] });
+        }
+
+        // Fetch arrivals for start stop and filter routes — skipped if this is
+        // the same query as last time (e.g. navigating list ↔ result detail,
+        // which only changes route.subpage) so the worker/live-arrival fetch
+        // doesn't rerun on every such navigation.
+        const betweenQueryKey = `${city}|${startStopNumber}-${endStopNumber}`;
+        if (lastBetweenQuery.current === betweenQueryKey) {
+          break;
+        }
+        lastBetweenQuery.current = betweenQueryKey;
         (async () => {
           const cityConfig = getConfigForCity(city);
           const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -4687,25 +5083,23 @@ const App = () => {
         // that a static viewport (no further pan/zoom) still loads them
         checkViewport();
       });
-    } else {
-      // City mode: restore viewport from URL if present
-      const urlViewport = getViewportFromUrl();
-      if (urlViewport) {
-        map.jumpTo({ center: [urlViewport.lon, urlViewport.lat], zoom: urlViewport.z });
-      }
     }
 
-    // Both modes: persist current viewport to URL on every move
-    map.on('moveend', () => {
-      const c = map.getCenter();
-      saveViewportToUrl(c.lat, c.lng, map.getZoom());
-    });
+    // All-mode only: persist/restore viewport via URL so a shared link keeps its
+    // map position across cities. City-scoped mode never writes lat/lon/z to
+    // the URL — the hash route alone determines its viewport.
+    if (IS_ALL_MODE) {
+      map.on('moveend', () => {
+        const c = map.getCenter();
+        saveViewportToUrl(c.lat, c.lng, map.getZoom());
+      });
+    }
 
     // GeolocateControl automatically acquires location on page load if permission is 'granted'
     // The handleLocationUpdate callback will be triggered when location is acquired and marker is rendered
   }, [mapLoaded]);
 
-  const selectDirectionsDestination = (stopNumber) => {
+  const selectDirectionsDestination = (stopNumber, destCity) => {
     if (editingBetweenStop) {
       const { role, fixedStop } = editingBetweenStop;
       setEditingBetweenStop(null);
@@ -4718,8 +5112,13 @@ const App = () => {
     }
     if (!directionsOrigin) return false;
     const originNumber = directionsOrigin.number;
+    const originCity = directionsOrigin.city;
     setDirectionsOrigin(null);
-    if (originNumber != stopNumber) {
+    if (IS_ALL_MODE) {
+      if (originCity && destCity && (originCity !== destCity || originNumber != stopNumber)) {
+        location.hash = `#/all/between/${originCity}^${originNumber}-${destCity}^${stopNumber}`;
+      }
+    } else if (originNumber != stopNumber) {
       location.hash = `${route.cityPrefix}/between/${originNumber}-${stopNumber}`;
     }
     return true;
@@ -4761,7 +5160,7 @@ const App = () => {
           // Slowly zoom in first
           map.flyTo({ zoom: zoom + 2, center });
           setShrinkSearch(true);
-        } else if (selectDirectionsDestination(feature.properties.number)) {
+        } else if (selectDirectionsDestination(feature.properties.number, feature.properties.city)) {
           // Handled by directions mode
         } else if (IS_ALL_MODE && feature.properties.city) {
           location.hash = `#/all/stops/${feature.properties.city}^${feature.properties.number}`;
@@ -5014,6 +5413,18 @@ const App = () => {
         </a>
       </li>
     ));
+
+  // `#/all/between/<query>/<result-num>` (1-based) or `${cityPrefix}/between/<query>/<result-num>` —
+  // selects a single itinerary/result to show as a vertical detail card instead of the list.
+  const betweenSelectedIdx = (() => {
+    if (route.page !== 'between' || !route.subpage) return null;
+    const idx = parseInt(route.subpage, 10) - 1;
+    return Number.isInteger(idx) && idx >= 0 ? idx : null;
+  })();
+  const betweenListUrl = IS_ALL_MODE
+    ? `/all/between/${route.value}`
+    : `${route.cityPrefix}/between/${route.value}`;
+  const betweenListHref = `#${betweenListUrl}`;
 
   return (
     <>
@@ -5384,7 +5795,7 @@ const App = () => {
                           onClick={(e) => {
                             if (directionsOrigin || editingBetweenStop) {
                               e.preventDefault();
-                              selectDirectionsDestination(s.number);
+                              selectDirectionsDestination(s.number, s.city);
                             }
                           }}
                         >
@@ -5734,73 +6145,117 @@ const App = () => {
       <div
         id="between-popover"
         ref={betweenPopover}
-        class={`popover ${showBetweenPopover ? 'expand' : ''}`}
+        class={`popover ${(IS_ALL_MODE ? allModeBetween : showBetweenPopover) ? 'expand' : ''}`}
       >
         <div class="popover-handle">
           <span></span>
         </div>
-        {showBetweenPopover && [
-          <a
-            href={`#${route.cityPrefix}/`}
-            onClick={resetStartEndStops}
-            class="popover-close"
-          >
-            &times;
-          </a>,
-          (() => {
-            const { startStop, endStop } = showBetweenPopover;
-            const editStop = (role) => {
-              const fixed = role === 'origin' ? endStop : startStop;
-              setEditingBetweenStop({
-                role,
-                fixedStop: fixed.number,
-                label: fixed.name || fixed.number,
-              });
-              setShrinkSearch(false);
-              navigateTo('/', route);
-            };
-            return (
+        {IS_ALL_MODE
+          ? allModeBetweenData && [
+              <a
+                href={betweenSelectedIdx != null ? betweenListHref : '#/all/'}
+                onClick={() => { if (betweenSelectedIdx == null) setAllModeBetween(null); }}
+                class="popover-close"
+              >
+                &times;
+              </a>,
               <header>
                 <div class="between-header-row">
                   <div class="between-header-stops">
-                    <button class="between-stop-edit" title="Change origin" onClick={() => editStop('origin')}>
-                      {startStop.name || startStop.number}
-                    </button>
+                    <span>{allModeBetweenData.startStop?.name || allModeBetweenData.startId}</span>
                     <span class="between-stop-arrow">{'\u2192'}</span>
-                    <button class="between-stop-edit" title="Change destination" onClick={() => editStop('destination')}>
-                      {endStop.name || endStop.number}
-                    </button>
+                    <span>{allModeBetweenData.endStop?.name || allModeBetweenData.endId}</span>
                   </div>
-                  <button
-                    class="between-swap-btn"
-                    title="Swap origin and destination"
-                    onClick={() => {
-                      location.hash = `${route.cityPrefix}/between/${endStop.number}-${startStop.number}`;
-                    }}
-                  >
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
-                  </button>
                 </div>
-              </header>
-            );
-          })(),
-          <div class="popover-scroll">
-            <BetweenRoutes
-              results={showBetweenPopover.results || []}
-              stopsData={stopsData}
-              arrivalData={showBetweenPopover.arrivalData}
-              staticFrequency={showBetweenPopover.staticFrequency}
-              onClickRoute={(e, result) =>
-                renderBetweenRoute({
-                  e,
-                  startStop: showBetweenPopover.startStop,
-                  endStop: showBetweenPopover.endStop,
-                  result,
-                })
-              }
-            />
-          </div>,
-        ]}
+              </header>,
+              <div class="popover-scroll">
+                {allModeBetweenData.loading && (
+                  <div class="between-block between-nada">Finding routes…</div>
+                )}
+                {!allModeBetweenData.loading && allModeBetweenData.error && (
+                  <div class="between-block between-nada">{allModeBetweenData.error}</div>
+                )}
+                {!allModeBetweenData.loading && !allModeBetweenData.error && (
+                  <BetweenRoutes
+                    itineraries={allModeBetweenData.itineraries}
+                    cityDataMap={cityDataMap}
+                    selectedIndex={betweenSelectedIdx}
+                    getServiceHref={(service, city) => `#/all/services/${city}^${encodeURIComponent(service)}`}
+                    onClickRoute={(e, itinerary, i) => {
+                      renderAllModeBetweenRoute(itinerary);
+                      location.hash = `${betweenListUrl}/${i + 1}`;
+                    }}
+                  />
+                )}
+              </div>,
+            ]
+          : betweenPopoverData && [
+              <a
+                href={betweenSelectedIdx != null ? betweenListHref : `#${route.cityPrefix}/`}
+                onClick={() => { if (betweenSelectedIdx == null) resetStartEndStops(); }}
+                class="popover-close"
+              >
+                &times;
+              </a>,
+              (() => {
+                const { startStop, endStop } = betweenPopoverData;
+                const editStop = (role) => {
+                  const fixed = role === 'origin' ? endStop : startStop;
+                  setEditingBetweenStop({
+                    role,
+                    fixedStop: fixed.number,
+                    label: fixed.name || fixed.number,
+                  });
+                  setShrinkSearch(false);
+                  navigateTo('/', route);
+                };
+                return (
+                  <header>
+                    <div class="between-header-row">
+                      <div class="between-header-stops">
+                        <button class="between-stop-edit" title="Change origin" onClick={() => editStop('origin')}>
+                          {startStop.name || startStop.number}
+                        </button>
+                        <span class="between-stop-arrow">{'\u2192'}</span>
+                        <button class="between-stop-edit" title="Change destination" onClick={() => editStop('destination')}>
+                          {endStop.name || endStop.number}
+                        </button>
+                      </div>
+                      <button
+                        class="between-swap-btn"
+                        title="Swap origin and destination"
+                        onClick={() => {
+                          location.hash = `${route.cityPrefix}/between/${endStop.number}-${startStop.number}`;
+                        }}
+                      >
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                      </button>
+                    </div>
+                  </header>
+                );
+              })(),
+              <div class="popover-scroll">
+                <BetweenRoutes
+                  results={betweenPopoverData.results || []}
+                  stopsData={stopsData}
+                  arrivalData={betweenPopoverData.arrivalData}
+                  staticFrequency={betweenPopoverData.staticFrequency}
+                  startStop={betweenPopoverData.startStop}
+                  endStop={betweenPopoverData.endStop}
+                  selectedIndex={betweenSelectedIdx}
+                  getServiceHref={(service) => `#${route.cityPrefix}/services/${encodeURIComponent(service)}`}
+                  onClickRoute={(e, result, i) => {
+                    renderBetweenRoute({
+                      e,
+                      startStop: betweenPopoverData.startStop,
+                      endStop: betweenPopoverData.endStop,
+                      result,
+                    });
+                    location.hash = `${betweenListUrl}/${i + 1}`;
+                  }}
+                />
+              </div>,
+            ]}
       </div>
       {(directionsOrigin || editingBetweenStop) && (() => {
         const isEditingOrigin = editingBetweenStop?.role === 'origin';
