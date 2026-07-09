@@ -1,3 +1,6 @@
 polars==1.35.1
 polyline==2.0.3
 requests==2.32.3
+scipy==1.16.3
+shapely==2.1.2
+numpy==2.3.4
