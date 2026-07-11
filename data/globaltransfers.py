@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Precompute a global walkable-transfer graph spanning every processed city.
+Precompute global walkable-transfer and same-place-cluster graphs spanning
+every processed city.
 
 Reuses `transfers.py`'s Voronoi/KD-tree `compute_transfers` logic, but runs it
 once over the union of every city's `stops.min.json` instead of one city at a
@@ -14,7 +15,11 @@ together on the ground (e.g. a city bus stop next to a `railways`/`greyhound`
 stop) - no special-casing of "which cities are adjacent" is needed, since
 MAX_RADIUS_METERS already bounds any edge to real walking distance.
 
-Output: data/all/transfers.min.json -> { "city^stop_id": [["city^neighbor_id", distance_m], ...], ... }
+Output:
+  data/all/transfers.min.json -> inter-cluster (different-place) walking
+    transfers: { "city^stop_id": [["city^neighbor_id", distance_m], ...], ... }
+  data/all/clusters.min.json -> intra-cluster (same-place) stop groups:
+    { "city^stop_id": [["city^sibling_id", distance_m], ...], ... }
 """
 
 import json
@@ -27,6 +32,7 @@ from transfers import BUFFER_METERS, MAX_RADIUS_METERS, compute_transfers, load_
 SCRIPT_DIR = Path(__file__).parent
 OUTPUT_DIR = SCRIPT_DIR / 'all'
 OUTPUT_FILE = OUTPUT_DIR / 'transfers.min.json'
+CLUSTERS_OUTPUT_FILE = OUTPUT_DIR / 'clusters.min.json'
 
 
 def discover_city_stop_files() -> Dict[str, Path]:
@@ -67,7 +73,7 @@ def main():
         'Computing global Voronoi-based transfer graph '
         f'(buffer={BUFFER_METERS}m, cap={MAX_RADIUS_METERS}m)...'
     )
-    transfers = compute_transfers(global_stops, BUFFER_METERS, MAX_RADIUS_METERS)
+    transfers, clusters = compute_transfers(global_stops, BUFFER_METERS, MAX_RADIUS_METERS)
 
     total_edges = sum(len(v) for v in transfers.values())
     cross_city_edges = sum(
@@ -80,12 +86,19 @@ def main():
         f'Computed {total_edges:,} directed transfer edges across '
         f'{len(transfers):,} stops ({cross_city_edges:,} cross-city)'
     )
+    clustered_stops = sum(1 for v in clusters.values() if v)
+    print(f'{clustered_stops:,} stops share a Voronoi cell with at least one other stop')
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     transfers_sorted = dict(sorted(transfers.items()))
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         json.dump(transfers_sorted, f, separators=(',', ':'))
     print(f'Wrote: {OUTPUT_FILE}')
+
+    clusters_sorted = dict(sorted(clusters.items()))
+    with open(CLUSTERS_OUTPUT_FILE, 'w', encoding='utf-8') as f:
+        json.dump(clusters_sorted, f, separators=(',', ':'))
+    print(f'Wrote: {CLUSTERS_OUTPUT_FILE}')
     return 0
 
 

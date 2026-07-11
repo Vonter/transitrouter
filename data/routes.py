@@ -447,7 +447,7 @@ def process_services(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str])
             route_key = (str(route.get('route_short_name'))).strip()
         else:
             route_key = route_id
-        route_name = route['route_long_name']
+        route_name = route.get('route_long_name', '')
 
         # Filter trips for this route
         route_trip_dests = trip_destinations.filter(pl.col('route_id') == route_id)

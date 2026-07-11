@@ -16,6 +16,7 @@ from pathlib import Path
 
 SCRIPTS = [
     ('routes.py', ['--city']),
+    ('transfers.py', ['--city']),
     ('schedule.py', ['--city']),
     ('firstlast.py', ['--city']),
     ('ranking.py', ['--city']),

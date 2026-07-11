@@ -35,7 +35,7 @@ from scipy.spatial import Voronoi, QhullError, cKDTree
 from shapely.geometry import Point, Polygon
 from shapely.strtree import STRtree
 
-BUFFER_METERS = 100
+BUFFER_METERS = 400
 MAX_RADIUS_METERS = 1000
 EARTH_RADIUS_M = 6371000.0
 
@@ -145,11 +145,28 @@ def compute_transfers(
     stops_dict: Dict[str, List],
     buffer_meters: float = BUFFER_METERS,
     max_radius_meters: float = MAX_RADIUS_METERS,
-) -> Dict[str, List[List]]:
-    """Compute the walkable-transfer graph for a city's stops."""
+) -> Tuple[Dict[str, List[List]], Dict[str, List[List]]]:
+    """Compute the walkable-transfer graph for a city's stops, split into two
+    distinct edge sets that both come out of the same Voronoi computation:
+
+      clusters  -> intra-cluster edges: stops merged into the same proximity-
+                   clustered Voronoi seed (typically several stop ids a few
+                   meters apart at the same physical station/junction - i.e.
+                   "the same place").
+      transfers -> inter-cluster edges: walking connections between DIFFERENT
+                   Voronoi cells, found via cell adjacency/overlap (i.e.
+                   "a different, nearby place").
+
+    Both are {stop_id: [[other_stop_id, distance_m], ...], ...}, sorted by
+    distance. This split is intentional: RAPTOR's footpath-relaxation step
+    needs both (same-place transfers are ~free, different-place transfers
+    cost real walking time), while the "locations" feature only needs
+    `clusters` (which stops sit inside the same cell as a given point).
+    """
     all_ids = list(stops_dict.keys())
     if len(all_ids) < 2:
-        return {sid: [] for sid in all_ids}
+        empty = {sid: [] for sid in all_ids}
+        return empty, dict(empty)
 
     lons = [stops_dict[sid][0] for sid in all_ids]
     lats = [stops_dict[sid][1] for sid in all_ids]
@@ -166,22 +183,23 @@ def compute_transfers(
         [coords[cluster_members[label]].mean(axis=0) for label in cluster_labels]
     )
 
-    result: Dict[str, List[List]] = {sid: [] for sid in all_ids}
+    clusters: Dict[str, List[List]] = {sid: [] for sid in all_ids}
+    transfers: Dict[str, List[List]] = {sid: [] for sid in all_ids}
 
     def real_dist(i: int, j: int) -> float:
         return float(np.linalg.norm(coords[i] - coords[j]))
 
-    def add_edge(i: int, j: int, dist: float):
+    def add_edge(target: Dict[str, List[List]], i: int, j: int, dist: float):
         if dist > max_radius_meters:
             return
         a, b = all_ids[i], all_ids[j]
-        result[a].append([b, round(dist, 1)])
-        result[b].append([a, round(dist, 1)])
+        target[a].append([b, round(dist, 1)])
+        target[b].append([a, round(dist, 1)])
 
     # Intra-cluster edges: stops grouped together as within the overlap threshold.
     for members in cluster_members.values():
         for i, j in combinations(members, 2):
-            add_edge(i, j, real_dist(i, j))
+            add_edge(clusters, i, j, real_dist(i, j))
 
     # Inter-cluster edges via Voronoi over cluster centroids.
     if len(cluster_labels) < 2:
@@ -195,7 +213,7 @@ def compute_transfers(
                 continue
             for i in cluster_members[cluster_labels[ci]]:
                 for j in cluster_members[cluster_labels[cj]]:
-                    add_edge(i, j, real_dist(i, j))
+                    add_edge(transfers, i, j, real_dist(i, j))
     else:
         cells = build_capped_cells(cluster_coords, buffer_meters, max_radius_meters)
         tree = STRtree(cells)
@@ -213,11 +231,13 @@ def compute_transfers(
                     continue
                 for i in cluster_members[cluster_labels[ci]]:
                     for j in cluster_members[cluster_labels[cj]]:
-                        add_edge(i, j, real_dist(i, j))
+                        add_edge(transfers, i, j, real_dist(i, j))
 
-    for sid in result:
-        result[sid].sort(key=lambda e: e[1])
-    return result
+    for sid in clusters:
+        clusters[sid].sort(key=lambda e: e[1])
+    for sid in transfers:
+        transfers[sid].sort(key=lambda e: e[1])
+    return transfers, clusters
 
 
 def main():
@@ -227,6 +247,7 @@ def main():
     parser.add_argument('--city', type=str, help='City name (uses $city/stops.min.json)')
     parser.add_argument('--stops-file', type=str, help='Path to stops.min.json (if not using --city)')
     parser.add_argument('--output', type=str, help='Output path for transfers.min.json')
+    parser.add_argument('--clusters-output', type=str, help='Output path for clusters.min.json')
     parser.add_argument(
         '--buffer-meters', type=float, default=BUFFER_METERS,
         help=f'How far (meters) cells may overlap, and the proximity-clustering '
@@ -243,9 +264,12 @@ def main():
         city_dir = args.city
         stops_file = os.path.join(city_dir, 'stops.min.json')
         output_file = args.output or os.path.join(city_dir, 'transfers.min.json')
+        clusters_output_file = args.clusters_output or os.path.join(city_dir, 'clusters.min.json')
     elif args.stops_file:
         stops_file = args.stops_file
-        output_file = args.output or os.path.join(str(Path(stops_file).parent), 'transfers.min.json')
+        parent_dir = str(Path(stops_file).parent)
+        output_file = args.output or os.path.join(parent_dir, 'transfers.min.json')
+        clusters_output_file = args.clusters_output or os.path.join(parent_dir, 'clusters.min.json')
     else:
         print('Error: provide either --city or --stops-file')
         return 1
@@ -262,15 +286,22 @@ def main():
         'Computing Voronoi-based transfer graph '
         f'(buffer={args.buffer_meters}m, cap={args.max_radius_meters}m)...'
     )
-    transfers = compute_transfers(stops_dict, args.buffer_meters, args.max_radius_meters)
+    transfers, clusters = compute_transfers(stops_dict, args.buffer_meters, args.max_radius_meters)
 
     total_edges = sum(len(v) for v in transfers.values())
     print(f'Computed {total_edges:,} directed transfer edges across {len(transfers):,} stops')
+    clustered_stops = sum(1 for v in clusters.values() if v)
+    print(f'{clustered_stops:,} stops share a Voronoi cell with at least one other stop')
 
     transfers_sorted = dict(sorted(transfers.items()))
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(transfers_sorted, f, separators=(',', ':'))
     print(f'Wrote: {output_file}')
+
+    clusters_sorted = dict(sorted(clusters.items()))
+    with open(clusters_output_file, 'w', encoding='utf-8') as f:
+        json.dump(clusters_sorted, f, separators=(',', ':'))
+    print(f'Wrote: {clusters_output_file}')
     return 0
 
 
