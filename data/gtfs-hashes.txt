@@ -23,7 +23,7 @@ mumbai:
 nyc:
   gtfs.zip: f17612e9586f2f621af0e2c1f987d7a8eda01abb52769ee0599a975514ec59a1
 pune:
-  gtfs.zip: dfbd8f31c841bad617f59eca4a7bc37f8f887e1cc0ac0c9cf4abedadad42d528
+  gtfs.zip: 881850066e71f203c29b95f37f701822c31650e8b645ec3a430c0ec2ec63289b
 railways:
   gtfs.zip: b4d1d2f9392d2751ea478f6b500ff4899ac491665da1eccc492ced9749605478
 rajkot:
