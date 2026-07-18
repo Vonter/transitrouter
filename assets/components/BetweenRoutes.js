@@ -63,6 +63,73 @@ function formatWalkMinutes(distanceMeters) {
   return Math.max(1, Math.round(distanceMeters / WALK_SPEED_MPS / 60));
 }
 
+// A location endpoint has no graph-precomputed distance to any given stop
+// (unlike stop-to-stop transfers/clusters, which are Voronoi-derived at
+// build time) — its walk leg is computed on the fly from real coordinates.
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(a));
+}
+
+// stop.coordinates is [lng, lat] (see app.js's stopsData/cityDataMap).
+function locationToStopMeters(location, stop) {
+  if (!location || !stop?.coordinates) return null;
+  const [lng, lat] = stop.coordinates;
+  return haversineMeters(location.lat, location.lon, lat, lng);
+}
+
+// Total door-to-door minutes for a RAPTOR itinerary, including a location
+// endpoint's walk to/from its nearest stop (not captured by the search
+// itself — every candidate cluster stop is seeded at the same start time,
+// so RAPTOR's own timing never includes "walk from the actual point to
+// whichever stop was used"). Only itineraries carry real board/alight times
+// (epoch-minutes) — legacy single-city itineraries have no timing data at
+// all, just a topological route match, so there's no reliable basis to show
+// a duration for those.
+function computeItineraryDurationMinutes(itinerary, cityDataMap, startLocation, endLocation) {
+  const legs = itinerary?.legs;
+  if (!legs?.length) return null;
+  const first = legs[0];
+  const last = legs[legs.length - 1];
+  if (typeof last.alightTime !== 'number') return null;
+  let startTime;
+  if (first.kind === 'ride' && typeof first.boardTime === 'number') {
+    startTime = first.boardTime;
+  } else if (first.kind === 'walk' && typeof first.alightTime === 'number') {
+    startTime = first.alightTime - (formatWalkMinutes(first.distanceMeters) || 0);
+  } else {
+    return null;
+  }
+  let totalMinutes = last.alightTime - startTime;
+
+  if (startLocation) {
+    const [startCity, startStopNum] = itinerary.startId.split('^');
+    const firstStop = cityDataMap?.get(startCity)?.stopsData?.[startStopNum];
+    totalMinutes += formatWalkMinutes(locationToStopMeters(startLocation, firstStop)) || 0;
+  }
+  if (endLocation) {
+    const [endCity, endStopNum] = last.to.split('^');
+    const lastStop = cityDataMap?.get(endCity)?.stopsData?.[endStopNum];
+    totalMinutes += formatWalkMinutes(locationToStopMeters(endLocation, lastStop)) || 0;
+  }
+  return totalMinutes;
+}
+
+function formatDuration(minutes) {
+  if (typeof minutes !== 'number' || Number.isNaN(minutes) || minutes < 0) return null;
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h} h`;
+  return `${h}h ${m}m`;
+}
+
 function getArrivals(service) {
   return (
     service.arrivals ||
@@ -93,9 +160,9 @@ function getAvailableServices(arrivalData) {
   return services;
 }
 
-function getServiceArrivalInfo(arrivalData, serviceNo) {
-  if (!arrivalData?.length) return null;
-  const service = arrivalData.find((s) => String(s.no) === String(serviceNo));
+function getServiceArrivalInfo(arrivalByService, serviceNo) {
+  if (!arrivalByService?.size) return null;
+  const service = arrivalByService.get(String(serviceNo));
   if (!service) return null;
 
   const arrivals = getArrivals(service);
@@ -111,17 +178,23 @@ function getServiceArrivalInfo(arrivalData, serviceNo) {
   };
 }
 
-function calculateScore(result, arrivalData, staticFrequency) {
-  const { stopsBetween, endService, startService, _nearbyStart } = result;
-  const interchangeScore = endService ? 0 : 10000;
-  const stopsScore = 1000 / (stopsBetween.length + 1);
+function calculateScore(itinerary, arrivalByService, staticFrequency) {
+  const rideLegs = itinerary.legs.filter((leg) => leg.kind === 'ride');
+  const startService = rideLegs[0]?.service;
+  const isDirect = rideLegs.length <= 1;
+  // stopsBetween.length equivalent — candidate transfer stops riding along on
+  // the first ride leg (see dataWorker.js's handleBetweenRoutes); always 0 for
+  // a direct itinerary or a RAPTOR one (which never sets transferCandidates).
+  const transferCandidateCount = itinerary.legs[0]?.transferCandidates?.length || 0;
+  const interchangeScore = isDirect ? 10000 : 0;
+  const stopsScore = 1000 / (transferCandidateCount + 1);
 
   let arrivalTimeScore = 0;
   let frequencyScore = 0;
-  const hasData = arrivalData?.length > 0;
+  const hasData = arrivalByService?.size > 0;
 
-  if (!_nearbyStart && startService && hasData) {
-    const info = getServiceArrivalInfo(arrivalData, startService);
+  if (!itinerary._nearbyStart && startService && hasData) {
+    const info = getServiceArrivalInfo(arrivalByService, startService);
     if (info) {
       if (info.earliestMs !== null && info.earliestMs >= 0) {
         arrivalTimeScore = 100 / (info.earliestMs / 60000 + 1);
@@ -146,18 +219,25 @@ function calculateScore(result, arrivalData, staticFrequency) {
 export function sortAndFilterResults(results, arrivalData, staticFrequency) {
   if (!results.length) return [];
 
+  const startServiceOf = (itinerary) =>
+    itinerary.legs.find((leg) => leg.kind === 'ride')?.service;
+
   const available = getAvailableServices(arrivalData);
   const filtered =
     available.size > 0
-      ? results.filter(
-          (r) => r.startService && available.has(String(r.startService)),
-        )
+      ? results.filter((r) => {
+          const s = startServiceOf(r);
+          return s && available.has(String(s));
+        })
       : results;
 
+  const arrivalByService = new Map(
+    (arrivalData || []).map((s) => [String(s.no), s]),
+  );
   const scored = filtered
     .map((result) => ({
       result,
-      score: calculateScore(result, arrivalData, staticFrequency),
+      score: calculateScore(result, arrivalByService, staticFrequency),
     }))
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score)
@@ -172,96 +252,59 @@ export function sortAndFilterResults(results, arrivalData, staticFrequency) {
     .map((item) => item.result);
 }
 
-function RouteItem({ result, stopsData, onClickRoute }) {
-  const { startStop, endStop, startService, endService, stopsBetween } = result;
-  const { _nearbyStart, _nearbyEnd } = result;
-
-  const getStopName = (stopNumber) =>
-    stopsData?.[stopNumber]?.name || stopNumber;
-
-  const startName = startStop?.name || startStop?.number;
-  const endName = endStop?.name || endStop?.number;
-  const isDirect = !endService;
-  const interchangeCount = stopsBetween.length;
-
-  const classes = [
-    'between-item',
-    _nearbyStart && 'nearby-start',
-    _nearbyEnd && 'nearby-end',
-  ]
-    .filter(Boolean)
-    .join(' ');
-
-  return (
-    <div class={classes} onClick={(e) => onClickRoute(e, result)}>
-      <div class="between-inner">
-        <div class={`between-services ${isDirect ? 'full' : ''}`}>
-          <span class="start">{startService}</span>
-          {!isDirect && <span class="end">{endService}</span>}
-        </div>
-        <div class={`between-stops ${interchangeCount ? '' : 'nada'}`}>
-          <span class="start">{startName}</span>
-          <span
-            class={`betweens betweens-${Math.min(6, interchangeCount)}`}
-          >
-            {interchangeCount > 0 &&
-              (interchangeCount === 1
-                ? getStopName(stopsBetween[0])
-                : `${interchangeCount} stops`)}
-          </span>
-          <span class="end">{endName}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function getCityName(cityCode) {
   return getConfigForCity(cityCode)?.city?.name || cityCode;
 }
 
-function ItineraryItem({ itinerary, cityDataMap, onClickRoute }) {
-  const [startCity, startStopNumber] = itinerary.startId.split('^');
+// Shared between legacy (single-city, no timing) and RAPTOR (cross-city,
+// timed) itineraries — both now use the same {startId, legs} shape (see
+// dataWorker.js's handleBetweenRoutes). `resolveStop(id)` is the one thing
+// that differs by mode: legacy ids are bare stop numbers looked up in
+// `stopsData`; RAPTOR ids are `city^number` looked up via `cityDataMap`. A
+// legacy itinerary's `_nearbyStart`/`_nearbyEnd` flags stand in for a real
+// leading/trailing walk leg, which the worker never materializes (unlike
+// RAPTOR, whose own search already produces one when needed).
+function ItineraryItem({ itinerary, resolveStop, startLocation, endLocation, onClickRoute }) {
   const legs = itinerary.legs;
-  const cities = new Set([startCity, ...legs.map((leg) => leg.to.split('^')[0])]);
-  const isMultiCity = cities.size > 1;
-
-  const getStopName = (cityCode, stopNumber) =>
-    cityDataMap?.get(cityCode)?.stopsData?.[stopNumber]?.name || stopNumber;
-
   const rides = legs.filter((leg) => leg.kind === 'ride');
   const isDirect = rides.length <= 1;
   const startService = rides[0]?.service;
   const endService = isDirect ? null : rides[rides.length - 1]?.service;
 
-  const nearbyStart = legs.length > 1 && legs[0].kind === 'walk';
-  const nearbyEnd = legs.length > 1 && legs[legs.length - 1].kind === 'walk';
+  const hasLeadingWalk = legs[0]?.kind === 'walk';
+  const nearbyStart = hasLeadingWalk || itinerary._nearbyStart === true;
+  const nearbyEnd =
+    (legs.length > 1 && legs[legs.length - 1].kind === 'walk') ||
+    itinerary._nearbyEnd === true;
 
-  const [startCityId, startStopId] = nearbyStart
-    ? legs[0].to.split('^')
-    : [startCity, startStopNumber];
-  const startName = getStopName(startCityId, startStopId);
+  const startId = hasLeadingWalk ? legs[0].to : itinerary.startId;
+  const startName = resolveStop(startId)?.name || startId;
 
   const lastLeg = legs[legs.length - 1];
-  const [endCityId, endStopId] = lastLeg.to.split('^');
-  const endName = getStopName(endCityId, endStopId);
+  const endName = resolveStop(lastLeg.to)?.name || lastLeg.to;
 
-  const interchangeStops = legs
-    .slice(nearbyStart ? 1 : 0, -1)
-    .map((leg) => leg.to);
+  const interchangeStops = legs.slice(hasLeadingWalk ? 1 : 0, -1).map((leg) => leg.to);
   const interchangeCount = interchangeStops.length;
 
+  // A location endpoint never produces a leading/trailing walk *leg* (every
+  // candidate cluster stop is seeded equally, see computeRaptorRoute), so it
+  // needs its own flag alongside nearbyStart/nearbyEnd for the same "you'll
+  // need to walk" visual treatment.
   const classes = [
     'between-item',
-    nearbyStart && 'nearby-start',
-    nearbyEnd && 'nearby-end',
+    (nearbyStart || startLocation) && 'nearby-start',
+    (nearbyEnd || endLocation) && 'nearby-end',
   ]
     .filter(Boolean)
     .join(' ');
 
   const visitedCities = [
-    ...new Set([startCity, ...legs.map((leg) => leg.to.split('^')[0])]),
-  ];
+    ...new Set([
+      resolveStop(itinerary.startId)?.city,
+      ...legs.map((leg) => resolveStop(leg.to)?.city),
+    ]),
+  ].filter(Boolean);
+  const isMultiCity = visitedCities.length > 1;
 
   return (
     <div class={classes} onClick={(e) => onClickRoute(e, itinerary)}>
@@ -277,7 +320,7 @@ function ItineraryItem({ itinerary, cityDataMap, onClickRoute }) {
           >
             {interchangeCount > 0 &&
               (interchangeCount === 1
-                ? getStopName(...interchangeStops[0].split('^'))
+                ? resolveStop(interchangeStops[0])?.name
                 : `${interchangeCount} stops`)}
           </span>
           <span class="end">{endName}</span>
@@ -292,26 +335,32 @@ function ItineraryItem({ itinerary, cityDataMap, onClickRoute }) {
   );
 }
 
-// Normalizes a RAPTOR itinerary's legs into a stop/segment timeline for
-// `ItineraryDetail`. Board/alight times come straight from the search
-// (epoch-minutes) — `realBoardTime` (a real per-day schedule lookup done by
-// `refineWithSchedule`) is preferred over the estimated `boardTime` when present.
-function buildRaptorSteps(itinerary, cityDataMap) {
-  const stopAt = (globalId) => {
-    const [city, number] = globalId.split('^');
-    return { name: cityDataMap?.get(city)?.stopsData?.[number]?.name || number, city, number };
-  };
+// Normalizes an itinerary's legs into a stop/segment timeline for
+// `ItineraryDetail` — shared by both RAPTOR itineraries (real board/alight
+// times, cross-city, own walk legs already baked in by the search) and
+// legacy single-city results (no timing, single-city, a leading/trailing
+// walk only ever implied by `_nearbyStart`/`_nearbyEnd` since the worker
+// never materializes a real walk leg — `literalStartStop`/`literalEndStop`
+// exist purely to let this fall-back walk annotation compare against the
+// stop the user actually picked; RAPTOR callers never pass them, since a
+// walk leg already exists in `legs` whenever one applies).
+function buildSteps(itinerary, { resolveStop, startLocation, endLocation, literalStartStop, literalEndStop }) {
+  const nameOf = (stop) => stop?.name || resolveStop(stop?.number)?.name || stop?.number;
 
   const stopIds = [itinerary.startId, ...itinerary.legs.map((l) => l.to)];
   const stops = stopIds.map((id, i) => {
     const incoming = itinerary.legs[i - 1];
     const outgoing = itinerary.legs[i];
     return {
-      ...stopAt(id),
-      isStart: i === 0,
-      isEnd: i === stopIds.length - 1,
+      ...resolveStop(id),
+      isStart: i === 0 && !startLocation,
+      isEnd: i === stopIds.length - 1 && !endLocation,
       arrive: incoming?.kind === 'ride' ? formatEpochMinutes(incoming.alightTime) : null,
       depart: outgoing?.kind === 'ride' ? formatBoardTime(outgoing) : null,
+      extra:
+        incoming?.transferCandidates?.length > 1
+          ? `+${incoming.transferCandidates.length - 1} more possible transfer stop(s)`
+          : null,
     };
   });
 
@@ -323,44 +372,30 @@ function buildRaptorSteps(itinerary, cityDataMap) {
     alternates: leg.alternates || null,
   }));
 
-  return { stops, segments };
-}
-
-// Normalizes a single-transfer city-scoped `result` (RouteItem's data shape)
-// into the same {stops, segments} timeline shape. `stopsBetween` is only a
-// set of *candidate* interchange stops (routes' common stops), not a
-// resolved single transfer point — the first candidate is shown as
-// representative, with the rest noted as additional possibilities.
-function buildLegacySteps(result, userStartStop, userEndStop, getStopName) {
-  const stops = [];
-  const segments = [];
-  const nameOf = (stop) => stop?.name || getStopName(stop?.number) || stop?.number;
-
-  stops.push({ number: userStartStop.number, name: nameOf(userStartStop), isStart: true });
-
-  if (result._nearbyStart && String(result.startStop?.number) !== String(userStartStop.number)) {
-    segments.push({ kind: 'walk' });
-    stops.push({ number: result.startStop.number, name: nameOf(result.startStop) });
+  // A location endpoint never produces a real leading/trailing walk leg
+  // (every candidate cluster stop is seeded equally) — add one here purely
+  // for display, from the actual searched point to whichever stop the
+  // itinerary boarded/alighted at.
+  if (startLocation) {
+    const firstStop = resolveStop(itinerary.startId);
+    stops.unshift({ name: startLocation.name || 'Selected Location', isStart: true, isLocation: true });
+    segments.unshift({ kind: 'walk', walkMinutes: formatWalkMinutes(locationToStopMeters(startLocation, firstStop)) });
+  } else if (literalStartStop && String(itinerary.startId) !== String(literalStartStop.number)) {
+    stops[0].isStart = false;
+    stops.unshift({ number: literalStartStop.number, name: nameOf(literalStartStop), isStart: true });
+    segments.unshift({ kind: 'walk' });
   }
 
-  segments.push({ kind: 'ride', service: result.startService });
-
-  if (result.endService) {
-    const transferNumber = result.stopsBetween?.[0];
-    stops.push({
-      number: transferNumber,
-      name: getStopName(transferNumber),
-      extra: result.stopsBetween.length > 1 ? `+${result.stopsBetween.length - 1} more possible transfer stop(s)` : null,
-    });
-    segments.push({ kind: 'ride', service: result.endService });
-  }
-
-  const endIsFinal = !(result._nearbyEnd && String(result.endStop?.number) !== String(userEndStop.number));
-  stops.push({ number: result.endStop.number, name: nameOf(result.endStop), isEnd: endIsFinal });
-
-  if (!endIsFinal) {
+  const lastLegTo = itinerary.legs[itinerary.legs.length - 1].to;
+  if (endLocation) {
+    const lastStop = resolveStop(lastLegTo);
+    stops[stops.length - 1].isEnd = false;
+    segments.push({ kind: 'walk', walkMinutes: formatWalkMinutes(locationToStopMeters(endLocation, lastStop)) });
+    stops.push({ name: endLocation.name || 'Selected Location', isEnd: true, isLocation: true });
+  } else if (literalEndStop && String(lastLegTo) !== String(literalEndStop.number)) {
+    stops[stops.length - 1].isEnd = false;
     segments.push({ kind: 'walk' });
-    stops.push({ number: userEndStop.number, name: nameOf(userEndStop), isEnd: true });
+    stops.push({ number: literalEndStop.number, name: nameOf(literalEndStop), isEnd: true });
   }
 
   return { stops, segments };
@@ -479,64 +514,62 @@ export default function BetweenRoutes({
   getServiceHref,
   startStop,
   endStop,
+  startLocation,
+  endLocation,
 }) {
+  const isAllMode = !!itineraries;
+
+  // Legacy results still need scoring/filtering (no arrival-aware ranking
+  // happens before they reach here); RAPTOR itineraries arrive pre-sorted by
+  // the search itself.
   const sortedResults = useMemo(
-    () => sortAndFilterResults(results || [], arrivalData, staticFrequency),
-    [results, arrivalData, staticFrequency],
+    () => (isAllMode ? itineraries : sortAndFilterResults(results || [], arrivalData, staticFrequency)),
+    [isAllMode, itineraries, results, arrivalData, staticFrequency],
   );
 
-  if (itineraries) {
-    if (!itineraries.length) {
-      return (
-        <div class="between-block between-nada">No route found.</div>
-      );
-    }
-
-    if (selectedIndex != null && itineraries[selectedIndex]) {
-      const { stops, segments } = buildRaptorSteps(itineraries[selectedIndex], cityDataMap);
-      return <ItineraryDetail stops={stops} segments={segments} getServiceHref={getServiceHref} />;
-    }
-
-    return (
-      <div class="between-block">
-        {itineraries.map((itinerary, i) => (
-          <ItineraryItem
-            key={i}
-            itinerary={itinerary}
-            cityDataMap={cityDataMap}
-            onClickRoute={(e) => onClickRoute(e, itinerary, i)}
-          />
-        ))}
-      </div>
-    );
-  }
+  // `city^number` (RAPTOR) vs bare stop number (legacy, single-city) — see
+  // dataWorker.js's handleBetweenRoutes and raptor.js for where each side of
+  // this shape originates.
+  const resolveStop = isAllMode
+    ? (id) => {
+        const [city, number] = String(id).split('^');
+        const s = cityDataMap?.get(city)?.stopsData?.[number];
+        return { name: s?.name || number, coordinates: s?.coordinates, city, number };
+      }
+    : (id) => {
+        const s = stopsData?.[id];
+        return { name: s?.name || id, coordinates: s?.coordinates, city: undefined, number: id };
+      };
 
   if (!sortedResults.length) {
     return (
       <div class="between-block between-nada">
-        No upcoming connecting routes
+        {isAllMode ? 'No route found.' : 'No upcoming connecting routes'}
       </div>
     );
   }
 
   if (selectedIndex != null && sortedResults[selectedIndex]) {
-    const getStopName = (stopNumber) => stopsData?.[stopNumber]?.name || stopNumber;
-    const { stops, segments } = buildLegacySteps(
-      sortedResults[selectedIndex],
-      startStop,
-      endStop,
-      getStopName,
-    );
+    const { stops, segments } = buildSteps(sortedResults[selectedIndex], {
+      resolveStop,
+      startLocation,
+      endLocation,
+      literalStartStop: isAllMode ? undefined : startStop,
+      literalEndStop: isAllMode ? undefined : endStop,
+    });
     return <ItineraryDetail stops={stops} segments={segments} getServiceHref={getServiceHref} />;
   }
 
   return (
     <div class="between-block">
-      {sortedResults.map((result, i) => (
-        <RouteItem
-          result={result}
-          stopsData={stopsData}
-          onClickRoute={(e) => onClickRoute(e, result, i)}
+      {sortedResults.map((itinerary, i) => (
+        <ItineraryItem
+          key={i}
+          itinerary={itinerary}
+          resolveStop={resolveStop}
+          startLocation={startLocation}
+          endLocation={endLocation}
+          onClickRoute={(e) => onClickRoute(e, itinerary, i)}
         />
       ))}
     </div>

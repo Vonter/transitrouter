@@ -8,7 +8,6 @@ for every stop in every city, so an all-mode RAPTOR search can look up an
 expected-wait estimate synchronously (in-memory) instead of fetching real
 schedule JSON for every stop it touches during the search - fetching
 thousands of individual schedule files mid-search doesn't scale country-wide
-(see raptor.md's Phase 1/Phase 2 split).
 
 Must run as part of the same `process.py` invocation that generates each
 city's `schedule/` directory - `pnpm run data`'s later cleanup step

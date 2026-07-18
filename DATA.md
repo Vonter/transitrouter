@@ -4,7 +4,7 @@
 
 - Bengaluru: [Vonter/bmtc-gtfs](https://github.com/Vonter/bmtc-gtfs)
 - Chennai: [ungalsoththu/ChennaiGTFS](https://github.com/ungalsoththu/ChennaiGTFS)
-- Delhi: [OTD Delhi](https://otd.delhi.gov.in/data/static/)
+- Delhi: [Delhi TransportStack](https://dts-backend.transportstack.in/api/dataset/otd/download-file?agency=delhi-buses&category=static_gtfs&filename=delhi_buses_static_gtfs_v1.zip)
 - Goa: [KTCL Goa](https://ktclgoa.com/gtfs/)
 - Kochi: [Jungle Bus](https://jungle-bus.github.io/KochiTransport/)
 - Pune: [croyla/pmpml-gtfs](https://github.com/croyla/pmpml-gtfs)
@@ -13,7 +13,7 @@
 - Rajkot: [croyla/rrl-gtfs](https://github.com/croyla/rrl-gtfs)
 - Hubli-Dharwad: [croyla/hdbrts-gtfs](https://github.com/croyla/hdbrts-gtfs)
 - Indore: [Neo2308/aictsl-gtfs](https://github.com/Neo2308/aictsl-gtfs)
-- Telangana: [Open Data Telangana](https://drive.google.com/file/d/1vmjLCHzWButGuQUK0RLjy3a1_norIHyq)
+- Telangana: [Open Data Telangana (TGSRTC)](https://www.tgsrtc.telangana.gov.in/open-data)
 - Andhra Pradesh: [Neo2308/apsrtc-gtfs](https://github.com/Neo2308/apsrtc-gtfs)
 - Indian Railways: [Neo2308/indianrailways-gtfs](https://github.com/Neo2308/indianrailways-gtfs/)
 - Greyhound: [Greyhound, Flixbus](http://gtfs.gis.flix.tech/gtfs_generic_us.zip)

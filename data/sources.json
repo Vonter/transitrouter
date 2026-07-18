@@ -22,5 +22,13 @@
   "rajkot": {
     "url": "https://github.com/croyla/rrl-gtfs/raw/refs/heads/main/gtfs_compat.zip",
     "filename": "gtfs.zip"
+  },
+  "andhrapradesh": {
+    "url": "https://github.com/Neo2308/apsrtc-gtfs/raw/refs/heads/main/gtfs/gtfs.zip",
+    "filename": "gtfs.zip"
+  },
+  "railways": {
+    "url": "https://github.com/Neo2308/indianrailways-gtfs/raw/refs/heads/main/gtfs/gtfs.zip",
+    "filename": "gtfs.zip"
   }
 }

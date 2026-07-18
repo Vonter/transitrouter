@@ -28,7 +28,7 @@ export default () => {
 
   // Match route components
   let [_, page, value, subpage] =
-    routePath.match(/(service|stop|between)s?\/([^\/]+)\/?([^\/]+)?/) || [];
+    routePath.match(/(service|stop|between|location)s?\/([^\/]+)\/?([^\/]+)?/) || [];
 
   // Decode URI components to handle encoded whitespace and special characters
   try {

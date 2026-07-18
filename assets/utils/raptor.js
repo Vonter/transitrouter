@@ -12,7 +12,7 @@
  *   globalStopId  = "{city}^{stopNumber}"
  *   globalRouteKey = "{city}^{service}|{destination}|{variantIdx}"
  *
- * Phase 1 scope (per raptor.md): schedule/frequency-based cost function only,
+ * Phase 1 scope: schedule/frequency-based cost function only,
  * no live-arrival fan-out during the search.
  *
  * Cost-function note: the search loop uses ONLY the precomputed nationwide
@@ -29,8 +29,8 @@
 import fetchCache from './fetchCache';
 
 const WALK_SPEED_MPS = 1.1; // ~4 km/h
-// schedule.json has no trip_id stitched across a trip's stops (trip_id is
-// discarded during aggregation, see raptor.md) — there's no way to know a
+// schedule.json has no trip_id stitched across a trip's stops
+// — there's no way to know a
 // specific trip's real arrival time at downstream stops, so travel time
 // between consecutive stops on a route is approximated from stop-to-stop
 // straight-line distance at an assumed average transit speed.
@@ -79,19 +79,48 @@ function parseGlobalRouteKey(globalRouteKey) {
   };
 }
 
+// Rebuilding this from scratch is O(total stops/routes across every loaded
+// city) — expensive, and was previously redone on *every* between search
+// even when the set of loaded cities hadn't changed since the last one.
+// Cached here, keyed on a sorted signature of cityDataMap's current city
+// set, so it's only rebuilt when that set actually changes.
+let cachedIndex = null;
+let cachedSignature = null;
+
 /**
- * Merge every loaded city's stopsData/servicesData (from `cityDataMap`) into
- * one city-qualified route-major index RAPTOR can search over.
+ * Merge every loaded city's stopsData/servicesData/clustersData (from
+ * `cityDataMap`) into one city-qualified route-major index RAPTOR can search
+ * over. `clusters` (same-place stop groups) is assembled from each city's own
+ * clustersData plus the small nationwide `crossCityClusters` leftover (see
+ * globaltransfers.py) instead of one ever-growing nationwide clusters file.
  *
- * @param {Map<string,{stopsData:Object, servicesData:Object}>} cityDataMap
+ * @param {Map<string,{stopsData:Object, servicesData:Object, clustersData:Object}>} cityDataMap
+ * @param {Object.<string, Array<[string, number]>>} [crossCityClusters] - global clusters-cross-city.min.json
  */
-export function buildGlobalRouteIndex(cityDataMap) {
+export function buildGlobalRouteIndex(cityDataMap, crossCityClusters = {}) {
+  const signature = [...cityDataMap.keys()].sort().join(',');
+  if (cachedIndex && cachedSignature === signature) return cachedIndex;
+
   const stopRoutes = new Map(); // globalStopId -> globalRouteKey[]
   const routeStopSequence = new Map(); // globalRouteKey -> globalStopId[]
+  // globalRouteKey -> Map(globalStopId -> index within that route's sequence)
+  // — precomputed once here so the round loop's boarding-index lookup is an
+  // O(1) Map.get instead of an O(route length) seq.indexOf per marked stop.
+  const routeStopIndex = new Map();
   const stopMeta = new Map(); // globalStopId -> {city, number, coordinates, name}
+  const clusters = {}; // globalStopId -> [[globalNeighborId, distanceM], ...]
 
   for (const [city, cityData] of cityDataMap) {
-    const { stopsData, servicesData } = cityData;
+    const { stopsData, servicesData, clustersData } = cityData;
+
+    if (clustersData) {
+      for (const number in clustersData) {
+        const globalStopId = `${city}^${number}`;
+        const sameCity = clustersData[number].map(([n, d]) => [`${city}^${n}`, d]);
+        const cross = crossCityClusters[globalStopId] || [];
+        if (sameCity.length || cross.length) clusters[globalStopId] = [...sameCity, ...cross];
+      }
+    }
 
     for (const number in stopsData) {
       const stop = stopsData[number];
@@ -115,16 +144,24 @@ export function buildGlobalRouteIndex(cityDataMap) {
         const variants = serviceEntry[destination];
         variants.forEach((stopSeq, variantIdx) => {
           const globalRouteKey = `${city}^${service}|${destination}|${variantIdx}`;
-          routeStopSequence.set(
-            globalRouteKey,
-            stopSeq.map((n) => `${city}^${n}`),
-          );
+          const globalStopSeq = stopSeq.map((n) => `${city}^${n}`);
+          routeStopSequence.set(globalRouteKey, globalStopSeq);
+          const stopIndex = new Map();
+          globalStopSeq.forEach((stopId, i) => {
+            // A route can legitimately revisit the same stop id (a loop
+            // service); keep the *first* occurrence, matching indexOf's
+            // behavior exactly so this is a drop-in replacement.
+            if (!stopIndex.has(stopId)) stopIndex.set(stopId, i);
+          });
+          routeStopIndex.set(globalRouteKey, stopIndex);
         });
       }
     }
   }
 
-  return { stopRoutes, routeStopSequence, stopMeta };
+  cachedIndex = { stopRoutes, routeStopSequence, routeStopIndex, stopMeta, clusters };
+  cachedSignature = signature;
+  return cachedIndex;
 }
 
 function parseTripMinutes(timeStr) {
@@ -236,8 +273,12 @@ function upsertLabel(map, stopId, candidate) {
  * @param {ReturnType<typeof buildGlobalRouteIndex>} opts.globalIndex
  * @param {Object.<string, Array<[string, number]>>} opts.transfers - global transfers.min.json
  * @param {Object.<string, Object.<string, number>>} opts.frequencyIndex - global frequency.min.json
- * @param {string} opts.startId - global stop id
- * @param {string} opts.endId - global stop id
+ * @param {string} [opts.startId] - global stop id (single-origin search)
+ * @param {string} [opts.endId] - global stop id (single-destination search)
+ * @param {string[]} [opts.startIds] - global stop ids to search from simultaneously
+ *   (e.g. a location's nearby-stop cluster) - takes precedence over `startId` if given
+ * @param {string[]} [opts.endIds] - global stop ids that all count as "arrived" -
+ *   takes precedence over `endId` if given
  * @param {Date} [opts.departureTime]
  * @param {number} [opts.maxRounds]
  * @returns {{itineraries: Array<{startId, endId, legs}>}}
@@ -245,14 +286,19 @@ function upsertLabel(map, stopId, candidate) {
 export function computeRaptorRoute({
   globalIndex,
   transfers,
+  clusters = {},
   frequencyIndex,
   startId,
   endId,
+  startIds,
+  endIds,
   departureTime = new Date(),
   maxRounds = DEFAULT_MAX_ROUNDS,
 }) {
-  const { stopRoutes, routeStopSequence, stopMeta } = globalIndex;
-  if (!stopMeta.has(startId) || !stopMeta.has(endId)) {
+  const { stopRoutes, routeStopSequence, routeStopIndex, stopMeta } = globalIndex;
+  const origins = (startIds?.length ? startIds : [startId]).filter((id) => stopMeta.has(id));
+  const destinations = new Set((endIds?.length ? endIds : [endId]).filter((id) => stopMeta.has(id)));
+  if (!origins.length || !destinations.size) {
     return { itineraries: [] };
   }
 
@@ -263,9 +309,14 @@ export function computeRaptorRoute({
   // patternKey, edge, parent}, where `parent` is a direct reference to the
   // label it was extended from (or null at the start), so reconstruction
   // never needs a separate lookup map and is immune to a label being pruned
-  // from some *other* stop's top-K list later on.
-  let prevLabels = new Map([[startId, [{ stopId: startId, arrival: startMinutes, patternKey: startId, edge: null, parent: null }]]]);
-  let markedStops = new Set([startId]);
+  // from some *other* stop's top-K list later on. Seeding every origin at
+  // time 0 (rather than searching each separately and merging) lets RAPTOR's
+  // own round structure naturally find the fastest one — a location with
+  // several nearby stops is just a search with several starting points.
+  let prevLabels = new Map(
+    origins.map((id) => [id, [{ stopId: id, arrival: startMinutes, patternKey: id, edge: null, parent: null }]]),
+  );
+  let markedStops = new Set(origins);
 
   let fewestTransfersItinerary = null;
 
@@ -286,10 +337,8 @@ export function computeRaptorRoute({
     const routesToScan = new Map(); // globalRouteKey -> boardIdx
     for (const stopId of markedStops) {
       for (const routeKey of stopRoutes.get(stopId) || []) {
-        const seq = routeStopSequence.get(routeKey);
-        if (!seq) continue;
-        const idx = seq.indexOf(stopId);
-        if (idx === -1) continue;
+        const idx = routeStopIndex.get(routeKey)?.get(stopId);
+        if (idx === undefined) continue;
         if (!routesToScan.has(routeKey) || idx < routesToScan.get(routeKey)) {
           routesToScan.set(routeKey, idx);
         }
@@ -378,9 +427,14 @@ export function computeRaptorRoute({
 
     // Footpath transfer relaxation - strictly from labels this round's ride
     // scan just added, never from a stop's pre-existing (e.g. walk-derived)
-    // labels (see newRideLabels above).
+    // labels (see newRideLabels above). Two distinct edge sets, both from the
+    // same Voronoi computation (see transfers.py): `clusters` are same-place
+    // stops (different stop ids at the same physical station/junction) and
+    // `transfers` are genuine walks to a different, nearby place. Both cost
+    // real (if often small) walking time, so they're relaxed identically.
     for (const { stopId, label } of newRideLabels) {
-      for (const [neighborId, distM] of transfers[stopId] || []) {
+      const footpaths = [...(clusters[stopId] || []), ...(transfers[stopId] || [])];
+      for (const [neighborId, distM] of footpaths) {
         const walkMinutes = Math.ceil(distM / WALK_SPEED_MPS / 60);
         const edge = { fromStop: stopId, kind: 'walk', distanceMeters: distM, alightTime: label.arrival + walkMinutes };
         const walkLabel = {
@@ -395,20 +449,28 @@ export function computeRaptorRoute({
     }
 
     if (!fewestTransfersItinerary) {
-      const endLabels = thisRoundLabels.get(endId);
-      if (endLabels?.length) {
-        fewestTransfersItinerary = reconstructFromLabel(
-          endLabels.reduce((a, b) => (a.arrival <= b.arrival ? a : b)),
-        );
+      let best = null;
+      for (const destId of destinations) {
+        const endLabels = thisRoundLabels.get(destId);
+        if (!endLabels?.length) continue;
+        const candidate = endLabels.reduce((a, b) => (a.arrival <= b.arrival ? a : b));
+        if (!best || candidate.arrival < best.arrival) best = candidate;
       }
+      if (best) fewestTransfersItinerary = reconstructFromLabel(best);
     }
 
     prevLabels = thisRoundLabels;
     markedStops = newlyMarked;
   }
 
-  const endLabels = prevLabels.get(endId);
-  if (!endLabels?.length) return { itineraries: [] };
+  // Every destination candidate's labels pooled together — a location with
+  // several nearby stops is "arrived" once any one of them is reached.
+  const endLabels = [];
+  for (const destId of destinations) {
+    const labels = prevLabels.get(destId);
+    if (labels?.length) endLabels.push(...labels);
+  }
+  if (!endLabels.length) return { itineraries: [] };
 
   // Every distinct pattern the search kept for the destination, best arrival
   // first - this is what surfaces a genuinely different route (e.g. via a
@@ -450,15 +512,15 @@ const MAX_LEG_ALTERNATES = 3;
  * "another way to cover this specific part of the journey".
  */
 function findLegAlternateRoutes(leg, globalIndex) {
-  const { stopRoutes, routeStopSequence } = globalIndex;
+  const { stopRoutes, routeStopIndex } = globalIndex;
   const seen = new Set();
   const candidates = [];
   for (const routeKey of stopRoutes.get(leg.fromStop) || []) {
-    const seq = routeStopSequence.get(routeKey);
-    if (!seq) continue;
-    const boardIdx = seq.indexOf(leg.fromStop);
-    const alightIdx = seq.indexOf(leg.to);
-    if (boardIdx === -1 || alightIdx === -1 || alightIdx <= boardIdx) continue;
+    const stopIndex = routeStopIndex.get(routeKey);
+    if (!stopIndex) continue;
+    const boardIdx = stopIndex.get(leg.fromStop);
+    const alightIdx = stopIndex.get(leg.to);
+    if (boardIdx === undefined || alightIdx === undefined || alightIdx <= boardIdx) continue;
 
     const parsed = parseGlobalRouteKey(routeKey);
     if (!parsed) continue;

@@ -23,8 +23,12 @@ let servicesArr = [];
 /** Raw services JSON: { [serviceNumber]: { name, [destination]: stop[][] } } */
 let servicesData = null;
 
+/** @type {Array<{id,name,type,lat,lon,color}>} */
+let poisArr = [];
+
 let fuseServices = null;
 let fuseStops = null;
+let fusePois = null;
 
 // Match the CheapRuler latitude used on the main thread
 const ruler = new CheapRuler(1.3);
@@ -52,10 +56,11 @@ function parseRouteKey(routeKey) {
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
-function handleInit({ stopsArr: s, servicesArr: sa, servicesData: sd }) {
+function handleInit({ stopsArr: s, servicesArr: sa, servicesData: sd, poisArr: pa }) {
   stopsArr = s;
   servicesArr = sa;
   servicesData = sd;
+  poisArr = pa || [];
 
   stopsIndex = {};
   for (const stop of stopsArr) stopsIndex[stop.number] = stop;
@@ -68,16 +73,21 @@ function handleInit({ stopsArr: s, servicesArr: sa, servicesData: sd }) {
     threshold: 0.3,
     keys: ['number', 'name'],
   });
+  fusePois = new Fuse(poisArr, {
+    threshold: 0.3,
+    keys: ['name', 'type'],
+  });
 
   return { ok: true };
 }
 
 function handleSearch({ query }) {
-  if (!fuseServices || !fuseStops) return { services: [], stops: [] };
+  if (!fuseServices || !fuseStops) return { services: [], stops: [], locations: [] };
   const services = fuseServices.search(query).map((r) => r.item);
   const stops =
     services.length < 100 ? fuseStops.search(query).map((r) => r.item) : [];
-  return { services, stops };
+  const locations = fusePois ? fusePois.search(query).map((r) => r.item) : [];
+  return { services, stops, locations };
 }
 
 function handleClosestStops({ lng, lat }) {
@@ -88,6 +98,63 @@ function handleClosestStops({ lng, lat }) {
   }
   results.sort((a, b) => a.distance - b.distance);
   return { stops: results.slice(0, 25) };
+}
+
+// Safety cap only — real Voronoi clusters are small (a handful of stop ids
+// at the same physical station/junction), this just guards against outliers.
+const NEARBY_STOPS_MAX = 20;
+
+// Same cap transfers.py caps every Voronoi cell to (MAX_RADIUS_METERS there).
+// A plain nearest-stop scan has no such cap and always returns *something*,
+// however far away — capping the nearest-stop distance to this radius is the
+// cheap equivalent of a true point-in-polygon test against that stop's
+// (uncapped-by-neighbors) Voronoi cell: for the *nearest* site specifically,
+// "inside its raw cell" and "is the nearest site" are the same statement by
+// definition, so this reproduces the precomputed cell's range limit without
+// needing to ship/parse actual cell geometry client-side. Beyond this range,
+// no stop "owns" the point closely enough to be worth surfacing as nearby.
+const MAX_RANGE_KM = 1; // ruler.distance() returns kilometers (see below)
+
+// stopsArr entries only carry `.routes` (route keys, "service|dest|variant")
+// not a plain `.services` list — see initDataWorker's payload in app.js.
+// Derive the deduped service-number list a location popover needs to render.
+function servicesForStop(stop) {
+  const seen = new Set();
+  for (const routeKey of stop.routes || []) {
+    const parsed = parseRouteKey(routeKey);
+    if (parsed) seen.add(parsed.service);
+  }
+  return [...seen];
+}
+
+/**
+ * Nearest stop to (lng, lat), plus every other stop sharing its Voronoi cell
+ * (same physical place - see transfers.py/clusters.min.json) if provided.
+ * Falls back to just the nearest stop when no cluster graph is available for
+ * the city.
+ */
+function handleNearbyStops({ lng, lat, clusters }) {
+  let nearest = null;
+  let nearestDist = Infinity;
+  for (const stop of stopsArr) {
+    const dist = ruler.distance([lng, lat], stop.coordinates);
+    if (dist < nearestDist) {
+      nearestDist = dist;
+      nearest = stop;
+    }
+  }
+  if (!nearest || nearestDist > MAX_RANGE_KM) return { stops: [] };
+
+  const results = [{ ...nearest, distance: nearestDist, services: servicesForStop(nearest) }];
+  const siblings = clusters?.[nearest.number] || [];
+  for (const [siblingId, distanceM] of siblings) {
+    if (results.length >= NEARBY_STOPS_MAX) break;
+    const siblingStop = stopsIndex[siblingId];
+    if (siblingStop) {
+      results.push({ ...siblingStop, distance: distanceM, services: servicesForStop(siblingStop) });
+    }
+  }
+  return { stops: results };
 }
 
 /**
@@ -122,18 +189,39 @@ function collectCandidateStops(primary, { nearest, nearby }) {
   return candidates;
 }
 
-function handleBetweenRoutes({ startStopNumber, endStopNumber, availableServices }) {
-  const startStop = stopsIndex[startStopNumber];
-  const endStop = stopsIndex[endStopNumber];
+// A location endpoint resolves to an explicit, pre-computed stop list (the
+// Voronoi cluster around it — see handleNearbyStops) instead of this file's
+// own NEARBY_THRESHOLD proximity expansion. First entry is treated as the
+// "primary" (unflagged) stop, same convention as collectCandidateStops, so
+// the resulting routes flow through the exact same nearby-stop rendering
+// (_nearbyStart/_nearbyEnd) BetweenRoutes.js already has.
+function explicitCandidateStops(numbers) {
+  const candidates = new Map();
+  numbers.forEach((num, i) => {
+    const stop = stopsIndex[num];
+    if (stop && !candidates.has(num)) candidates.set(num, { stop, nearby: i > 0 });
+  });
+  return candidates;
+}
+
+function handleBetweenRoutes({
+  startStopNumber, endStopNumber, startCandidateNumbers, endCandidateNumbers, availableServices,
+}) {
+  const startStop = stopsIndex[startStopNumber] || stopsIndex[startCandidateNumbers?.[0]];
+  const endStop = stopsIndex[endStopNumber] || stopsIndex[endCandidateNumbers?.[0]];
   if (!startStop || !endStop) return { routes: [], nearestStartStop: null, nearestEndStop: null };
 
   const availableSet =
     availableServices.length > 0 ? new Set(availableServices) : null;
 
-  const startProximity = findProximityStops(startStop);
-  const endProximity = findProximityStops(endStop);
-  const startCandidates = collectCandidateStops(startStop, startProximity);
-  const endCandidates = collectCandidateStops(endStop, endProximity);
+  const startProximity = startCandidateNumbers ? null : findProximityStops(startStop);
+  const endProximity = endCandidateNumbers ? null : findProximityStops(endStop);
+  const startCandidates = startCandidateNumbers
+    ? explicitCandidateStops(startCandidateNumbers)
+    : collectCandidateStops(startStop, startProximity);
+  const endCandidates = endCandidateNumbers
+    ? explicitCandidateStops(endCandidateNumbers)
+    : collectCandidateStops(endStop, endProximity);
 
   // Cache trimmed route data per end-stop to avoid recomputing across candidate pairs
   const endStopCache = new Map();
@@ -190,12 +278,11 @@ function handleBetweenRoutes({ startStopNumber, endStopNumber, availableServices
         const key = `${parsed.service}--${start.number}-${end.number}`;
         if (!seenKeys.has(key)) {
           seenKeys.add(key);
+          // Degenerate single-ride itinerary — same {startId, legs} shape
+          // RAPTOR produces (see raptor.js), just without timing data.
           results.push({
-            startStop: start,
-            startService: parsed.service,
-            startRoute: routeKey,
-            stopsBetween: [],
-            endStop: end,
+            startId: start.number,
+            legs: [{ kind: 'ride', service: parsed.service, to: end.number }],
             _nearbyStart: nearbyStart,
             _nearbyEnd: nearbyEnd,
           });
@@ -216,14 +303,16 @@ function handleBetweenRoutes({ startStopNumber, endStopNumber, availableServices
           }
           if (common.length) {
             seenKeys.add(key);
+            // Dual-ride itinerary — `common[0]` is the representative transfer
+            // stop (the leg's `to`); the full candidate list rides along on
+            // `transferCandidates` for the "+N more possible" detail annotation
+            // and the map's transfer-stop highlight markers.
             results.push({
-              startStop: start,
-              startService: parsed.service,
-              startRoute: routeKey,
-              stopsBetween: common,
-              endRoute: endRoute.route,
-              endService: endRoute.service,
-              endStop: end,
+              startId: start.number,
+              legs: [
+                { kind: 'ride', service: parsed.service, to: common[0], transferCandidates: common },
+                { kind: 'ride', service: endRoute.service, to: end.number },
+              ],
               _nearbyStart: nearbyStart,
               _nearbyEnd: nearbyEnd,
             });
@@ -244,8 +333,8 @@ function handleBetweenRoutes({ startStopNumber, endStopNumber, availableServices
 
   return {
     routes: allRoutes,
-    nearestStartStop: startProximity.nearest,
-    nearestEndStop: endProximity.nearest,
+    nearestStartStop: startProximity?.nearest ?? null,
+    nearestEndStop: endProximity?.nearest ?? null,
   };
 }
 
@@ -255,6 +344,7 @@ const handlers = {
   INIT: handleInit,
   SEARCH: handleSearch,
   CLOSEST_STOPS: handleClosestStops,
+  NEARBY_STOPS: handleNearbyStops,
   BETWEEN_ROUTES: handleBetweenRoutes,
 };
 

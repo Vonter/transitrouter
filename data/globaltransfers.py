@@ -18,8 +18,21 @@ MAX_RADIUS_METERS already bounds any edge to real walking distance.
 Output:
   data/all/transfers.min.json -> inter-cluster (different-place) walking
     transfers: { "city^stop_id": [["city^neighbor_id", distance_m], ...], ... }
-  data/all/clusters.min.json -> intra-cluster (same-place) stop groups:
-    { "city^stop_id": [["city^sibling_id", distance_m], ...], ... }
+  data/all/clusters-cross-city.min.json -> ONLY the entries with at least one
+    genuine cross-city neighbor (e.g. a city bus stop next to a
+    `railways`/`greyhound` stop), qualified ids on both sides:
+    { "city^stop_id": [["other_city^neighbor_id", distance_m], ...], ... }
+
+Same-city cluster edges are intentionally discarded here, not written
+anywhere - each city's own `data/{city}/clusters.min.json` (from
+`transfers.py --city X`, run per-city as part of the normal per-city
+pipeline) is already the authoritative source for those. Re-deriving them
+from this merged run instead would subtly disagree with that file: the
+per-city run's `project_to_meters` centers its projection on that city's own
+centroid, while this merged run centers on the *nationwide* centroid, which
+shifts the meters-per-degree scale (and therefore every distance, and
+occasionally which Voronoi cells count as adjacent) by a few percent. Only
+the genuinely-cross-city slice - which has no other source - comes from here.
 """
 
 import json
@@ -32,7 +45,7 @@ from transfers import BUFFER_METERS, MAX_RADIUS_METERS, compute_transfers, load_
 SCRIPT_DIR = Path(__file__).parent
 OUTPUT_DIR = SCRIPT_DIR / 'all'
 OUTPUT_FILE = OUTPUT_DIR / 'transfers.min.json'
-CLUSTERS_OUTPUT_FILE = OUTPUT_DIR / 'clusters.min.json'
+CROSS_CITY_CLUSTERS_OUTPUT_FILE = OUTPUT_DIR / 'clusters-cross-city.min.json'
 
 
 def discover_city_stop_files() -> Dict[str, Path]:
@@ -95,10 +108,21 @@ def main():
         json.dump(transfers_sorted, f, separators=(',', ':'))
     print(f'Wrote: {OUTPUT_FILE}')
 
-    clusters_sorted = dict(sorted(clusters.items()))
-    with open(CLUSTERS_OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        json.dump(clusters_sorted, f, separators=(',', ':'))
-    print(f'Wrote: {CLUSTERS_OUTPUT_FILE}')
+    # Keep ONLY the genuinely cross-city edges - same-city edges are dropped
+    # here in favor of each city's own already-authoritative clusters.min.json
+    # (see module docstring for why the two aren't interchangeable).
+    cross_city_clusters: Dict[str, List[List]] = {}
+    for global_id, neighbors in clusters.items():
+        city = global_id.split('^', 1)[0]
+        for neighbor_id, dist in neighbors:
+            if neighbor_id.split('^', 1)[0] != city:
+                cross_city_clusters.setdefault(global_id, []).append([neighbor_id, dist])
+
+    cross_city_cluster_edges = sum(len(v) for v in cross_city_clusters.values())
+    cross_city_sorted = dict(sorted(cross_city_clusters.items()))
+    with open(CROSS_CITY_CLUSTERS_OUTPUT_FILE, 'w', encoding='utf-8') as f:
+        json.dump(cross_city_sorted, f, separators=(',', ':'))
+    print(f'Wrote: {CROSS_CITY_CLUSTERS_OUTPUT_FILE} ({cross_city_cluster_edges:,} cross-city edges)')
     return 0
 
 
