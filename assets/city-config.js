@@ -20,6 +20,7 @@ export const AVAILABLE_CITIES = [
   'pune',
   'mumbai',
   'hublidharwad',
+  'karnataka',
   'telangana',
   'andhrapradesh',
   'ahmedabad',
@@ -66,6 +67,20 @@ export const CITY_CONFIGS = {
     },
     maxArrivalTime: 2 * 60 * 60 * 1000, // 2 hours in milliseconds
     disableStopID: true,
+  },
+  karnataka: {
+    city: {
+      name: 'Karnataka',
+      code: 'karnataka',
+      flag: '🇮🇳',
+      bounds: {
+        lowerLat: 11.5,
+        upperLat: 18.5,
+        lowerLong: 74.0,
+        upperLong: 78.6,
+        minZoom: 6,
+      },
+    },
   },
   goa: {
     city: {

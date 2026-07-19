@@ -13,6 +13,7 @@
 - Rajkot: [croyla/rrl-gtfs](https://github.com/croyla/rrl-gtfs)
 - Hubli-Dharwad: [croyla/hdbrts-gtfs](https://github.com/croyla/hdbrts-gtfs)
 - Indore: [Neo2308/aictsl-gtfs](https://github.com/Neo2308/aictsl-gtfs)
+- Karnataka: [croyla/ksrtc-gtfs](https://github.com/croyla/ksrtc-gtfs)
 - Telangana: [Open Data Telangana (TGSRTC)](https://www.tgsrtc.telangana.gov.in/open-data)
 - Andhra Pradesh: [Neo2308/apsrtc-gtfs](https://github.com/Neo2308/apsrtc-gtfs)
 - Indian Railways: [Neo2308/indianrailways-gtfs](https://github.com/Neo2308/indianrailways-gtfs/)

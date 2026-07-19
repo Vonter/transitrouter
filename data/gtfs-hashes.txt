@@ -17,6 +17,8 @@ hublidharwad:
   gtfs_compat.zip: c7e0726f18fcb8303469a267ec3b62a5fc4c58c1a61b16181b02c3b86ecd587d
 indore:
   gtfs.zip: c7e274726819c29ca9399018fe980ecdd76b2b9d0f60b62a4f9247f841db38cf
+karnataka:
+  gtfs.zip: c67be1caeeaa2315db3471b92084022081122683cfd044f6e2147412f893eb72
 kochi:
   gtfs.zip: 3312f4cccb48ad2c09e8b2ff3e6004d3a4eb69b3d963e4d7d4a86ae05e35ce2b
 mumbai:
