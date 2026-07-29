@@ -3215,7 +3215,7 @@ html.dark {
 
   .popover {
     background-color: #0d0d0d;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    /*border: 1px solid rgba(255, 255, 255, 0.12);*/
     border-bottom: none;
     box-shadow:
       0 -4px 20px rgba(0, 0, 0, 0.8),
@@ -3376,6 +3376,7 @@ html.dark {
   .directions-btn {
     background-color: rgba(77, 163, 255, 0.15);
     color: var(--accent-blue);
+    margin-left: auto;
   }
   .directions-btn:hover {
     background-color: rgba(77, 163, 255, 0.3);
