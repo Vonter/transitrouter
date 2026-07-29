@@ -614,6 +614,11 @@ a:active {
 #location-popover .popover-scroll,
 #service-popover .popover-scroll {
   flex: 1;
+  /* Without this, a flex item defaults to min-height:auto — its content's
+     intrinsic height becomes a floor it won't shrink below, so tall
+     content pushes the footer (and its Arrivals/passing-routes button)
+     out of the pane's clipped area instead of scrolling internally. */
+  min-height: 0;
   overflow: auto;
   padding: 12px;
 }
@@ -631,6 +636,10 @@ a:active {
 #stop-popover .popover-footer,
 #service-popover .popover-footer {
   padding: 12px;
+  /* Pin it like the header — a flex item defaults to shrinkable, and
+     without this a tall .popover-scroll sibling could still squeeze it
+     instead of scrolling internally. */
+  flex-shrink: 0;
 }
 @supports (top: max(1px)) {
   #between-popover .popover-scroll {
@@ -2801,6 +2810,67 @@ input[type='checkbox']:checked:after {
   display: none;
 }
 
+/* Popovers migrated to cupertino-pane (JS adds this class only on the
+   touch+mobile path — see mobilePane.js). The pane's own wrapper/pane
+   elements own position, height and transform from here on; our legacy
+   fixed/top/transform rules above would otherwise fight them, since the
+   pane nests this element inside a `will-change: transform` ancestor that
+   becomes its containing block for `position: fixed`. */
+.popover.pane-managed {
+  position: static !important;
+  top: auto !important;
+  max-height: none !important;
+  transform: none !important;
+  transition: none !important;
+  /* The desktop "floating card" rule (`.popover { max-width: 320px;
+     right: 16px }` under `@media (min-width: 481px)`, further down this
+     file) is meant for non-touch/desktop layouts, but that 481px
+     threshold is well below the 640px one that gates pane mode
+     (paneAppliesHere in mobilePane.js) — so any touch viewport between
+     481-640px got a 320px-wide, right-offset content div sitting inside
+     a full-width/500px-capped pane, leaving a real gap between the two.
+     Reset both so pane-managed content always spans the pane's own full
+     width, regardless of where the desktop rule's own breakpoint falls. */
+  max-width: none !important;
+  right: auto !important;
+}
+
+/* #search-popover's own (otherwise unconditional) base rule pins it to a
+   fixed height:100%/bottom:0 for its legacy translateY-driven show/hide —
+   pane-managed needs it sized to its natural content instead, same as
+   every other migrated popover. */
+#search-popover.pane-managed {
+  height: auto !important;
+  bottom: auto !important;
+}
+
+/* Mobile floating twin of stop/service's .popover-footer (see
+   renderStopFooter's comment in app.js for why the nested one alone isn't
+   enough) — a real position:fixed bar outside the pane structure entirely,
+   since a fixed-position descendant of .pane would still be contained by
+   it (the library's own CSS gives .pane `will-change: transform`, which
+   the spec treats the same as an actual `transform` for establishing a
+   fixed-position containing block). Hidden by default/desktop; only
+   toggled on within the mobile breakpoint below. */
+.mobile-floating-footer {
+  display: none;
+}
+
+/* Strip cupertino-pane's own chrome from the `.pane` wrapper it puts around
+   our content — our `.popover` div already supplies the translucent/blurred
+   background, rounded corners and shadow, and the library's own opaque
+   white default would otherwise sit behind it and block the blur. */
+.cupertino-pane-wrapper.popover-pane-wrapper .pane {
+  background: transparent;
+  box-shadow: none;
+  padding-top: 0;
+  /* Our content div's natural height can momentarily exceed the computed
+     break height (e.g. between a content resize and the async height
+     recompute catching up) — clip it instead of letting it bleed out past
+     the sheet's edge over the map. */
+  overflow: hidden;
+}
+
 @media (max-width: 1199px) {
   .popover-handle {
     display: flex;
@@ -2827,20 +2897,16 @@ input[type='checkbox']:checked:after {
     padding-right: 12px;
   }
 
-  /* Snap positions — override max-height on expanded popovers */
-  #stop-popover.snap-full,
-  #between-popover.snap-full,
-  #service-popover.snap-full {
-    max-height: calc(100dvh - 100px);
-    max-height: calc(100vh - 100px);
-  }
-  #stop-popover.snap-collapsed,
-  #between-popover.snap-collapsed,
-  #service-popover.snap-collapsed {
-    max-height: 50dvh;
-    max-height: 50vh;
-    transform: translateY(calc(-85px - var(--keyboard-height, 0px)));
-    overflow: hidden;
+  /* The header is a drag target too now (see dragHandleSelector's comment
+     in mobilePane.js) — without this, the browser's own default touch
+     handling (page scroll / pull-to-refresh) can win the race against
+     cupertino's touchstart listener when a drag starts a few pixels off
+     the small handle bar itself. */
+  #stop-popover header,
+  #between-popover header,
+  #location-popover header,
+  #service-popover header {
+    touch-action: none;
   }
 
   /* Hide close button on mobile — dismiss via drag handle instead */
@@ -2850,15 +2916,63 @@ input[type='checkbox']:checked:after {
     display: none;
   }
 
-  /* Disable transitions while actively dragging */
-  .popover.dragging {
-    transition: none !important;
+  /* The nested footer is superseded by .mobile-floating-footer below —
+     without hiding it, both would render (it'd also still be functionally
+     unreachable at rest, per renderStopFooter's comment). */
+  #stop-popover .popover-footer,
+  #service-popover .popover-footer {
+    display: none;
   }
 
-  /* Drop the blur mid-drag */
-  .popover.dragging,
-  .popover.dragging .popover-inner {
-    backdrop-filter: none !important;
+  .mobile-floating-footer.show {
+    display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    /* Match cupertino's own .pane sizing (max-width: 500px, centered) — this
+       bar lives outside the pane's DOM subtree so it doesn't get that for
+       free, but it needs to line up with the sheet it belongs to on wider
+       viewports within the mobile breakpoint (e.g. tablets), not span the
+       full window width underneath a narrower, centered pane. */
+    max-width: 500px;
+    margin-left: auto;
+    margin-right: auto;
+    /* Above cupertino's own .pane (z-index: 11 in its base CSS) so this
+       bar stays on top of the sheet regardless of which break it's at. */
+    z-index: 20;
+    background-color: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 -1px 5px rgba(0, 0, 0, 0.15);
+  }
+  @supports (backdrop-filter: blur(10px)) {
+    .mobile-floating-footer.show {
+      background-color: rgba(255, 255, 255, 0.7);
+      backdrop-filter: blur(10px) saturate(3);
+    }
+  }
+  .mobile-floating-footer .popover-footer {
+    padding: 12px;
+  }
+  @supports (top: max(1px)) {
+    .mobile-floating-footer .popover-footer {
+      padding-left: max(12px, env(safe-area-inset-left));
+      padding-right: max(12px, env(safe-area-inset-right));
+      padding-bottom: max(12px, env(safe-area-inset-bottom));
+    }
+  }
+
+  /* Reserve room so the list's last rows don't end up hidden behind the
+     floating footer bar. Stop's floating footer always renders whenever
+     stopPopoverData exists (unconditional in app.js), but service's is
+     gated behind isAlphaEnabled() && routeServices.length > 0 — reserving
+     this space unconditionally for service left a dead 76px gap at the
+     bottom of the list whenever that footer doesn't actually render (e.g.
+     alpha features off), priming the UI for a bar that was never coming. */
+  #stop-popover .popover-scroll {
+    padding-bottom: 76px;
+  }
+  #service-popover.has-floating-footer .popover-scroll {
+    padding-bottom: 76px;
   }
 }
 
@@ -2973,7 +3087,9 @@ html.dark {
   }
 
   /* ── Popover handle (dark) ─────────────────────────────────────────────── */
-
+  /* Solid to match the header's own raised-panel background right below it
+     (see "Panel headers" further down) — handle + header form one
+     continuous opaque block; only the scrollable body stays translucent. */
   .popover-handle {
     background-color: #151515;
   }
@@ -3111,6 +3227,18 @@ html.dark {
     }
   }
 
+  .mobile-floating-footer.show {
+    background-color: #0d0d0d;
+    box-shadow:
+      0 -4px 20px rgba(0, 0, 0, 0.8),
+      0 -1px 0 rgba(255, 255, 255, 0.06);
+  }
+  @supports (backdrop-filter: blur(10px)) {
+    .mobile-floating-footer.show {
+      background-color: rgba(13, 13, 13, 0.85);
+    }
+  }
+
   @supports (backdrop-filter: blur(10px)) {
     #search-popover .popover-inner {
       background-color: rgba(13, 13, 13, 0.85);
@@ -3126,6 +3254,7 @@ html.dark {
   /* Panel headers — raised background to clearly separate from content */
   #stop-popover header,
   #between-popover header,
+  #location-popover header,
   #service-popover header {
     background-color: #151515;
     border-bottom: 1px solid rgba(255, 255, 255, 0.15);
@@ -3134,16 +3263,19 @@ html.dark {
 
   #stop-popover h1,
   #between-popover h1,
+  #location-popover h1,
   #service-popover h1 {
     color: #f0f0f0;
   }
   #stop-popover h2,
   #between-popover h2,
+  #location-popover h2,
   #service-popover h2 {
     color: #aaa;
   }
   #stop-popover h3,
   #between-popover h3,
+  #location-popover h3,
   #service-popover h3 {
     color: #bbb;
   }
@@ -3151,6 +3283,7 @@ html.dark {
   /* Content area — darker than header for clear contrast */
   #stop-popover .popover-scroll,
   #between-popover .popover-scroll,
+  #location-popover .popover-scroll,
   #service-popover .popover-scroll {
     background-color: #050505;
   }

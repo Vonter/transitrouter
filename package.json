@@ -21,6 +21,7 @@
     "@deck.gl/mapbox": "9.2.2",
     "@juggle/resize-observer": "^3.4.0",
     "cheap-ruler": "~4.0.0",
+    "cupertino-pane": "^1.5.4",
     "d3": "~7.9.0",
     "date-fns": "~4.1.0",
     "fuse.js": "~7.1.0",
