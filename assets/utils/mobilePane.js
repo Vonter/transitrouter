@@ -135,23 +135,25 @@ function buildPane(el, onDismiss, paneOptions = {}) {
     // rested at: landing near it destroyed the pane, landing further away
     // snapped back to middle instead.
     //
-    // fastSwipeClose isn't velocity-gated either, despite the name —
-    // fastSwipeNext() (see the library's Events class) only compares the
-    // last two recorded touchmove steps and fires whenever that last step
-    // moved >= fastSwipeSensivity (3px) further than the one before it in
-    // the closing direction. Any ordinary drag's last frame before
-    // touchend clears that trivially, so with this on, releasing a drag
-    // pointed downward dismissed almost regardless of overall speed —
-    // the second, harder-to-place-blame-on half of the same "lands on
-    // bottom or gets dismissed, never rests" bug bottomClose caused.
-    //
-    // Both off: bottom is purely a rest point now, same as search (which
-    // already opted out of both). Dismissal is exclusively our own
-    // explicit gestures — the × close button and the map-tap
-    // snap-then-dismiss handler in app.js — not anything cupertino infers
-    // from a drag's ending motion.
+    // fastSwipeClose is still the right mechanism for "a genuine fast
+    // swipe dismisses" — the problem was never that it exists, only that
+    // the *trigger* for it (fastSwipeNext(), in the library's Events
+    // class) isn't a real velocity check: it just compares the last two
+    // recorded touchmove steps and fires whenever that last step moved
+    // >= fastSwipeSensivity further than the one before it, regardless of
+    // how much time elapsed between them. At the library's own default
+    // (3px), an ordinary, unhurried drag's last recorded frame clears that
+    // trivially — so it wasn't distinguishing "flicked it" from "gently
+    // let go while still moving" at all, and was firing on nearly every
+    // drag release. Raising the threshold to something only a genuinely
+    // fast flick's last frame would clear (as opposed to a drag that's
+    // decelerating into a deliberate rest) is the only lever the library
+    // exposes for this — there's no true velocity/time-based option.
+    // May need retuning against a real device; this is a starting point,
+    // not a measured constant.
     bottomClose = false,
-    fastSwipeClose = false,
+    fastSwipeClose = true,
+    fastSwipeSensivity = 20,
     // Fires with the pane's new resting break name whenever a drag or
     // moveToBreak() settles — lets the caller react to "resting at bottom"
     // (e.g. hide a floating footer that lives outside the pane's own
@@ -192,7 +194,7 @@ function buildPane(el, onDismiss, paneOptions = {}) {
     buttonDestroy: false,
     bottomClose,
     fastSwipeClose,
-    fastSwipeSensivity: 3,
+    fastSwipeSensivity,
     // cupertino-pane's default only allows the content to scroll once
     // fully expanded to the "top" break — since we start at "middle" and
     // may not even have a "top" break for short content, the list needs to
