@@ -20,6 +20,7 @@ export const AVAILABLE_CITIES = [
   'pune',
   'mumbai',
   'hublidharwad',
+  'karnataka',
   'telangana',
   'andhrapradesh',
   'ahmedabad',
@@ -41,6 +42,7 @@ export const CITY_CONFIGS = {
         upperLat: 13.15,
         lowerLong: 77.4,
         upperLong: 77.75,
+        minZoom: 8,
       },
     },
     liveArrivals: {
@@ -66,6 +68,20 @@ export const CITY_CONFIGS = {
     maxArrivalTime: 2 * 60 * 60 * 1000, // 2 hours in milliseconds
     disableStopID: true,
   },
+  karnataka: {
+    city: {
+      name: 'Karnataka',
+      code: 'karnataka',
+      flag: '🇮🇳',
+      bounds: {
+        lowerLat: 11.5,
+        upperLat: 18.5,
+        lowerLong: 74.0,
+        upperLong: 78.6,
+        minZoom: 6,
+      },
+    },
+  },
   goa: {
     city: {
       name: 'Goa',
@@ -76,6 +92,7 @@ export const CITY_CONFIGS = {
         upperLat: 15.9,
         lowerLong: 73.75,
         upperLong: 74.15,
+        minZoom: 8,
       },
     },
   },
@@ -89,6 +106,7 @@ export const CITY_CONFIGS = {
         upperLat: 10.2,
         lowerLong: 76.25,
         upperLong: 76.55,
+        minZoom: 8,
       },
     },
   },
@@ -102,6 +120,7 @@ export const CITY_CONFIGS = {
         upperLat: 13.35,
         lowerLong: 80.0,
         upperLong: 80.4,
+        minZoom: 8,
       },
     },
   },
@@ -115,6 +134,7 @@ export const CITY_CONFIGS = {
         upperLat: 28.95,
         lowerLong: 76.95,
         upperLong: 77.55,
+        minZoom: 8,
       },
     },
   },
@@ -128,6 +148,7 @@ export const CITY_CONFIGS = {
         upperLat: 18.75,
         lowerLong: 73.65,
         upperLong: 74.05,
+        minZoom: 8,
       },
     },
     liveArrivals: {
@@ -158,6 +179,7 @@ export const CITY_CONFIGS = {
         upperLat: 19.31,
         lowerLong: 72.78,
         upperLong: 73.16,
+        minZoom: 8,
       },
     }
   },
@@ -171,6 +193,7 @@ export const CITY_CONFIGS = {
         upperLat: 15.53,
         lowerLong: 74.77,
         upperLong: 75.35,
+        minZoom: 9,
       },
     }
   },
@@ -184,6 +207,7 @@ export const CITY_CONFIGS = {
         upperLat: 20.5,
         lowerLong: 77.0,
         upperLong: 82.0,
+        minZoom: 7,
       },
     },
   },
@@ -197,6 +221,7 @@ export const CITY_CONFIGS = {
         upperLat: 19.7,
         lowerLong: 77.0,
         upperLong: 85.5,
+        minZoom: 6,
       },
     },
   },
@@ -210,6 +235,7 @@ export const CITY_CONFIGS = {
         upperLat: 23.25,
         lowerLong: 72.28,
         upperLong: 72.83,
+        minZoom: 9,
       },
     },
   },
@@ -223,6 +249,7 @@ export const CITY_CONFIGS = {
         upperLat: 22.9,
         lowerLong: 75.6,
         upperLong: 76.1,
+        minZoom: 9,
       },
     },
   },
@@ -236,6 +263,7 @@ export const CITY_CONFIGS = {
         upperLat: 22.44,
         lowerLong: 70.65,
         upperLong: 70.96,
+        minZoom: 9,
       },
     },
   },
@@ -249,6 +277,7 @@ export const CITY_CONFIGS = {
         upperLat: 45,
         lowerLong: 70,
         upperLong: 100,
+        minZoom: 4.8,
       },
     },
   },
@@ -262,6 +291,7 @@ export const CITY_CONFIGS = {
         upperLat: 49.5904,
         lowerLong: -125.0011,
         upperLong: -66.9326,
+        minZoom: 4.7,
       },
     },
     disableStopID: true,
@@ -276,6 +306,7 @@ export const CITY_CONFIGS = {
         upperLat: 41.0,
         lowerLong: -74.5,
         upperLong: -73.5,
+        minZoom: 9,
       },
     },
     disableStopID: true,
@@ -314,7 +345,34 @@ export const getApiUrl = (apiPath) => {
   return `${getApiBaseUrl()}${apiPath}`;
 };
 
+// 'all' (every city combined — see IS_ALL_MODE in app.js) isn't a real
+// entry in CITY_CONFIGS — it never had its own city-specific data. Bounds
+// match config.js's own ALL_MODE_BOUNDS ([66, 6, 98, 38], lng/lat order)
+// so callers reading city.bounds (title bar, city info displays, etc.)
+// see something consistent with what the map actually frames in all-mode.
+const ALL_CITY_CONFIG = {
+  city: {
+    name: 'All',
+    code: 'all',
+    flag: '🌐',
+    bounds: {
+      lowerLat: 6,
+      upperLat: 38,
+      lowerLong: 66,
+      upperLong: 98,
+      minZoom: 4,
+    },
+  },
+};
+
 export const getConfigForCity = (cityCode) => {
+  // Falling through to CITY_CONFIGS[DEFAULT_CITY] here (like every other
+  // city code does below) would silently show whatever city DEFAULT_CITY
+  // happens to be instead of "All" — and if DEFAULT_CITY is itself 'all'
+  // (a valid choice now that the settings drawer offers it), that
+  // fallback resolves to undefined and crashes the first caller that
+  // reads .city off of it (e.g. the page-title effect in app.js).
+  if (cityCode === 'all') return ALL_CITY_CONFIG;
   const config = CITY_CONFIGS[cityCode] || CITY_CONFIGS[DEFAULT_CITY];
   if (!config) {
     console.error(`No config found for city ${cityCode}`);

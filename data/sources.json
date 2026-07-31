@@ -3,6 +3,10 @@
     "url": "https://github.com/Vonter/bmtc-gtfs/raw/refs/heads/main/gtfs/bmtc.zip",
     "filename": "gtfs.zip"
   },
+  "karnataka": {
+    "url": "https://github.com/croyla/ksrtc-gtfs/raw/refs/heads/main/gtfs_compat.zip",
+    "filename": "gtfs.zip"
+  },
   "pune": {
     "url": "https://github.com/croyla/pmpml-gtfs/raw/refs/heads/main/pmpml_gtfs_compat.zip",
     "filename": "gtfs.zip"
@@ -21,6 +25,14 @@
   },
   "rajkot": {
     "url": "https://github.com/croyla/rrl-gtfs/raw/refs/heads/main/gtfs_compat.zip",
+    "filename": "gtfs.zip"
+  },
+  "andhrapradesh": {
+    "url": "https://github.com/Neo2308/apsrtc-gtfs/raw/refs/heads/main/gtfs/gtfs.zip",
+    "filename": "gtfs.zip"
+  },
+  "railways": {
+    "url": "https://github.com/Neo2308/indianrailways-gtfs/raw/refs/heads/main/gtfs/gtfs.zip",
     "filename": "gtfs.zip"
   }
 }

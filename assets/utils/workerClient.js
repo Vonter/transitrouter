@@ -41,16 +41,17 @@ function postTask(type, payload) {
  * @param {Array}  opts.stopsArr      - [{number,name,suffix,coordinates,routes}]
  * @param {Array}  opts.servicesArr   - [{number,name}]
  * @param {Object} opts.servicesData  - Raw services JSON from services.min.json
+ * @param {Array}  [opts.poisArr]     - [{id,name,type,lat,lon,color}]
  * @returns {Promise<{ok:true}>}
  */
-export function initDataWorker({ stopsArr, servicesArr, servicesData }) {
-  return postTask('INIT', { stopsArr, servicesArr, servicesData });
+export function initDataWorker({ stopsArr, servicesArr, servicesData, poisArr }) {
+  return postTask('INIT', { stopsArr, servicesArr, servicesData, poisArr });
 }
 
 /**
- * Fuzzy-search services and stops.
+ * Fuzzy-search services, stops, and (alpha) locations.
  * @param {string} query
- * @returns {Promise<{services:Array, stops:Array}>}
+ * @returns {Promise<{services:Array, stops:Array, locations:Array}>}
  */
 export function workerSearch(query) {
   return postTask('SEARCH', { query });
@@ -67,20 +68,42 @@ export function workerClosestStops(lng, lat) {
 }
 
 /**
+ * Find the nearest stop to a location plus every other stop sharing its
+ * Voronoi cell (same physical place, from the city's clusters.min.json).
+ * @param {number} lng
+ * @param {number} lat
+ * @param {Object} [clusters] - { [stopId]: [[siblingStopId, distanceM], ...] }
+ * @returns {Promise<{stops:Array}>}
+ */
+export function workerNearbyStops(lng, lat, clusters) {
+  return postTask('NEARBY_STOPS', { lng, lat, clusters });
+}
+
+/**
  * Find routes between two stops (proximity expansion + route intersection).
- * @param {string} startStopNumber
- * @param {string} endStopNumber
+ * Either side can instead be a location: pass its resolved cluster of nearby
+ * stop numbers as `startCandidateNumbers`/`endCandidateNumbers` (first entry
+ * treated as primary) to search from/to that whole set instead of a single
+ * stop's own proximity expansion.
+ * @param {string} [startStopNumber]
+ * @param {string} [endStopNumber]
  * @param {string[]} availableServices  - Empty array means no live-API filter
+ * @param {Object} [opts]
+ * @param {string[]} [opts.startCandidateNumbers]
+ * @param {string[]} [opts.endCandidateNumbers]
  * @returns {Promise<{routes:Array, nearestStartStop:Object, nearestEndStop:Object}>}
  */
 export function workerBetweenRoutes(
   startStopNumber,
   endStopNumber,
   availableServices,
+  { startCandidateNumbers, endCandidateNumbers } = {},
 ) {
   return postTask('BETWEEN_ROUTES', {
     startStopNumber,
     endStopNumber,
+    startCandidateNumbers,
+    endCandidateNumbers,
     availableServices,
   });
 }

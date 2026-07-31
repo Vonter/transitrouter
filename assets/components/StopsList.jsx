@@ -51,7 +51,7 @@ function areOpposite(stop1, stop2, stopsData) {
 export default function StopsList(props) {
   const route = getRoute();
 
-  const { routes, stopsData, vehicles = [], onStopClick, onVehicleClick } = props;
+  const { routes, stopsData, cityCode, vehicles = [], onVehicleClick } = props;
   
   if (
     !routes ||
@@ -155,21 +155,29 @@ export default function StopsList(props) {
   }, [vehicles]);
 
   const StopLink = ({ stop }) => {
-    if (!stop) return null;
-    
+    if (!stop || !stopsData[stop]) return null;
+
     const cityConfig = getConfigForCity(route.city);
     const disableStopID = cityConfig?.disableStopID || false;
-    
+    const stopHref = cityCode && route.city === 'all'
+      ? `#/all/stops/${cityCode}^${stop}`
+      : `#${route.cityPrefix}/stops/${stop}`;
+
     return (
       <a
-        href={`#${route.cityPrefix}/stops/${stop}`}
+        href={stopHref}
         data-stop={stop}
         onClick={(e) => {
           e.preventDefault();
-          location.hash = `#${route.cityPrefix}/stops/${stop}`;
-          if (onStopClick) {
-            onStopClick(stop);
-          }
+          // Only drive navigation through the hash — it already triggers
+          // the app's hashchange handler, which shows the stop popover.
+          // Also calling onStopClick(stop) here used to fire that same
+          // popover-setup logic a second time, synchronously, racing the
+          // async hashchange-driven one (each with their own setState +
+          // requestAnimationFrame + map.setFeatureState calls) — the
+          // overlapping renders could wedge Preact's render scheduler,
+          // freezing the popover until a full page reload.
+          location.hash = stopHref;
           lastStop.current = stop;
         }}
       >

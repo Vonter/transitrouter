@@ -1,5 +1,16 @@
 @import 'npm:maplibre-gl/dist/maplibre-gl.css';
 
+:root {
+  --accent-blue: #007aff;
+  --accent-pink: #f01b48;
+  --accent-purple: #972ffe;
+  --accent-green: #3a6727;
+  --tag-green-bg: #55dd3333;
+  --tag-green-text: #1e5a0e;
+  --text-primary: #000;
+  --text-emphasis: #000;
+}
+
 html,
 body {
   max-width: 100%;
@@ -17,7 +28,7 @@ body {
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
     Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
   text-size-adjust: none;
-  color: #000;
+  color: var(--text-primary);
   background-color: #f9f5ed;
 }
 
@@ -40,7 +51,7 @@ select {
 }
 
 a {
-  color: #007aff;
+  color: var(--accent-blue);
 }
 
 a:active {
@@ -290,14 +301,14 @@ a:active {
   color: #333;
 }
 .drawer-intro a {
-  color: #007aff;
+  color: var(--accent-blue);
 }
 .drawer-github {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   margin-top: 0.5em;
-  color: #007aff;
+  color: var(--accent-blue);
   text-decoration: none;
 }
 .drawer-github:hover {
@@ -377,7 +388,7 @@ a:active {
   flex-shrink: 0;
 }
 .dev-toggle-track.active {
-  background: #007aff;
+  background: var(--accent-blue);
 }
 .dev-toggle-thumb {
   position: absolute;
@@ -413,8 +424,8 @@ a:active {
   box-shadow: none;
 }
 .dev-journey-btn:hover {
-  border-color: #007aff;
-  color: #007aff;
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
 }
 .footer-secondary-group {
   flex: none;
@@ -492,6 +503,7 @@ a:active {
 #stop-popover,
 #between-popover,
 #arrivals-popover,
+#location-popover,
 #service-popover {
   top: 101%;
   transition: transform 0.3s 0.1s ease-in-out;
@@ -503,6 +515,7 @@ a:active {
 #stop-popover.expand,
 #between-popover.expand,
 #arrivals-popover.expand,
+#location-popover.expand,
 #service-popover.expand {
   transform: translateY(calc(-101% - var(--keyboard-height, 0px)));
 }
@@ -518,6 +531,7 @@ a:active {
 }
 #stop-popover header,
 #between-popover header,
+#location-popover header,
 #service-popover header {
   flex-shrink: 0;
   padding: 12px 40px 0 12px;
@@ -531,6 +545,7 @@ a:active {
 }
 #stop-popover h1,
 #between-popover h1,
+#location-popover h1,
 #service-popover h1 {
   font-size: 1em;
   margin: 0 0 0.5em;
@@ -579,6 +594,7 @@ a:active {
 }
 #stop-popover h3,
 #between-popover h3,
+#location-popover h3,
 #service-popover h3 {
   font-size: 0.7em;
   margin: 1em 0 0.5em;
@@ -588,14 +604,21 @@ a:active {
 }
 #stop-popover p,
 #between-popover p,
+#location-popover p,
 #service-popover p {
   margin: 0;
   padding: 0;
 }
 #stop-popover .popover-scroll,
 #between-popover .popover-scroll,
+#location-popover .popover-scroll,
 #service-popover .popover-scroll {
   flex: 1;
+  /* Without this, a flex item defaults to min-height:auto — its content's
+     intrinsic height becomes a floor it won't shrink below, so tall
+     content pushes the footer (and its Arrivals/passing-routes button)
+     out of the pane's clipped area instead of scrolling internally. */
+  min-height: 0;
   overflow: auto;
   padding: 12px;
 }
@@ -613,6 +636,10 @@ a:active {
 #stop-popover .popover-footer,
 #service-popover .popover-footer {
   padding: 12px;
+  /* Pin it like the header — a flex item defaults to shrinkable, and
+     without this a tall .popover-scroll sibling could still squeeze it
+     instead of scrolling internally. */
+  flex-shrink: 0;
 }
 @supports (top: max(1px)) {
   #between-popover .popover-scroll {
@@ -643,6 +670,32 @@ a:active {
 
 #between-popover .between-block {
   margin: 1em 0;
+  animation: between-view-in-list 0.22s ease-out both;
+}
+
+#between-popover .itinerary-detail {
+  animation: between-view-in-detail 0.22s ease-out both;
+}
+
+@keyframes between-view-in-list {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes between-view-in-detail {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 #between-popover .between-nada {
@@ -663,7 +716,7 @@ a:active {
   background-color: #fff;
 }
 #between-popover .between-item.selected {
-  border-color: #007aff;
+  border-color: var(--accent-blue);
   box-shadow: 0 0 5px rgba(0, 0, 0, 0.15);
   background-color: #fff;
 }
@@ -696,21 +749,21 @@ a:active {
   padding-right: 2em;
   padding-bottom: 2px;
   left: 5px;
-  background-image: linear-gradient(to left, transparent 0%, #f01b48 30%);
+  background-image: linear-gradient(to left, transparent 0%, var(--accent-pink) 30%);
 }
 #between-popover .between-services.full .start {
   width: auto;
   right: 5px;
 }
 #between-popover .between-services.full .start {
-  background-image: linear-gradient(to left, #972ffe, #f01b48);
+  background-image: linear-gradient(to left, var(--accent-purple), var(--accent-pink));
   padding-right: 0;
 }
 #between-popover .between-services .end {
   padding-left: 2em;
   padding-bottom: 6px;
   right: 5px;
-  background-image: linear-gradient(to right, transparent 0%, #972ffe 30%);
+  background-image: linear-gradient(to right, transparent 0%, var(--accent-purple) 30%);
 }
 #between-popover .nearby-start .between-services .start:before,
 #between-popover .nearby-end .between-services .end:before {
@@ -749,11 +802,11 @@ a:active {
   background-color: #fff;
 }
 #between-popover .between-stops:before {
-  border-color: #f01b48;
+  border-color: var(--accent-pink);
   margin-right: 24px;
 }
 #between-popover .between-stops:after {
-  border-color: #972ffe;
+  border-color: var(--accent-purple);
   margin-top: 4px;
   margin-left: 24px;
 }
@@ -776,18 +829,18 @@ a:active {
   width: 10px;
   height: 10px;
   border: 3px solid;
-  border-color: #f01b48 #972ffe #972ffe #f01b48;
+  border-color: var(--accent-pink) var(--accent-purple) var(--accent-purple) var(--accent-pink);
   background-color: #fff;
   border-radius: 100px;
 }
 #between-popover .nearby-start .between-stops .start:before {
   margin-top: 1px;
-  border-color: #f01b48;
+  border-color: var(--accent-pink);
 }
 #between-popover .nearby-end .between-stops .end:before {
   margin-left: auto;
   margin-top: 5px;
-  border-color: #972ffe;
+  border-color: var(--accent-purple);
 }
 
 #between-popover .between-stops .betweens {
@@ -806,7 +859,7 @@ a:active {
   width: 10px;
   height: 10px;
   border: 3px solid;
-  border-color: #f01b48 #972ffe #972ffe #f01b48;
+  border-color: var(--accent-pink) var(--accent-purple) var(--accent-purple) var(--accent-pink);
   background-color: #fff;
   border-radius: 100px;
 }
@@ -824,6 +877,112 @@ a:active {
 }
 #between-popover .between-stops .betweens-6:before {
   width: 35px;
+}
+
+#between-popover .between-item-leg-city {
+  margin-top: 4px;
+  font-size: 10px;
+  color: #666;
+  text-align: right;
+}
+
+/* Single-itinerary vertical detail card (between-popover result-num view).
+   Dot/line colors are set inline per-instance (a start→end gradient across
+   the whole trip — see timelineColor() in BetweenRoutes.js) rather than here,
+   to echo the same red→purple language as the list's .between-stops dots. */
+#between-popover .itin-stop-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 28px;
+}
+#between-popover .itin-seg-row {
+  display: flex;
+  gap: 12px;
+  min-height: 34px;
+}
+#between-popover .itin-rail {
+  flex-shrink: 0;
+  width: 16px;
+  display: flex;
+  justify-content: center;
+}
+#between-popover .itin-stop-row .itin-rail {
+  align-items: center;
+}
+#between-popover .itin-seg-row .itin-rail {
+  align-self: stretch;
+}
+#between-popover .itin-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 100px;
+  border: 3px solid;
+  background-color: #fff;
+}
+#between-popover .itin-line {
+  width: 3px;
+  border-radius: 2px;
+  align-self: stretch;
+}
+#between-popover .itin-seg-row.walk .itin-line {
+  width: 0;
+  border-left: 3px dotted;
+  background: none;
+}
+#between-popover .itin-stop-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+  font-size: 13px;
+  min-width: 0;
+}
+#between-popover .itin-stop-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#between-popover .itin-time {
+  display: block;
+  font-size: 11px;
+  color: #666;
+  font-variant-numeric: tabular-nums;
+}
+#between-popover .itin-stop-extra {
+  font-size: 11px;
+  color: #999;
+  font-style: italic;
+}
+#between-popover .itin-seg-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  padding-left: 2px;
+}
+#between-popover .itin-seg-alternates {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: #999;
+  font-style: italic;
+}
+#between-popover .itin-walk-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #666;
+}
+#between-popover .itin-walk-label:before {
+  content: '';
+  display: block;
+  width: 14px;
+  height: 14px;
+  background: url(images/walk.svg) no-repeat center;
+  background-size: 14px;
+  opacity: 0.6;
 }
 
 .callout {
@@ -947,7 +1106,7 @@ a:active {
   background-color: rgba(0, 0, 0, 0.2);
 }
 .popover-search input[type='search']:focus-visible {
-  outline-color: #007aff;
+  outline-color: var(--accent-blue);
 }
 
 .search-input-wrapper .cancel-btn {
@@ -958,7 +1117,7 @@ a:active {
   width: 30px;
   padding: 0;
   flex-shrink: 0;
-  color: #000;
+  color: var(--text-primary);
   cursor: pointer;
   appearance: none;
   border: 0;
@@ -969,6 +1128,7 @@ a:active {
   justify-content: center;
   border-radius: 10px;
 }
+
 .popover.expand .search-input-wrapper .cancel-btn {
   display: flex;
 }
@@ -1004,7 +1164,7 @@ a:active {
 }
 .popover-search .geolocate-btn.loading,
 .popover-search .geolocate-btn.active {
-  color: #007aff;
+  color: var(--accent-blue);
 }
 .popover-search .geolocate-btn.loading {
   pointer-events: none;
@@ -1022,6 +1182,79 @@ a:active {
   .popover-search .geolocate-btn {
     display: none;
   }
+}
+
+/* Alpha "locations" feature */
+.location-search-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+}
+.location-search-row-label {
+  font-size: 0.85em;
+  color: #666;
+}
+
+.location-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2em;
+  height: 1.2em;
+  margin-right: 0.5em;
+  border-radius: 50%;
+  background-color: rgba(0, 122, 255, 0.15);
+  color: var(--accent-blue);
+  font-size: 0.7em;
+  flex-shrink: 0;
+}
+.location-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.location-marker {
+  cursor: pointer;
+}
+.location-marker-pin {
+  width: 26px;
+  height: 26px;
+  color: var(--accent-blue);
+}
+.location-marker-pin:before {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 100%;
+  background-color: currentColor;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2C7.86 2 4.5 5.36 4.5 9.5c0 5.25 6.5 12 7 12.5.5-.5 7-7.25 7-12.5C18.5 5.36 15.14 2 12 2zm0 10.25a2.75 2.75 0 1 1 0-5.5 2.75 2.75 0 0 1 0 5.5z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2C7.86 2 4.5 5.36 4.5 9.5c0 5.25 6.5 12 7 12.5.5-.5 7-7.25 7-12.5C18.5 5.36 15.14 2 12 2zm0 10.25a2.75 2.75 0 1 1 0-5.5 2.75 2.75 0 0 1 0 5.5z'/%3E%3C/svg%3E");
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+#location-popover .location-nearby-stop {
+  margin: 1em 0 0.5em;
+}
+#location-popover .location-nearby-stop h3 {
+  margin: 0 0 0.25em;
+  cursor: pointer;
+  color: inherit;
+  text-decoration: none;
+}
+#location-popover .location-nearby-stop h3:hover {
+  text-decoration: underline;
+}
+#location-popover .location-service-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+#location-popover .location-service-list a {
+  display: inline-flex;
+  align-items: center;
 }
 
 .popover-list {
@@ -1052,7 +1285,7 @@ a:active {
   display: flex;
   text-decoration: none;
   align-items: center;
-  color: #000;
+  color: var(--text-primary);
 }
 @media (max-width: 640px) {
   .popover-list li:not(.ads) a {
@@ -1165,8 +1398,8 @@ a:active {
     circle at bottom center,
     transparent,
     transparent 11px,
-    #f01b48 11px,
-    #f01b48 13px,
+    var(--accent-pink) 11px,
+    var(--accent-pink) 13px,
     transparent 13px
   );
 }
@@ -1177,8 +1410,8 @@ a:active {
     circle at top center,
     transparent,
     transparent 11px,
-    #f01b48 11px,
-    #f01b48 13px,
+    var(--accent-pink) 11px,
+    var(--accent-pink) 13px,
     transparent 13px
   );
 }
@@ -1189,7 +1422,7 @@ a:active {
 .stops-table td.stop,
 .stops-table td.empty {
   position: relative;
-  background: linear-gradient(#f01b48, #f01b48) no-repeat 4px 0;
+  background: linear-gradient(var(--accent-pink), var(--accent-pink)) no-repeat 4px 0;
   background-size: 2px 100%;
 }
 .stops-table td.stop {
@@ -1233,7 +1466,7 @@ a:active {
   position: absolute;
   width: 10px;
   height: 10px;
-  border: 2px solid #f01b48;
+  border: 2px solid var(--accent-pink);
   background-color: #fff;
   border-radius: 999px;
 }
@@ -1267,8 +1500,8 @@ a:active {
   left: 1px;
   width: 8px;
   height: 8px;
-  border-bottom: 2px solid #f01b48;
-  border-right: 2px solid #f01b48;
+  border-bottom: 2px solid var(--accent-pink);
+  border-right: 2px solid var(--accent-pink);
   transform: rotate(45deg);
   opacity: 0.5;
 }
@@ -1290,7 +1523,7 @@ a:active {
   display: block;
   text-decoration: none;
   align-items: center;
-  color: #000;
+  color: var(--text-primary);
   border-radius: 5px;
   transition: 0.1s background-color ease-in-out;
 }
@@ -1403,8 +1636,8 @@ span.legend-opposite {
   padding: 3px 7px;
   border: 2px solid #fff;
   border-radius: 5px;
-  background-color: #55dd3333;
-  color: #1e5a0e;
+  background-color: var(--tag-green-bg);
+  color: var(--tag-green-text);
   font-weight: 500;
   text-decoration: none;
   overflow: hidden;
@@ -1503,6 +1736,21 @@ span.legend-opposite {
   margin: 8px 0 0;
 }
 
+.popover-list li.popover-city-header {
+  padding: 10px 14px 4px;
+  font-size: 0.75em;
+  font-weight: 500;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: none;
+  pointer-events: none;
+}
+.popover-list li.popover-city-header strong {
+  color: inherit;
+  font-weight: inherit;
+}
+
 .service-destination-group {
   margin-bottom: 16px;
   padding-bottom: 8px;
@@ -1515,14 +1763,14 @@ span.legend-opposite {
   border-radius: 4px;
 }
 .service-destination-info strong {
-  color: #000;
+  color: var(--text-emphasis);
   font-weight: 600;
 }
 h1 .service-tag {
   font-weight: bold;
 }
 a.service-tag:hover {
-  color: #000;
+  color: var(--text-emphasis);
 }
 .service-tag.current,
 .current .service-tag {
@@ -1555,7 +1803,7 @@ a.service-tag:hover {
   color: #999;
 }
 .service-tag span.close:hover {
-  color: #f01b48;
+  color: var(--accent-pink);
 }
 .service-tag span.scheduled-eta {
   color: #aaa;
@@ -1567,7 +1815,7 @@ a.service-tag:hover {
   padding: 2px 5px;
   border-radius: 4px;
   background-color: #f01b4822;
-  color: #f01b48;
+  color: var(--accent-pink);
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
   font-size: 12px;
@@ -1575,7 +1823,7 @@ a.service-tag:hover {
 }
 .mini-stop-tag {
   display: inline-block;
-  color: #f01b48;
+  color: var(--accent-pink);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   font-weight: 500;
@@ -1735,7 +1983,7 @@ a.service-tag:hover {
   padding: 11px 9px;
   text-align: center;
   background-color: #007aff22;
-  color: #007aff;
+  color: var(--accent-blue);
   font-size: 14px;
   border-radius: 7px;
   text-decoration: none;
@@ -1743,7 +1991,7 @@ a.service-tag:hover {
   font-weight: bold;
 }
 .popover-button.primary {
-  box-shadow: inset 0 0 0 2px #007aff;
+  box-shadow: inset 0 0 0 2px var(--accent-blue);
   background-color: #fff;
 }
 .popover-button:focus,
@@ -1818,7 +2066,7 @@ a.service-tag:hover {
   border-radius: 50%;
   border: 0;
   background-color: #007aff22;
-  color: #007aff;
+  color: var(--accent-blue);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1851,7 +2099,7 @@ a.service-tag:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #007aff;
+  background: var(--accent-blue);
   color: #fff;
   border-radius: 12px;
   padding: 10px 12px;
@@ -1873,7 +2121,8 @@ a.service-tag:hover {
 .directions-banner-inner b {
   font-weight: 600;
 }
-.directions-banner-close {
+.directions-banner-close,
+.directions-banner-mylocation {
   flex-shrink: 0;
   width: 24px;
   height: 24px;
@@ -1887,8 +2136,13 @@ a.service-tag:hover {
   justify-content: center;
   padding: 0;
 }
-.directions-banner-close:hover {
+.directions-banner-close:hover,
+.directions-banner-mylocation:hover {
   background: rgba(255, 255, 255, 0.35);
+}
+.directions-banner-mylocation svg {
+  width: 15px;
+  height: 15px;
 }
 @keyframes directions-banner-in {
   from {
@@ -1934,7 +2188,7 @@ a.service-tag:hover {
   transition: border-color 0.15s;
 }
 .between-stop-edit:hover {
-  border-bottom-color: #007aff;
+  border-bottom-color: var(--accent-blue);
 }
 .between-stop-arrow {
   color: #999;
@@ -1948,7 +2202,7 @@ a.service-tag:hover {
   border-radius: 50%;
   border: 0;
   background-color: #007aff22;
-  color: #007aff;
+  color: var(--accent-blue);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -2091,6 +2345,9 @@ a.service-tag:hover {
   #search-popover.shrink:hover .popover-list {
     opacity: 1;
   }
+  .directions-banner {
+    left: 320px;
+  }
   .popover-search {
     padding: 22px 14px 22px 74px;
     min-height: auto;
@@ -2148,12 +2405,12 @@ a.service-tag:hover {
   transition: color 0.3s;
 }
 .maplibregl-ctrl-custom-geolocate.loading {
-  color: #007aff;
+  color: var(--accent-blue);
   pointer-events: none;
   animation: glowing infinite alternate 1s linear both;
 }
 .maplibregl-ctrl-custom-geolocate.active {
-  color: #007aff;
+  color: var(--accent-blue);
 }
 .maplibregl-ctrl-custom-geolocate svg {
   vertical-align: middle;
@@ -2174,8 +2431,6 @@ a.service-tag:hover {
   background-color: #fff;
   border-radius: 123123px;
   box-shadow: 0 0 8px rgba(0, 0, 0, 0.4);
-  /* position: absolute; */
-  /* transform: translate(-50%, -50%); */
   position: relative;
   z-index: 1;
 }
@@ -2185,7 +2440,7 @@ a.service-tag:hover {
   width: 12px;
   height: 12px;
   overflow: hidden;
-  background-color: #007aff;
+  background-color: var(--accent-blue);
   border-radius: 123123px;
   animation: wobble 1.5s ease-out infinite alternate both;
 }
@@ -2200,17 +2455,6 @@ a.service-tag:hover {
     transform: scale(1.2);
   }
 }
-/* .user-location-compass {
-  width: 6px;
-  height: 20px;
-  background: linear-gradient(rgba(0, 122, 255, 0), #007aff);
-  position: absolute;
-  left: -3px;
-  bottom: 0;
-  transform-origin: bottom center;
-  transform: rotateX(-60deg);
-  transition: transform 0.3s;
-} */
 .user-location-compass {
   z-index: 0;
   position: absolute;
@@ -2221,27 +2465,6 @@ a.service-tag:hover {
   transform: scale(4);
   clip-path: polygon(50% 50%, 30% 0, 70% 0);
 }
-/* .user-location-accuracy {
-  width: 20px;
-  height: 20px;
-  overflow: hidden;
-  background-color: #007aff;
-  border-radius: 123123px;
-  position: absolute;
-  margin: -10px 0 0 -10px;
-  animation: pulse 2s 1s ease-out infinite both;
-} */
-@keyframes pulse {
-  0% {
-    transform: scale(1);
-    opacity: 0.2;
-  }
-  100% {
-    transform: scale(4);
-    opacity: 0;
-  }
-}
-
 /* Scroll shadows */
 
 [data-scroll-shadow='top'] {
@@ -2342,7 +2565,7 @@ a.service-tag:hover {
 .donation-box {
   display: block;
   padding: 12px 7px;
-  color: #007aff;
+  color: var(--accent-blue);
   background-color: rgba(255, 255, 255, 0.5);
   font-weight: 500;
   border-radius: 7px;
@@ -2351,7 +2574,7 @@ a.service-tag:hover {
   transition: background-color 0.3s ease-in-out;
 }
 .donation-box:hover {
-  color: #000;
+  color: var(--text-emphasis);
   background-color: #fff;
 }
 
@@ -2361,7 +2584,7 @@ a.service-tag:hover {
   display: inline-block;
   border: 2px solid #fff;
   border-radius: 999px;
-  background-color: #55dd3333;
+  background-color: var(--tag-green-bg);
   font-weight: bold;
   text-decoration: none;
   overflow: hidden;
@@ -2381,7 +2604,7 @@ a.service-tag:hover {
   content: '';
   display: block;
   position: absolute;
-  background-color: #3a6727;
+  background-color: var(--accent-green);
   border-radius: 2px;
   transition: transform 0.3s ease-in-out;
 }
@@ -2398,7 +2621,7 @@ a.service-tag:hover {
   left: 4px;
 }
 .plus:hover {
-  border-color: #3a6727;
+  border-color: var(--accent-green);
 }
 .plus:hover:before,
 .plus:hover:after {
@@ -2422,7 +2645,7 @@ a.service-tag:hover {
   display: block;
   text-decoration: none;
   align-items: center;
-  color: #000;
+  color: var(--text-primary);
   border-radius: 5px;
   transition: 0.1s background-color ease-in-out;
   display: flex;
@@ -2440,7 +2663,7 @@ a.service-tag:hover {
   display: inline-block;
   text-align: right;
   font-weight: 500;
-  color: #3a6727;
+  color: var(--accent-green);
   text-shadow: 0 0 2px #eeffd1;
   word-spacing: 0.5em;
   margin-left: 8px;
@@ -2475,7 +2698,7 @@ input[type='checkbox']:active:before {
 }
 input[type='checkbox']:hover:before,
 input[type='checkbox']:checked:before {
-  border-color: #3a6727;
+  border-color: var(--accent-green);
 }
 input[type='checkbox']:after {
   opacity: 0;
@@ -2483,7 +2706,7 @@ input[type='checkbox']:after {
   position: absolute;
   top: 6px;
   left: 9px;
-  border: solid #3a6727;
+  border: solid var(--accent-green);
   border-width: 0 2px 2px 0;
   width: 6px;
   height: 10px;
@@ -2587,6 +2810,67 @@ input[type='checkbox']:checked:after {
   display: none;
 }
 
+/* Popovers migrated to cupertino-pane (JS adds this class only on the
+   touch+mobile path — see mobilePane.js). The pane's own wrapper/pane
+   elements own position, height and transform from here on; our legacy
+   fixed/top/transform rules above would otherwise fight them, since the
+   pane nests this element inside a `will-change: transform` ancestor that
+   becomes its containing block for `position: fixed`. */
+.popover.pane-managed {
+  position: static !important;
+  top: auto !important;
+  max-height: none !important;
+  transform: none !important;
+  transition: none !important;
+  /* The desktop "floating card" rule (`.popover { max-width: 320px;
+     right: 16px }` under `@media (min-width: 481px)`, further down this
+     file) is meant for non-touch/desktop layouts, but that 481px
+     threshold is well below the 640px one that gates pane mode
+     (paneAppliesHere in mobilePane.js) — so any touch viewport between
+     481-640px got a 320px-wide, right-offset content div sitting inside
+     a full-width/500px-capped pane, leaving a real gap between the two.
+     Reset both so pane-managed content always spans the pane's own full
+     width, regardless of where the desktop rule's own breakpoint falls. */
+  max-width: none !important;
+  right: auto !important;
+}
+
+/* #search-popover's own (otherwise unconditional) base rule pins it to a
+   fixed height:100%/bottom:0 for its legacy translateY-driven show/hide —
+   pane-managed needs it sized to its natural content instead, same as
+   every other migrated popover. */
+#search-popover.pane-managed {
+  height: auto !important;
+  bottom: auto !important;
+}
+
+/* Mobile floating twin of stop/service's .popover-footer (see
+   renderStopFooter's comment in app.js for why the nested one alone isn't
+   enough) — a real position:fixed bar outside the pane structure entirely,
+   since a fixed-position descendant of .pane would still be contained by
+   it (the library's own CSS gives .pane `will-change: transform`, which
+   the spec treats the same as an actual `transform` for establishing a
+   fixed-position containing block). Hidden by default/desktop; only
+   toggled on within the mobile breakpoint below. */
+.mobile-floating-footer {
+  display: none;
+}
+
+/* Strip cupertino-pane's own chrome from the `.pane` wrapper it puts around
+   our content — our `.popover` div already supplies the translucent/blurred
+   background, rounded corners and shadow, and the library's own opaque
+   white default would otherwise sit behind it and block the blur. */
+.cupertino-pane-wrapper.popover-pane-wrapper .pane {
+  background: transparent;
+  box-shadow: none;
+  padding-top: 0;
+  /* Our content div's natural height can momentarily exceed the computed
+     break height (e.g. between a content resize and the async height
+     recompute catching up) — clip it instead of letting it bleed out past
+     the sheet's edge over the map. */
+  overflow: hidden;
+}
+
 @media (max-width: 1199px) {
   .popover-handle {
     display: flex;
@@ -2613,20 +2897,16 @@ input[type='checkbox']:checked:after {
     padding-right: 12px;
   }
 
-  /* Snap positions — override max-height on expanded popovers */
-  #stop-popover.snap-full,
-  #between-popover.snap-full,
-  #service-popover.snap-full {
-    max-height: calc(100dvh - 100px);
-    max-height: calc(100vh - 100px);
-  }
-  #stop-popover.snap-collapsed,
-  #between-popover.snap-collapsed,
-  #service-popover.snap-collapsed {
-    max-height: 50dvh;
-    max-height: 50vh;
-    transform: translateY(calc(-85px - var(--keyboard-height, 0px)));
-    overflow: hidden;
+  /* The header is a drag target too now (see dragHandleSelector's comment
+     in mobilePane.js) — without this, the browser's own default touch
+     handling (page scroll / pull-to-refresh) can win the race against
+     cupertino's touchstart listener when a drag starts a few pixels off
+     the small handle bar itself. */
+  #stop-popover header,
+  #between-popover header,
+  #location-popover header,
+  #service-popover header {
+    touch-action: none;
   }
 
   /* Hide close button on mobile — dismiss via drag handle instead */
@@ -2636,15 +2916,63 @@ input[type='checkbox']:checked:after {
     display: none;
   }
 
-  /* Disable transitions while actively dragging */
-  .popover.dragging {
-    transition: none !important;
+  /* The nested footer is superseded by .mobile-floating-footer below —
+     without hiding it, both would render (it'd also still be functionally
+     unreachable at rest, per renderStopFooter's comment). */
+  #stop-popover .popover-footer,
+  #service-popover .popover-footer {
+    display: none;
   }
 
-  /* Drop the blur mid-drag */
-  .popover.dragging,
-  .popover.dragging .popover-inner {
-    backdrop-filter: none !important;
+  .mobile-floating-footer.show {
+    display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    /* Match cupertino's own .pane sizing (max-width: 500px, centered) — this
+       bar lives outside the pane's DOM subtree so it doesn't get that for
+       free, but it needs to line up with the sheet it belongs to on wider
+       viewports within the mobile breakpoint (e.g. tablets), not span the
+       full window width underneath a narrower, centered pane. */
+    max-width: 500px;
+    margin-left: auto;
+    margin-right: auto;
+    /* Above cupertino's own .pane (z-index: 11 in its base CSS) so this
+       bar stays on top of the sheet regardless of which break it's at. */
+    z-index: 20;
+    background-color: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 -1px 5px rgba(0, 0, 0, 0.15);
+  }
+  @supports (backdrop-filter: blur(10px)) {
+    .mobile-floating-footer.show {
+      background-color: rgba(255, 255, 255, 0.7);
+      backdrop-filter: blur(10px) saturate(3);
+    }
+  }
+  .mobile-floating-footer .popover-footer {
+    padding: 12px;
+  }
+  @supports (top: max(1px)) {
+    .mobile-floating-footer .popover-footer {
+      padding-left: max(12px, env(safe-area-inset-left));
+      padding-right: max(12px, env(safe-area-inset-right));
+      padding-bottom: max(12px, env(safe-area-inset-bottom));
+    }
+  }
+
+  /* Reserve room so the list's last rows don't end up hidden behind the
+     floating footer bar. Stop's floating footer always renders whenever
+     stopPopoverData exists (unconditional in app.js), but service's is
+     gated behind isAlphaEnabled() && routeServices.length > 0 — reserving
+     this space unconditionally for service left a dead 76px gap at the
+     bottom of the list whenever that footer doesn't actually render (e.g.
+     alpha features off), priming the UI for a bar that was never coming. */
+  #stop-popover .popover-scroll {
+    padding-bottom: 76px;
+  }
+  #service-popover.has-floating-footer .popover-scroll {
+    padding-bottom: 76px;
   }
 }
 
@@ -2711,10 +3039,15 @@ input[type='checkbox']:checked:after {
 
 html.dark {
   color-scheme: dark;
+  --accent-blue: #4da3ff;
+  --accent-pink: #ff4d6d;
+  --accent-green: #66e848;
+  --tag-green-text: #5cc83e;
+  --text-primary: #e0e0e0;
+  --text-emphasis: #f0f0f0;
 
   body {
     background-color: #000;
-    color: #e0e0e0;
   }
 
   #map {
@@ -2722,7 +3055,7 @@ html.dark {
   }
 
   a {
-    color: #4da3ff;
+    color: var(--accent-blue);
   }
 
   /* ── Theme toggle (dark) ──────────────────────────────────────────────────── */
@@ -2754,7 +3087,9 @@ html.dark {
   }
 
   /* ── Popover handle (dark) ─────────────────────────────────────────────── */
-
+  /* Solid to match the header's own raised-panel background right below it
+     (see "Panel headers" further down) — handle + header form one
+     continuous opaque block; only the scrollable body stays translucent. */
   .popover-handle {
     background-color: #151515;
   }
@@ -2783,7 +3118,7 @@ html.dark {
     filter: invert(1);
   }
   .maplibregl-ctrl-attrib a {
-    color: #4da3ff;
+    color: var(--accent-blue);
   }
 
   /* ── Logo ──────────────────────────────────────────────────────────────────── */
@@ -2839,7 +3174,7 @@ html.dark {
   }
   .drawer-intro a,
   .drawer-github {
-    color: #4da3ff;
+    color: var(--accent-blue);
   }
   .drawer-divider {
     border-top-color: #333;
@@ -2865,22 +3200,22 @@ html.dark {
     background: #555;
   }
   .dev-toggle-track.active {
-    background: #4da3ff;
+    background: var(--accent-blue);
   }
   .dev-journey-btn {
     color: #999;
     border-color: #555;
   }
   .dev-journey-btn:hover {
-    border-color: #4da3ff;
-    color: #4da3ff;
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
   }
 
   /* ── Popovers (search, stop, between, service, arrivals) ───────────────────── */
 
   .popover {
     background-color: #0d0d0d;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    /*border: 1px solid rgba(255, 255, 255, 0.12);*/
     border-bottom: none;
     box-shadow:
       0 -4px 20px rgba(0, 0, 0, 0.8),
@@ -2888,6 +3223,18 @@ html.dark {
   }
   @supports (backdrop-filter: blur(10px)) {
     .popover {
+      background-color: rgba(13, 13, 13, 0.85);
+    }
+  }
+
+  .mobile-floating-footer.show {
+    background-color: #0d0d0d;
+    box-shadow:
+      0 -4px 20px rgba(0, 0, 0, 0.8),
+      0 -1px 0 rgba(255, 255, 255, 0.06);
+  }
+  @supports (backdrop-filter: blur(10px)) {
+    .mobile-floating-footer.show {
       background-color: rgba(13, 13, 13, 0.85);
     }
   }
@@ -2907,6 +3254,7 @@ html.dark {
   /* Panel headers — raised background to clearly separate from content */
   #stop-popover header,
   #between-popover header,
+  #location-popover header,
   #service-popover header {
     background-color: #151515;
     border-bottom: 1px solid rgba(255, 255, 255, 0.15);
@@ -2915,16 +3263,19 @@ html.dark {
 
   #stop-popover h1,
   #between-popover h1,
+  #location-popover h1,
   #service-popover h1 {
     color: #f0f0f0;
   }
   #stop-popover h2,
   #between-popover h2,
+  #location-popover h2,
   #service-popover h2 {
     color: #aaa;
   }
   #stop-popover h3,
   #between-popover h3,
+  #location-popover h3,
   #service-popover h3 {
     color: #bbb;
   }
@@ -2932,6 +3283,7 @@ html.dark {
   /* Content area — darker than header for clear contrast */
   #stop-popover .popover-scroll,
   #between-popover .popover-scroll,
+  #location-popover .popover-scroll,
   #service-popover .popover-scroll {
     background-color: #050505;
   }
@@ -2964,12 +3316,9 @@ html.dark {
     background-color: rgba(255, 255, 255, 0.2);
   }
   .popover-search input[type='search']:focus-visible {
-    outline-color: #4da3ff;
+    outline-color: var(--accent-blue);
   }
 
-  .search-input-wrapper .cancel-btn {
-    color: #e0e0e0;
-  }
   .search-input-wrapper .cancel-btn:active {
     background-color: rgba(255, 255, 255, 0.1);
   }
@@ -2983,13 +3332,12 @@ html.dark {
   }
   .popover-search .geolocate-btn.loading,
   .popover-search .geolocate-btn.active {
-    color: #4da3ff;
+    color: var(--accent-blue);
   }
 
   /* ── Popover list ──────────────────────────────────────────────────────────── */
 
   .popover-list li:not(.ads) a {
-    color: #e0e0e0;
     border-bottom-color: rgba(255, 255, 255, 0.12);
   }
   @media (hover: hover) {
@@ -3016,18 +3364,19 @@ html.dark {
 
   .popover-button {
     background-color: rgba(77, 163, 255, 0.15);
-    color: #4da3ff;
+    color: var(--accent-blue);
   }
   .popover-button.primary {
     box-shadow:
-      inset 0 0 0 2px #4da3ff,
+      inset 0 0 0 2px var(--accent-blue),
       0 1px 5px rgba(77, 163, 255, 0.4);
     background-color: #111;
   }
 
   .directions-btn {
     background-color: rgba(77, 163, 255, 0.15);
-    color: #4da3ff;
+    color: var(--accent-blue);
+    margin-left: auto;
   }
   .directions-btn:hover {
     background-color: rgba(77, 163, 255, 0.3);
@@ -3035,7 +3384,7 @@ html.dark {
 
   .between-swap-btn {
     background-color: rgba(77, 163, 255, 0.15);
-    color: #4da3ff;
+    color: var(--accent-blue);
   }
   .between-swap-btn:hover {
     background-color: rgba(77, 163, 255, 0.3);
@@ -3046,7 +3395,7 @@ html.dark {
     color: #f0f0f0;
   }
   .between-stop-edit:hover {
-    border-bottom-color: #4da3ff;
+    border-bottom-color: var(--accent-blue);
   }
   .between-stop-arrow {
     color: #666;
@@ -3066,7 +3415,7 @@ html.dark {
     background-color: #1a1a1a;
   }
   #between-popover .between-item.selected {
-    border-color: #4da3ff;
+    border-color: var(--accent-blue);
     box-shadow: 0 0 8px rgba(77, 163, 255, 0.2);
     background-color: #1a1a1a;
   }
@@ -3076,20 +3425,39 @@ html.dark {
   #between-popover .nearby-end .between-stops .end:before {
     background-color: #111;
   }
+  #between-popover .between-item-leg-city {
+    color: #999;
+  }
+
+  #between-popover .itin-dot {
+    background-color: #111;
+  }
+  #between-popover .itin-time {
+    color: #999;
+  }
+  #between-popover .itin-stop-extra {
+    color: #888;
+  }
+  #between-popover .itin-walk-label {
+    color: #999;
+  }
+  #between-popover .itin-seg-alternates {
+    color: #888;
+  }
 
   /* ── Stop / service tags ───────────────────────────────────────────────────── */
 
   .stop-tag {
     background-color: rgba(240, 27, 72, 0.2);
-    color: #ff4d6d;
+    color: var(--accent-pink);
   }
   .mini-stop-tag {
-    color: #ff4d6d;
+    color: var(--accent-pink);
   }
   .service-tag {
     background-color: rgba(85, 221, 51, 0.1);
-    color: #5cc83e;
     border-color: rgba(255, 255, 255, 0.08);
+    color: var(--accent-green);
   }
   .service-tag span {
     background-color: rgba(255, 255, 255, 0.06);
@@ -3099,10 +3467,7 @@ html.dark {
     color: #666;
   }
   .service-tag span.close:hover {
-    color: #ff4d6d;
-  }
-  a.service-tag:hover {
-    color: #f0f0f0;
+    color: var(--accent-pink);
   }
 
   .stop-tag.online:after,
@@ -3150,12 +3515,6 @@ html.dark {
 
   /* ── Stops list / table ────────────────────────────────────────────────────── */
 
-  .stops-list li a,
-  .stops-table td.stop a,
-  .stops-table td.stop-start a,
-  .stops-table td.stop-end a {
-    color: #e0e0e0;
-  }
   .stops-list li a:hover,
   .stops-table td.stop a:hover,
   .stops-table td.stop-start a:hover,
@@ -3233,13 +3592,14 @@ html.dark {
     border-top-color: rgba(255, 255, 255, 0.1);
   }
 
+  .popover-list li.popover-city-header {
+    color: #777;
+  }
+
   /* ── Service destination ───────────────────────────────────────────────────── */
 
   .service-destination-info {
     color: #ccc;
-  }
-  .service-destination-info strong {
-    color: #f0f0f0;
   }
 
   /* ── Checkbox ──────────────────────────────────────────────────────────────── */
@@ -3253,22 +3613,19 @@ html.dark {
   }
   input[type='checkbox']:hover:before,
   input[type='checkbox']:checked:before {
-    border-color: #66e848;
+    border-color: var(--accent-green);
   }
   input[type='checkbox']:after {
-    border-color: #66e848;
+    border-color: var(--accent-green);
   }
 
   /* ── Simple stops list ─────────────────────────────────────────────────────── */
 
-  .simple-stops-list li a {
-    color: #e0e0e0;
-  }
   .simple-stops-list li a:hover {
     background-color: rgba(240, 27, 72, 0.15);
   }
   .simple-stops-list .services-meta-list {
-    color: #66e848;
+    color: var(--accent-green);
     text-shadow: none;
   }
 
@@ -3301,12 +3658,11 @@ html.dark {
   /* ── Donation box ──────────────────────────────────────────────────────────── */
 
   .donation-box {
-    color: #4da3ff;
+    color: var(--accent-blue);
     background-color: rgba(77, 163, 255, 0.08);
     box-shadow: 0 2px 5px rgba(77, 163, 255, 0.15);
   }
   .donation-box:hover {
-    color: #f0f0f0;
     background-color: #111;
   }
 
@@ -3318,10 +3674,10 @@ html.dark {
   }
   .plus:before,
   .plus:after {
-    background-color: #66e848;
+    background-color: var(--accent-green);
   }
   .plus:hover {
-    border-color: #66e848;
+    border-color: var(--accent-green);
   }
 
   /* ── Geolocation ───────────────────────────────────────────────────────────── */
@@ -3331,14 +3687,14 @@ html.dark {
   }
   .maplibregl-ctrl-custom-geolocate.active,
   .maplibregl-ctrl-custom-geolocate.loading {
-    color: #4da3ff;
+    color: var(--accent-blue);
   }
   .user-location-dot {
     background-color: #222;
     box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
   }
   .user-location-dot:after {
-    background-color: #4da3ff;
+    background-color: var(--accent-blue);
   }
 
   /* ── Standalone gradient ───────────────────────────────────────────────────── */
@@ -3374,15 +3730,15 @@ html.dark {
     color: #ccc;
   }
   .install-browser-tab.active {
-    background: #4da3ff;
+    background: var(--accent-blue);
     color: #000;
-    border-color: #4da3ff;
+    border-color: var(--accent-blue);
   }
   .install-sheet-steps {
     color: #ccc;
   }
   .install-sheet-close {
-    background: #4da3ff;
+    background: var(--accent-blue);
     color: #000;
   }
 

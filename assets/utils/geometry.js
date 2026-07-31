@@ -101,23 +101,15 @@ export const cropPolylineFromPoint = (
 };
 
 /**
- * Crop a polyline between two points
+ * Build a cropped polyline between two already-located closest-point results.
+ * Shared by cropPolylineBetweenPoints (which locates the points itself) and
+ * findBestRouteSegment (which has already located them while scoring variants).
  * @param {Array} coordinates - Original polyline coordinates
- * @param {Array} startPoint - The point to start from [lng, lat]
- * @param {Array} endPoint - The point to end at [lng, lat]
+ * @param {Object} startClosest - Result of findClosestPointOnPolyline for the start point
+ * @param {Object} endClosest - Result of findClosestPointOnPolyline for the end point
  * @returns {Array} Cropped coordinates between the two points
  */
-export const cropPolylineBetweenPoints = (
-  coordinates,
-  startPoint,
-  endPoint,
-) => {
-  if (!coordinates || coordinates.length < 2) return coordinates;
-
-  // Find closest points on polyline for both start and end
-  const startClosest = findClosestPointOnPolyline(startPoint, coordinates);
-  const endClosest = findClosestPointOnPolyline(endPoint, coordinates);
-
+const buildCroppedSegment = (coordinates, startClosest, endClosest) => {
   if (!startClosest.point || !endClosest.point) {
     return coordinates;
   }
@@ -251,6 +243,78 @@ export const cropPolylineBetweenPoints = (
 
   // Fallback to original coordinates if cropping failed
   return coordinates;
+};
+
+/**
+ * Crop a polyline between two points
+ * @param {Array} coordinates - Original polyline coordinates
+ * @param {Array} startPoint - The point to start from [lng, lat]
+ * @param {Array} endPoint - The point to end at [lng, lat]
+ * @returns {Array} Cropped coordinates between the two points
+ */
+export const cropPolylineBetweenPoints = (
+  coordinates,
+  startPoint,
+  endPoint,
+) => {
+  if (!coordinates || coordinates.length < 2) return coordinates;
+
+  const startClosest = findClosestPointOnPolyline(startPoint, coordinates);
+  const endClosest = findClosestPointOnPolyline(endPoint, coordinates);
+
+  return buildCroppedSegment(coordinates, startClosest, endClosest);
+};
+
+/**
+ * Find the polyline variant (of a service's multiple shape variants) whose
+ * shape best matches both endpoints, and return it cropped between them.
+ * @param {Array<string>} servicePolylines - Encoded polyline variants for a service
+ * @param {Array} fromCoords - Start point [lng, lat]
+ * @param {Array} toCoords - End point [lng, lat]
+ * @param {Function} decoder - Encoded-polyline decoder, e.g. toGeoJSON
+ * @returns {Array|null} Cropped coordinates of the best-matching variant, or null
+ */
+export const findBestRouteSegment = (
+  servicePolylines,
+  fromCoords,
+  toCoords,
+  decoder,
+) => {
+  if (!servicePolylines?.length) return null;
+
+  let bestCropped = null;
+  let bestDistance = Infinity;
+
+  for (const encoded of servicePolylines) {
+    const polyline = decodePolylineCached(encoded, decoder);
+    if (!polyline?.coordinates?.length) continue;
+
+    const startClosest = findClosestPointOnPolyline(
+      fromCoords,
+      polyline.coordinates,
+    );
+    const endClosest = findClosestPointOnPolyline(toCoords, polyline.coordinates);
+    if (!startClosest.point || !endClosest.point) continue;
+
+    const totalDist = startClosest.distance + endClosest.distance;
+    if (totalDist < bestDistance) {
+      const cropped = buildCroppedSegment(
+        polyline.coordinates,
+        startClosest,
+        endClosest,
+      );
+      if (
+        Array.isArray(cropped) &&
+        cropped.length >= 2 &&
+        cropped.every((c) => Array.isArray(c) && c.length >= 2)
+      ) {
+        bestDistance = totalDist;
+        bestCropped = cropped;
+      }
+    }
+  }
+
+  return bestCropped;
 };
 
 // Cache for decoded polylines to avoid redundant decoding
