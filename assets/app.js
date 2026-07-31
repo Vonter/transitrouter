@@ -414,6 +414,15 @@ const createCityDrawer = () => {
     const cfg = getConfigForCity(code);
     return [code, `${cfg.city.flag || ''} ${cfg.city.name}`];
   });
+  // "all" (every city combined — see IS_ALL_MODE) is an alpha feature,
+  // same gate the /all/ route itself is softlocked behind (see the
+  // city==='all' redirect guard near the top of this file) — offering it
+  // as a default here without that gate would pick a default that then
+  // immediately bounces back to FALLBACK_CITY for anyone without alpha
+  // features on.
+  if (isAlphaEnabled()) {
+    cityOptions.unshift(['all', '🌐 All']);
+  }
   cityOptions.unshift(['auto', 'Automatic']);
   const citySelect = createSelect(
     'defaultCity',

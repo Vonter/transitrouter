@@ -345,7 +345,34 @@ export const getApiUrl = (apiPath) => {
   return `${getApiBaseUrl()}${apiPath}`;
 };
 
+// 'all' (every city combined — see IS_ALL_MODE in app.js) isn't a real
+// entry in CITY_CONFIGS — it never had its own city-specific data. Bounds
+// match config.js's own ALL_MODE_BOUNDS ([66, 6, 98, 38], lng/lat order)
+// so callers reading city.bounds (title bar, city info displays, etc.)
+// see something consistent with what the map actually frames in all-mode.
+const ALL_CITY_CONFIG = {
+  city: {
+    name: 'All',
+    code: 'all',
+    flag: '🌐',
+    bounds: {
+      lowerLat: 6,
+      upperLat: 38,
+      lowerLong: 66,
+      upperLong: 98,
+      minZoom: 4,
+    },
+  },
+};
+
 export const getConfigForCity = (cityCode) => {
+  // Falling through to CITY_CONFIGS[DEFAULT_CITY] here (like every other
+  // city code does below) would silently show whatever city DEFAULT_CITY
+  // happens to be instead of "All" — and if DEFAULT_CITY is itself 'all'
+  // (a valid choice now that the settings drawer offers it), that
+  // fallback resolves to undefined and crashes the first caller that
+  // reads .city off of it (e.g. the page-title effect in app.js).
+  if (cityCode === 'all') return ALL_CITY_CONFIG;
   const config = CITY_CONFIGS[cityCode] || CITY_CONFIGS[DEFAULT_CITY];
   if (!config) {
     console.error(`No config found for city ${cityCode}`);
