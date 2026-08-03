@@ -18,6 +18,9 @@ on:
           - mumbai
           - pune
           - rajkot
+          - karnataka
+          - railways
+          - andhrapradesh
       generate_pois:
         description: Also generate points of interest (POIs)
         required: false
