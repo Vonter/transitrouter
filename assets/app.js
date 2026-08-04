@@ -574,10 +574,29 @@ if (
     });
 }
 
-let rafST;
+// Pins the document at scroll 0 while the keyboard opens — html/body sit a hair
+// taller than the viewport (the safe-area min-height in app.css), so iOS
+// scrolling a focused input into view drags the whole fixed layout with it.
+//
+// Time-boxed rather than cancelled on the popover's transitionend: a
+// pane-managed popover has `transition: none !important` and no transitioning
+// children, so that event never arrived and the loop ran at 60fps for the rest
+// of the session, fighting the browser's own focus handling every frame.
+const SCROLL_PIN_MS = 600;
+let rafST = null;
+let rafSTUntil = 0;
 const rafScrollTop = () => {
-  window.scrollTo(0, 0);
+  if (window.scrollY !== 0) window.scrollTo(0, 0);
+  if (performance.now() >= rafSTUntil) {
+    rafST = null;
+    return;
+  }
   rafST = requestAnimationFrame(rafScrollTop);
+};
+const pinScrollTop = () => {
+  // Extend the window rather than start a second, independent chain.
+  rafSTUntil = performance.now() + SCROLL_PIN_MS;
+  if (!rafST) rafST = requestAnimationFrame(rafScrollTop);
 };
 
 const $tooltip = document.getElementById('tooltip');
@@ -1635,15 +1654,12 @@ const App = () => {
     setExpandedSearchOnce(true);
     // $map.classList.add('fade-out');
     movePaneToBreak(searchPane, 'top');
-    rafScrollTop();
+    pinScrollTop();
     if (IS_ALL_MODE && !searchField.current?.value) {
       // Immediately populate with sorted index (no debounce delay)
       const sorted = buildAllModeSearchList();
       setServices(sorted);
     }
-    searchPopover.current?.addEventListener('transitionend', (e) => {
-      cancelAnimationFrame(rafST);
-    }, { once: true });
   };
 
   // Debounced search — stored in a ref so the debounce timeoutId survives re-renders.
@@ -4139,16 +4155,24 @@ const App = () => {
   // else eventually re-rendered the component. Bumping this on a
   // (debounced) resize forces those effects to re-check and correctly
   // build/tear down as the breakpoint is crossed.
+  //
+  // Only on an actual crossing: each of those effects rebuilds its pane from
+  // scratch, moving the popover's DOM out of the document and back. Bumping on
+  // *any* resize let a mere height change destroy every open sheet — the
+  // keyboard opening blurred the input it had just opened for, closing it,
+  // which resized again; the collapsing URL bar did the same on scroll.
   const [viewportTick, setViewportTick] = useState(0);
   useEffect(() => {
-    let raf = null;
-    const handler = () => {
-      if (raf) cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => setViewportTick((t) => t + 1));
-    };
+    let lastApplies = paneAppliesHere(supportsTouch, BREAKPOINT);
+    const handler = rafThrottle(() => {
+      const applies = paneAppliesHere(supportsTouch, BREAKPOINT);
+      if (applies === lastApplies) return;
+      lastApplies = applies;
+      setViewportTick((t) => t + 1);
+    });
     window.addEventListener('resize', handler);
     return () => {
-      if (raf) cancelAnimationFrame(raf);
+      handler.cancel();
       window.removeEventListener('resize', handler);
     };
   }, []);
@@ -4169,10 +4193,10 @@ const App = () => {
     : null;
   useEffect(() => {
     if (!paneAppliesHere(supportsTouch, BREAKPOINT)) {
-      // A resize just crossed from mobile into desktop width — tear down
-      // any pane instance so its detached, now-stale cupertino wrapper
-      // doesn't sit on screen fighting the desktop CSS layout.
-      syncMobilePane(stopPane, stopPopover.current, false);
+      // A resize just crossed from mobile into desktop width — tear the pane
+      // down and release the element, so neither the stale cupertino wrapper
+      // nor its leftover inline styles fight the desktop CSS layout.
+      syncMobilePane(stopPane, stopPopover.current, false, { release: true });
       setStopPaneAtBottom(false);
       return;
     }
@@ -4196,7 +4220,7 @@ const App = () => {
   const servicePopoverKey = routeServices?.join(',') || null;
   useEffect(() => {
     if (!paneAppliesHere(supportsTouch, BREAKPOINT)) {
-      syncMobilePane(servicePane, servicePopover.current, false);
+      syncMobilePane(servicePane, servicePopover.current, false, { release: true });
       setServicePaneAtBottom(false);
       return;
     }
@@ -4235,7 +4259,7 @@ const App = () => {
     : null;
   useEffect(() => {
     if (!paneAppliesHere(supportsTouch, BREAKPOINT)) {
-      syncMobilePane(locationPane, locationPopover.current, false);
+      syncMobilePane(locationPane, locationPopover.current, false, { release: true });
       setLocationPaneAtBottom(false);
       return;
     }
@@ -4260,7 +4284,7 @@ const App = () => {
   const betweenPopoverKey = `${route.value || ''}|${route.subpage || ''}`;
   useEffect(() => {
     if (!paneAppliesHere(supportsTouch, BREAKPOINT)) {
-      syncMobilePane(betweenPane, betweenPopover.current, false);
+      syncMobilePane(betweenPane, betweenPopover.current, false, { release: true });
       setBetweenPaneAtBottom(false);
       return;
     }
@@ -4317,7 +4341,7 @@ const App = () => {
   // movePaneToBreak().
   useEffect(() => {
     if (!paneAppliesHere(supportsTouch, BREAKPOINT)) {
-      syncMobilePane(searchPane, searchPopover.current, false);
+      syncMobilePane(searchPane, searchPopover.current, false, { release: true });
       return;
     }
     syncMobilePane(searchPane, searchPopover.current, !anyPopoverOpen, {

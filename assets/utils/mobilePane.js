@@ -1,4 +1,5 @@
 import { CupertinoPane } from 'cupertino-pane';
+import { rafThrottle } from './mapOptimizations';
 
 // Mirrors the BREAKPOINT()/supportsTouch gate in app.js — panes only ever
 // run on touch + mobile-width; desktop keeps the CSS floating-card behavior.
@@ -97,6 +98,65 @@ function fixOverflowHeight(pane, el) {
   pane.setOverflowHeight?.(trailingHeight);
 }
 
+// Resizes a live pane in place — the shared body of both watchers below.
+// Skipped when the breaks come back unchanged: live arrivals refresh on a timer
+// but rarely change the sheet's height, and re-applying identical breaks still
+// costs a 300ms reposition.
+function reapplyBreaks(paneRef, el) {
+  const pane = paneRef.current;
+  if (!pane?.isPanePresented?.()) return;
+  const breaks = (pane._computeBreaksFn || computeBreaks)(el);
+  const breaksKey = JSON.stringify(breaks);
+  if (breaksKey === pane._breaksKey) return;
+  pane._breaksKey = breaksKey;
+
+  const restingBreak = pane.currentBreak() || 'middle';
+  pane.setBreakpoints(breaks).then(() => {
+    if (paneRef.current !== pane) return; // superseded/destroyed meanwhile
+    fixOverflowHeight(pane, el);
+    // A pane already resting at a break doesn't follow its own new numbers —
+    // its reveal is governed by transform, not height.
+    pane.moveToBreak(restingBreak);
+  });
+}
+
+// cupertino's keyboard handling has to go. fixBodyKeyboardResize() rewrites the
+// document's `<meta name=viewport>` (plus html overflow / body min-height),
+// relayouting the whole page — map canvas included — and firing another resize
+// that re-enters the same path. destroyResets() calls it on every teardown, so
+// it ran on ordinary sheet transitions too. onKeyboardShow/WillHide also move
+// the sheet to heights of their own, fighting the breaks app.js drives from
+// visualViewport. Nothing opts out (KeyboardEvents is a core class, not one of
+// the optional `modules`), so blank the methods per instance.
+function disableLibraryKeyboardHandling(pane) {
+  const keyboard = pane?.keyboardEvents;
+  if (!keyboard) return;
+  keyboard.fixBodyKeyboardResize = () => {};
+  keyboard.handleKeyboardFromResize = () => false; // false = carry on as a plain resize
+  keyboard.onKeyboardShow = () => {};
+  keyboard.onKeyboardWillHide = () => {};
+}
+
+// destroy() hands the element back still wearing cupertino's styles: display,
+// an opacity transition, overflowX, and a forced height on `[overflow-y]`. The
+// next present() overwrites them, so they only matter on the way out to desktop
+// — where they'd override the floating-card CSS and leave it invisible and
+// unanimated. `.pane-managed` goes too; it pins position:static.
+function releaseToCSS(el) {
+  if (!el) return;
+  el.classList.remove('pane-managed');
+  el.style.display = '';
+  el.style.visibility = '';
+  el.style.transition = '';
+  el.style.overflowX = '';
+  const scrollEl = el.querySelector('[overflow-y]');
+  if (scrollEl) {
+    scrollEl.style.height = '';
+    scrollEl.style.overflowX = '';
+    scrollEl.style.overscrollBehavior = '';
+  }
+}
+
 // `paneOptions` (passed through from syncMobilePane's caller) lets a
 // popover override the handful of things search needs different from
 // stop/service/between/location's defaults — see the search wiring in
@@ -169,6 +229,7 @@ function buildPane(el, onDismiss, paneOptions = {}) {
   // element — capture it before cupertino moves el anywhere, so destroy()
   // can be corrected back to it (see the note on parentElement below).
   const reactOwnedParent = el.parentElement;
+  const breaks = computeBreaksFn(el);
 
   const pane = new CupertinoPane(el, {
     // Not el.parentElement directly: that's a React-managed DOM node, and
@@ -201,7 +262,7 @@ function buildPane(el, onDismiss, paneOptions = {}) {
     // stay scrollable regardless of which break it's resting at.
     topperOverflow: false,
     initialBreak,
-    breaks: computeBreaksFn(el),
+    breaks,
     events: {
       onDidDismiss: () => pane._onDismiss?.(),
       // cupertino's own moveToBreak() only updates the bookkeeping
@@ -217,12 +278,14 @@ function buildPane(el, onDismiss, paneOptions = {}) {
       onTransitionEnd: () => setTimeout(() => onBreakChange?.(pane.currentBreak()), 0),
     },
   });
+  disableLibraryKeyboardHandling(pane);
   pane._onDismiss = onDismiss;
   pane._reactOwnedParent = reactOwnedParent;
   // Stashed so a later resize (see watchMobilePaneResize) can recompute
   // breaks with the same function this pane was actually built with —
   // search uses computeSearchBreaks, everything else computeBreaks.
   pane._computeBreaksFn = computeBreaksFn;
+  pane._breaksKey = JSON.stringify(breaks);
   return pane;
 }
 
@@ -282,7 +345,16 @@ function forceDetachStaleWrapper(el, fallbackParent) {
 //
 // `paneRef` is a plain `useRef(null)` — the ref's `.current` holds the live
 // CupertinoPane instance (or null when not shown).
-export function syncMobilePane(paneRef, el, shouldShow, { onDismiss, paneOptions } = {}) {
+//
+// `release` means "pane mode no longer applies" (crossed into desktop width)
+// rather than "this popover is closed" — the element goes back under plain CSS
+// instead of staying hidden by cupertino's leftovers.
+export function syncMobilePane(
+  paneRef,
+  el,
+  shouldShow,
+  { onDismiss, paneOptions, release } = {},
+) {
   // Bumped on every call, whether or not it ends up building anything —
   // this is what lets a later call cancel an earlier one's in-flight
   // teardown/rebuild chain below, however far it's gotten.
@@ -291,10 +363,15 @@ export function syncMobilePane(paneRef, el, shouldShow, { onDismiss, paneOptions
 
   const prevPane = paneRef.current;
   paneRef.current = null;
+  // Clear any measure-window hiding a superseded call left behind (see below).
+  if (el) el.style.visibility = '';
 
-  const buildIfStillWanted = () => {
+  const settle = () => {
     if (paneRef._gen !== gen) return; // superseded while we were tearing down
-    if (!shouldShow || !el) return;
+    if (!shouldShow || !el) {
+      if (release) releaseToCSS(el);
+      return;
+    }
 
     el.classList.add('pane-managed');
     // destroy() leaves this element's inline `display: none` behind —
@@ -303,6 +380,11 @@ export function syncMobilePane(paneRef, el, shouldShow, { onDismiss, paneOptions
     // past the first measures a display:none element (always 0
     // scrollHeight) and ends up with degenerate breaks.
     el.style.display = '';
+    // Displayed but not visible: `.pane-managed` already dropped the element to
+    // position:static, so until the CupertinoPane constructor re-hides it, it
+    // paints as a plain block in normal flow — a two-frame flash on every
+    // rebuild. visibility:hidden still measures, unlike display:none.
+    el.style.visibility = 'hidden';
     // A stop/service/location switch commits its new content-driving state
     // in the same render that flips (or keeps) shouldShow true, but the
     // *children* rendering off that state (BusServicesArrival's own
@@ -312,9 +394,15 @@ export function syncMobilePane(paneRef, el, shouldShow, { onDismiss, paneOptions
     // Waiting a couple of frames lets layout settle first.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        if (paneRef._gen !== gen || !el.isConnected) return;
+        if (paneRef._gen !== gen || !el.isConnected) {
+          el.style.visibility = '';
+          return;
+        }
         forceDetachStaleWrapper(el, prevPane?._reactOwnedParent);
+        // buildPane measures, then the constructor sets display:none — the
+        // library owns visibility from here, so drop our inline override.
         const pane = buildPane(el, onDismiss, paneOptions);
+        el.style.visibility = '';
         paneRef.current = pane;
         pane.present({ animate: true }).then(() => {
           if (paneRef.current !== pane) return; // superseded/destroyed while presenting
@@ -343,14 +431,17 @@ export function syncMobilePane(paneRef, el, shouldShow, { onDismiss, paneOptions
       // wrapper hadn't been removed yet; present() would silently warn and
       // bail, leaving paneRef.current pointing at a pane that was never
       // actually shown.
-      prevPane.destroy({ animate: shouldShow ? false : true }).then(() => {
+      //
+      // Animate only a real close: a rebuild wants the element free now, and a
+      // release is handing it to desktop CSS — neither should slide out first.
+      prevPane.destroy({ animate: !shouldShow && !release }).then(() => {
         restoreToReactParent(prevPane, el);
-        buildIfStillWanted();
+        settle();
       });
       return;
     }
   }
-  buildIfStillWanted();
+  settle();
 }
 
 // Content can still change *within* a single open — most notably
@@ -368,23 +459,13 @@ export function syncMobilePane(paneRef, el, shouldShow, { onDismiss, paneOptions
 export function watchMobilePaneContent(paneRef, el) {
   if (!el || !window.MutationObserver) return () => {};
   const scrollEl = el.querySelector('[overflow-y]') || el;
-  const observer = new MutationObserver(() => {
-    const pane = paneRef.current;
-    if (!pane?.isPanePresented?.()) return;
-    const restingBreak = pane.currentBreak() || 'middle';
-    pane.setBreakpoints(computeBreaks(el)).then(() => {
-      if (paneRef.current !== pane) return; // superseded/destroyed meanwhile
-      fixOverflowHeight(pane, el);
-      // setBreakpoints/setOverflowHeight update the breakpoint table and
-      // .pane's height, but a pane already resting at a breakpoint doesn't
-      // reposition itself to match — its on-screen "reveal" is governed by
-      // its transform, not its height, so without this the sheet wouldn't
-      // visibly grow/shrink even though the numbers underneath just did.
-      pane.moveToBreak(restingBreak);
-    });
-  });
+  const reapply = rafThrottle(() => reapplyBreaks(paneRef, el));
+  const observer = new MutationObserver(reapply);
   observer.observe(scrollEl, { childList: true, subtree: true, characterData: true });
-  return () => observer.disconnect();
+  return () => {
+    reapply.cancel();
+    observer.disconnect();
+  };
 }
 
 // A window resize/orientation change leaves a presented pane's breakpoints
@@ -392,33 +473,28 @@ export function watchMobilePaneContent(paneRef, el) {
 // resize handler re-applies those same locked pixel heights rather than
 // recomputing them (see ResizeEvents.onWindowResize/buildBreakpoints in the
 // library), so a break like "middle: 50vh" silently goes stale the moment
-// the viewport's actual height changes. Recompute for real and reapply,
-// the same technique watchMobilePaneContent already uses for a content
-// change instead of a size change.
+// the viewport's actual height changes. Recompute for real and reapply.
+//
+// Gated on width, not height: a mobile viewport's height also changes for the
+// keyboard and the collapsing URL bar, and re-measuring against those sized the
+// sheet for a viewport it isn't living in — it jumped on every scroll and stole
+// the breaks app.js drives while the keyboard is up. Orientation flips move the
+// width too, and cupertino still re-anchors to the new screen height.
 //
 // Call this once per popover alongside watchMobilePaneContent, and use the
 // returned cleanup the same way.
 export function watchMobilePaneResize(paneRef, el) {
   if (!el) return () => {};
-  let rafId = null;
+  let lastWidth = window.innerWidth;
+  const reapply = rafThrottle(() => reapplyBreaks(paneRef, el));
   const handler = () => {
-    if (rafId) cancelAnimationFrame(rafId);
-    rafId = requestAnimationFrame(() => {
-      rafId = null;
-      const pane = paneRef.current;
-      if (!pane?.isPanePresented?.()) return;
-      const restingBreak = pane.currentBreak() || 'middle';
-      const breaksFn = pane._computeBreaksFn || computeBreaks;
-      pane.setBreakpoints(breaksFn(el)).then(() => {
-        if (paneRef.current !== pane) return; // superseded/destroyed meanwhile
-        fixOverflowHeight(pane, el);
-        pane.moveToBreak(restingBreak);
-      });
-    });
+    if (window.innerWidth === lastWidth) return;
+    lastWidth = window.innerWidth;
+    reapply();
   };
   window.addEventListener('resize', handler);
   return () => {
-    if (rafId) cancelAnimationFrame(rafId);
+    reapply.cancel();
     window.removeEventListener('resize', handler);
   };
 }
