@@ -647,7 +647,11 @@ a:active {
     padding-right: max(12px, env(safe-area-inset-right));
     padding-bottom: max(12px, env(safe-area-inset-bottom));
   }
-  #service-popover .popover-scroll {
+  /* #location-popover included: as a mobile sheet its list runs to the
+     bottom edge of the screen, so without an inset-sized tail the last row
+     sits under the home indicator with no way to scroll clear of it. */
+  #service-popover .popover-scroll,
+  #location-popover .popover-scroll {
     padding-left: max(12px, env(safe-area-inset-left));
     padding-right: max(12px, env(safe-area-inset-right));
     padding-bottom: max(12px, env(safe-area-inset-bottom));
@@ -2924,12 +2928,25 @@ input[type='checkbox']:checked:after {
     display: none;
   }
 
-  .mobile-floating-footer.show {
+  /* Kept laid out rather than display-toggled so it slides out with its
+     sheet instead of blinking away. Matches the pane's own 300ms. */
+  .mobile-floating-footer {
     display: block;
     position: fixed;
     left: 0;
     right: 0;
     bottom: 0;
+    /* visibility, not display: still measurable (--mobile-footer-height in
+       app.js) and animatable, but free to composite while away. Its switch
+       back to hidden is delayed by the slide. */
+    visibility: hidden;
+    transform: translateY(100%);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      transform 0.3s ease-in-out,
+      opacity 0.2s ease-in-out,
+      visibility 0s linear 0.3s;
     /* Match cupertino's own .pane sizing (max-width: 500px, centered) — this
        bar lives outside the pane's DOM subtree so it doesn't get that for
        free, but it needs to line up with the sheet it belongs to on wider
@@ -2944,8 +2961,18 @@ input[type='checkbox']:checked:after {
     background-color: rgba(255, 255, 255, 0.9);
     box-shadow: 0 -1px 5px rgba(0, 0, 0, 0.15);
   }
+  .mobile-floating-footer.show {
+    visibility: visible;
+    transform: none;
+    opacity: 1;
+    pointer-events: auto;
+    transition:
+      transform 0.3s ease-in-out,
+      opacity 0.2s ease-in-out,
+      visibility 0s;
+  }
   @supports (backdrop-filter: blur(10px)) {
-    .mobile-floating-footer.show {
+    .mobile-floating-footer {
       background-color: rgba(255, 255, 255, 0.7);
       backdrop-filter: blur(10px) saturate(3);
     }
@@ -2965,14 +2992,18 @@ input[type='checkbox']:checked:after {
      floating footer bar. Stop's floating footer always renders whenever
      stopPopoverData exists (unconditional in app.js), but service's is
      gated behind isAlphaEnabled() && routeServices.length > 0 — reserving
-     this space unconditionally for service left a dead 76px gap at the
-     bottom of the list whenever that footer doesn't actually render (e.g.
-     alpha features off), priming the UI for a bar that was never coming. */
+     this space unconditionally for service left a dead gap at the bottom of
+     the list whenever that footer doesn't actually render (e.g. alpha
+     features off), priming the UI for a bar that was never coming.
+
+     --mobile-footer-height is the bar's measured height (app.js). A fixed
+     reserve was short by roughly env(safe-area-inset-bottom) on notched
+     devices, leaving the last row under the home indicator. */
   #stop-popover .popover-scroll {
-    padding-bottom: 76px;
+    padding-bottom: var(--mobile-footer-height, 76px);
   }
   #service-popover.has-floating-footer .popover-scroll {
-    padding-bottom: 76px;
+    padding-bottom: var(--mobile-footer-height, 76px);
   }
 }
 
@@ -3227,14 +3258,16 @@ html.dark {
     }
   }
 
-  .mobile-floating-footer.show {
+  /* Not keyed on .show — the bar keeps painting through its slide-out after
+     that class comes off, and would flash to the light palette on the way. */
+  .mobile-floating-footer {
     background-color: #0d0d0d;
     box-shadow:
       0 -4px 20px rgba(0, 0, 0, 0.8),
       0 -1px 0 rgba(255, 255, 255, 0.06);
   }
   @supports (backdrop-filter: blur(10px)) {
-    .mobile-floating-footer.show {
+    .mobile-floating-footer {
       background-color: rgba(13, 13, 13, 0.85);
     }
   }
