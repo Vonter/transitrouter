@@ -1709,6 +1709,12 @@ span.legend-opposite {
   box-sizing: border-box;
   font-family: inherit;
 }
+/* Safari iOS since Safari 9 */
+@supports (font: -apple-system-body) {
+  .dest-filter {
+    font-size: 16px !important;
+  }
+}
 
 .dest-filter::-webkit-search-cancel-button,
 .dest-filter::-webkit-search-decoration {
