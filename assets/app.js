@@ -172,6 +172,10 @@ const uniqueAndIntersectingStops = (arr) => {
   return { unique, intersecting };
 };
 const BREAKPOINT = () => window.innerWidth > 640;
+// Stacking for the mobile sheets (the `zIndex` pane option in
+// mobilePane.js). The stop sheet rides above whatever it takes over from;
+// all stay below `.mobile-floating-footer`'s 20 (app.css).
+const PANE_Z = { search: 10, base: 11, stop: 12 };
 const supportsHover =
   window.matchMedia && matchMedia('(any-hover: hover)').matches;
 const supportsTouch =
@@ -1574,6 +1578,20 @@ const App = () => {
   const lastBetweenQuery = useRef(null);
   const servicePopover = useRef(null);
   const servicePane = useRef(null); // CupertinoPane instance for service-popover, mobile only
+  // showServicePopover for the [] -dep callbacks below, which would
+  // otherwise close over its first-render value. Written during render, not
+  // from an effect: _showStopPopover runs off a hashchange, before effects.
+  const showServicePopoverRef = useRef(false);
+  showServicePopoverRef.current = showServicePopover;
+  // Stop to scroll back to and flash in the route list, handed over by
+  // hideStopPopover once the route sheet is on screen again.
+  const revealStopInServiceList = useRef(null);
+  // Resolves when the stop sheet is up; the route sheet waits on it before
+  // taking itself away from underneath.
+  const stopPanePresented = useRef(null);
+  // Whether a stop took the route sheet's place last render, so the effect
+  // can tell "reopening right after that stop closed" from any other reopen.
+  const stopTookOverFromService = useRef(false);
   const vehicleTracker = useRef(null);
   const workerReadyRef = useRef(null);
   const geolocateBtn = useRef(null);
@@ -1794,7 +1812,11 @@ const App = () => {
   // `stops`/`stops-highlight` sources; `city` given → all-mode stop pulled
   // from that city's `stops-${city}` source (and `stopData` must be passed
   // in, since there's no single loaded-city `stopsData` to look it up in).
-  const _showStopPopover = useCallback((number, { city, stopData: providedStopData } = {}) => {
+  // `fromRouteView`: the user was reading a route when this stop was opened
+  // (a row in the route list, or a stop on the route line). renderRoute
+  // passes it explicitly since it resets showServicePopover before the stop
+  // case; the direct map-tap path omits it and the live flag is read.
+  const _showStopPopover = useCallback((number, { city, stopData: providedStopData, fromRouteView } = {}) => {
     const stopData = providedStopData || stopsData[number];
     if (!stopData?.coordinates) {
       console.warn(`[stop-popover] No stop data for ${city ? `${city}^${number}` : number} — skipping`);
@@ -1802,19 +1824,35 @@ const App = () => {
     }
     const { coordinates } = stopData;
 
+    // Opening a stop out of a route is a move *within* a view the user is
+    // reading, not an arrival at a new one: snapping to street-level zoom 17
+    // throws the route away, and does it as a hard cut whenever the route
+    // was framed below zoom 12 (where the flight is suppressed). Ease in
+    // just far enough to read the stop, and always animate.
+    const keepRouteContext = fromRouteView ?? showServicePopoverRef.current;
+    const panToStop = (offset) => {
+      const zoom = map.getZoom();
+      if (keepRouteContext) {
+        map.flyTo({
+          center: coordinates,
+          offset,
+          zoom: Math.max(zoom, 15),
+          duration: 600,
+        });
+      } else if (zoom < 17) {
+        map.flyTo({
+          zoom: 17,
+          center: coordinates,
+          offset,
+          animate: zoom >= 12,
+        });
+      } else {
+        map.easeTo({ center: coordinates, offset });
+      }
+    };
+
     const popoverHeight = paneOrOffsetHeight(stopPopover.current);
-    const offset = BREAKPOINT() ? [0, 0] : [0, -(popoverHeight || 0) / 2];
-    const zoom = map.getZoom();
-    if (zoom < 17) {
-      map.flyTo({
-        zoom: 17,
-        center: coordinates,
-        offset,
-        animate: zoom >= 12,
-      });
-    } else {
-      map.easeTo({ center: coordinates, offset });
-    }
+    panToStop(BREAKPOINT() ? [0, 0] : [0, -(popoverHeight || 0) / 2]);
 
     // Clear previous selection (from whichever source it was selected on)
     if (prevStopNumber.current) {
@@ -1866,22 +1904,21 @@ const App = () => {
       // recompute only matters for the non-pane (DOM-driven height) path.
       if (paneAppliesHere(supportsTouch, BREAKPOINT)) return;
       if (popoverHeight === stopPopover.current?.offsetHeight) return;
-      const offset = BREAKPOINT()
-        ? [0, 0]
-        : [0, -stopPopover.current?.offsetHeight / 2];
-      const zoom = map.getZoom();
-      if (zoom < 17) {
-        map.flyTo({
-          zoom: 17,
-          center: coordinates,
-          offset,
-          animate: zoom >= 12,
-        });
-      } else {
-        map.easeTo({ center: coordinates, offset });
-      }
+      panToStop(
+        BREAKPOINT() ? [0, 0] : [0, -stopPopover.current?.offsetHeight / 2],
+      );
     });
   }, []);
+
+  // Returning from a stop lands where the user left off in the route list,
+  // not at the top of it.
+  const flashStopInServiceList = (number) => {
+    const row = servicePopover.current?.querySelector(`a[data-stop="${number}"]`);
+    if (!row) return;
+    row.classList.add('flash');
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(() => row.classList.remove('flash'), 1000);
+  };
 
   const hideStopPopover = (e) => {
     const { page, subpage } = route;
@@ -1889,7 +1926,6 @@ const App = () => {
       e.preventDefault();
     }
     const number = stopPopoverData?.number || prevStopNumber.current;
-    let stopToBeHighlighted;
     if (number) {
       const stopSource = IS_ALL_MODE && prevStopCity.current
         ? `stops-${prevStopCity.current}`
@@ -1901,25 +1937,20 @@ const App = () => {
         map.setFeatureState({ source: 'stops-highlight', id: encode(number) }, { selected: false });
       }
       if (stopPopover.current?.classList.contains('expand')) {
-        requestAnimationFrame(() => {
-          stopToBeHighlighted = servicePopover.current?.querySelector(
-            `a[data-stop="${number}"]`,
-          );
-          stopToBeHighlighted?.classList.add('flash');
-          stopToBeHighlighted?.scrollIntoView({
-            behaviour: 'smooth',
-            block: 'center',
-            inline: 'center',
-          });
-        });
+        // As a mobile sheet the route popover is right now the display:none
+        // leftover of its own teardown, so scrollIntoView would do nothing
+        // and the row would come back at the top of a rebuilt list — hand it
+        // to the service pane effect. Desktop keeps both mounted.
+        if (paneAppliesHere(supportsTouch, BREAKPOINT)) {
+          revealStopInServiceList.current = number;
+        } else {
+          requestAnimationFrame(() => flashStopInServiceList(number));
+        }
       }
     }
     setShowStopPopover(false);
     prevStopNumber.current = null;
     prevStopCity.current = null;
-    setTimeout(() => {
-      stopToBeHighlighted?.classList.remove('flash');
-    }, 1000);
   };
 
   // Alpha "locations" feature — map pin for the selected location, created
@@ -2614,6 +2645,12 @@ const App = () => {
   const renderRoute = () => {
     const route = getRoute();
 
+    // Read before the resets below clear it: was a route on screen when this
+    // navigation started? Tapping a row in a route list tears that view down,
+    // but the stop it lands on is still one the user was reading the route
+    // for — which is what the map pan needs to know (see _showStopPopover).
+    const fromRouteView = showServicePopoverRef.current;
+
     // All-mode: viewport engine manages city data; handle stop selection via cityDataMap
     if (IS_ALL_MODE) {
       $map.classList.remove('fade-out');
@@ -2832,13 +2869,21 @@ const App = () => {
         if (stopCity && stopNum) {
           const cityData = cityDataMap.get(stopCity);
           if (cityData?.stopsData?.[stopNum]) {
-            _showStopPopover(stopNum, { city: stopCity, stopData: cityData.stopsData[stopNum] });
+            _showStopPopover(stopNum, {
+              city: stopCity,
+              stopData: cityData.stopsData[stopNum],
+              fromRouteView,
+            });
           } else {
             // City not loaded yet — load it, then show popover
             loadCity(stopCity).then(() => {
               const loaded = cityDataMap.get(stopCity);
               if (loaded?.stopsData?.[stopNum]) {
-                _showStopPopover(stopNum, { city: stopCity, stopData: loaded.stopsData[stopNum] });
+                _showStopPopover(stopNum, {
+                  city: stopCity,
+                  stopData: loaded.stopsData[stopNum],
+                  fromRouteView,
+                });
               }
             });
           }
@@ -3427,7 +3472,7 @@ const App = () => {
           if (map.getLayer('stops-icon')) {
             map.setLayoutProperty('stops-icon', 'visibility', 'visible');
           }
-          _showStopPopover(stop);
+          _showStopPopover(stop, { fromRouteView });
         }
         break;
       }
@@ -4201,12 +4246,21 @@ const App = () => {
       return;
     }
     setStopPaneAtBottom(false);
-    syncMobilePane(stopPane, stopPopover.current, showStopPopover, {
-      onDismiss: () => hideStopPopover(),
-      paneOptions: {
-        onBreakChange: (b) => setStopPaneAtBottom(b === 'bottom'),
+    // The stop sheet is the one that moves in both directions of the
+    // stop↔route handoff, so it always animates and always stacks above. The
+    // service effect reads this promise to know when the route sheet can go.
+    stopPanePresented.current = syncMobilePane(
+      stopPane,
+      stopPopover.current,
+      showStopPopover,
+      {
+        onDismiss: () => hideStopPopover(),
+        paneOptions: {
+          zIndex: PANE_Z.stop,
+          onBreakChange: (b) => setStopPaneAtBottom(b === 'bottom'),
+        },
       },
-    });
+    );
     if (showStopPopover) {
       const cleanupContent = watchMobilePaneContent(stopPane, stopPopover.current);
       const cleanupResize = watchMobilePaneResize(stopPane, stopPopover.current);
@@ -4232,18 +4286,40 @@ const App = () => {
     // (while showServicePopover is still true) — which is what makes
     // dismissing stop "go back" to service.
     const shouldShow = showServicePopover && !showStopPopover;
+    // A stop takes this sheet's place two ways: tapped on the route line
+    // (showServicePopover stays true, stop stacks on top) or tapped in the
+    // route list (navigates, tearing the route view down). Either way the
+    // stop sheet is the one that moves, so this one holds still until the
+    // stop is fully up — two sheets crossing reads as a flicker. Coming back
+    // it reappears in place underneath while the stop slides off.
+    // `servicePane.current` keeps this to sheets that were really on screen:
+    // opening a stop from the map with no route hits the same state.
+    const handedToStop = !shouldShow && showStopPopover && !!servicePane.current;
+    const revealedFromStop = shouldShow && stopTookOverFromService.current;
+    stopTookOverFromService.current = handedToStop;
     setServicePaneAtBottom(false);
-    syncMobilePane(servicePane, servicePopover.current, shouldShow, {
+    const presented = syncMobilePane(servicePane, servicePopover.current, shouldShow, {
       // Navigate away (not just flip the boolean) so the map's own service
       // view — hidden stops layer, highlighted route, routes-path/
       // buses-service sources — gets torn down the same way it would from
       // any other route change. Directly setting the state here skipped
       // all of that, since a drag-dismiss doesn't go through renderRoute.
       onDismiss: () => navigateTo('/', route),
+      animate: !handedToStop && !revealedFromStop,
+      waitFor: handedToStop ? stopPanePresented.current : null,
       paneOptions: {
+        zIndex: PANE_Z.base,
         onBreakChange: (b) => setServicePaneAtBottom(b === 'bottom'),
       },
     });
+    // Flash the row that was tapped, once the list is on screen to scroll.
+    // Any other outcome drops the pending stop rather than letting it fire
+    // on some later, unrelated route.
+    const pendingReveal = revealStopInServiceList.current;
+    if (!handedToStop) revealStopInServiceList.current = null;
+    if (revealedFromStop && pendingReveal) {
+      presented.then(() => flashStopInServiceList(pendingReveal));
+    }
     if (shouldShow) {
       const cleanupContent = watchMobilePaneContent(servicePane, servicePopover.current);
       const cleanupResize = watchMobilePaneResize(servicePane, servicePopover.current);
@@ -4253,6 +4329,38 @@ const App = () => {
       };
     }
   }, [showServicePopover, showStopPopover, servicePopoverKey, viewportTick]);
+
+  // `.mobile-floating-footer` is fixed, outside the pane's DOM, so the
+  // scroll region has to reserve room for it or the last rows stay behind
+  // it. Its height isn't constant — it grows by env(safe-area-inset-bottom)
+  // on notched devices and varies with which buttons render — so publish the
+  // measured value for app.css rather than hard-coding a reserve.
+  useEffect(() => {
+    const footer = document.querySelector('.mobile-floating-footer.show');
+    if (!footer) return;
+    const apply = () => {
+      const height = footer.offsetHeight;
+      if (height) {
+        document.documentElement.style.setProperty(
+          '--mobile-footer-height',
+          `${height}px`,
+        );
+      }
+    };
+    apply();
+    if (!window.ResizeObserver) return;
+    const observer = new ResizeObserver(apply);
+    observer.observe(footer);
+    return () => observer.disconnect();
+  }, [
+    showStopPopover,
+    stopPaneAtBottom,
+    showServicePopover,
+    servicePaneAtBottom,
+    stopPopoverKey,
+    servicePopoverKey,
+    viewportTick,
+  ]);
 
   const locationPopoverKey = locationPopoverData
     ? `${locationPopoverData.lat},${locationPopoverData.lon}`
@@ -4267,6 +4375,7 @@ const App = () => {
     syncMobilePane(locationPane, locationPopover.current, showLocationPopover, {
       onDismiss: () => hideLocationPopover(),
       paneOptions: {
+        zIndex: PANE_Z.base,
         onBreakChange: (b) => setLocationPaneAtBottom(b === 'bottom'),
       },
     });
@@ -4310,6 +4419,7 @@ const App = () => {
         }
       },
       paneOptions: {
+        zIndex: PANE_Z.base,
         onBreakChange: (b) => setBetweenPaneAtBottom(b === 'bottom'),
       },
     });
@@ -4346,6 +4456,7 @@ const App = () => {
     }
     syncMobilePane(searchPane, searchPopover.current, !anyPopoverOpen, {
       paneOptions: {
+        zIndex: PANE_Z.search,
         dragHandleSelector: null,
         computeBreaksFn: computeSearchBreaks,
         bottomClose: false,
