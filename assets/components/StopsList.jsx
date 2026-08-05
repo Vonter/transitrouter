@@ -1,42 +1,46 @@
 import { h, Fragment } from 'preact';
 import { useRef, useMemo } from 'preact/hooks';
+import { memo } from 'preact/compat';
 import getRoute from '../utils/getRoute';
 import { getConfigForCity } from '../city-config';
 
 import busTinyImagePath from '../images/bus-tiny.png';
 
-function rowSpaner(stopGrid, column, stop) {
-  if (!stop) return 1;
+function rowSpaner(stopGrid, column, rowIndex) {
   let span = 1;
-  let rowIndex = stopGrid.findIndex((pair) => pair[column] === stop);
   while (stopGrid[++rowIndex] && !stopGrid[rowIndex][column]) {
-    // Indicate the column has been rowspan-ed
     stopGrid[rowIndex][column] = '___';
     span++;
   }
   return span;
 }
 
-function isOpposite(stop, stopsData) {
-  if (!stop || typeof stop !== 'string' || !stopsData) return false;
-  const stopInfo = stopsData[stop];
-  if (!stopInfo || !stopInfo.parentStopID) return false;
-  // Check if there are other stops with the same parentStopID
-  return Object.values(stopsData).some(
-    s => s.parentStopID === stopInfo.parentStopID && s.number !== stop
-  );
+const oppositeStopsCache = new WeakMap();
+
+function getOppositeStops(stopsData) {
+  if (oppositeStopsCache.has(stopsData)) return oppositeStopsCache.get(stopsData);
+
+  const byParent = new Map();
+  Object.values(stopsData).forEach((stop) => {
+    if (!stop.parentStopID) return;
+    const siblings = byParent.get(stop.parentStopID) || [];
+    siblings.push(stop.number);
+    byParent.set(stop.parentStopID, siblings);
+  });
+
+  const opposites = new Map();
+  byParent.forEach((siblings) => {
+    if (siblings.length < 2) return;
+    siblings.forEach((stop) => {
+      opposites.set(stop, siblings.find((candidate) => candidate !== stop));
+    });
+  });
+  oppositeStopsCache.set(stopsData, opposites);
+  return opposites;
 }
 
-function getOpposite(stop, stopsData) {
-  if (!stop || typeof stop !== 'string' || !stopsData) return null;
-  const stopInfo = stopsData[stop];
-  if (!stopInfo || !stopInfo.parentStopID) return null;
-  // Find a stop with the same parentStopID but different stop ID
-  const oppositeStop = Object.values(stopsData).find(
-    s => s.parentStopID === stopInfo.parentStopID && s.number !== stop
-  );
-  return oppositeStop ? oppositeStop.number : null;
-}
+const isOpposite = (stop, oppositeStops) => oppositeStops.has(stop);
+const getOpposite = (stop, oppositeStops) => oppositeStops.get(stop) || null;
 
 function areOpposite(stop1, stop2, stopsData) {
   if (!stop1 || !stop2 || !stopsData) return false;
@@ -48,7 +52,7 @@ function areOpposite(stop1, stop2, stopsData) {
          stop1Info.parentStopID === stop2Info.parentStopID;
 }
 
-export default function StopsList(props) {
+function StopsList(props) {
   const route = getRoute();
 
   const { routes, stopsData, cityCode, vehicles = [], onVehicleClick } = props;
@@ -61,6 +65,7 @@ export default function StopsList(props) {
     console.warn('Invalid arguments');
     return null;
   }
+  const oppositeStops = getOppositeStops(stopsData);
 
   // If there are more than 2 routes, select the 2 routes with the most stops
   let selectedRoutes = routes;
@@ -234,15 +239,15 @@ export default function StopsList(props) {
   // Only 1 route & not a loop
   if (!route2 && route1FirstStop !== route1LastStop) {
     // Contains duplicates
-    if (route1.some((val, i) => route1.indexOf(val) !== i)) {
+    if (new Set(route1).size !== route1.length) {
       // Do nothing for now, this is very edge case
       console.info('Duplicate stops found on 1-way route.');
     }
     console.warn();
     return (
       <ol class="stops-list">
-        {route1.map((s) => (
-          <li>
+        {route1.map((s, index) => (
+          <li key={`${s}-${index}`}>
             <StopLink stop={s} />
             <VehiclesAfterStop stop={s} />
           </li>
@@ -271,7 +276,7 @@ export default function StopsList(props) {
         const stop = route1[i];
         // console.log(i, j, route1, 1, stop);
 
-        if (isOpposite(stop, stopsData)) {
+        if (isOpposite(stop, oppositeStops)) {
           // WEIRD CASE: the route has duplicate stops!
           // Don't check first item because last item is its duplicate in loop route
           if (i !== route1.lastIndexOf(stop)) {
@@ -280,7 +285,7 @@ export default function StopsList(props) {
             hasDupStops.push(stop);
           } else {
             // Normal case, let's find the middle index
-            const opStop = getOpposite(route1[i], stopsData);
+            const opStop = getOpposite(route1[i], oppositeStops);
             if (opStop) {
               const index = route1.lastIndexOf(opStop);
               if (index > 0) j = index;
@@ -332,11 +337,6 @@ export default function StopsList(props) {
         route2Copy.push('~~~');
       }
     }
-    console.log({
-      route1Copy: route1Copy.slice(),
-      route2Copy: route2Copy.slice(),
-    });
-
     // const oppositeStops = [];
     // route1Copy.forEach((s, i) => {
     //   const opS = getOpposite(s);
@@ -360,8 +360,8 @@ export default function StopsList(props) {
       col1LastStop = false,
       col2LastStop = false;
     do {
-      const stop1Opposite = getOpposite(route1Copy[0], stopsData);
-      const stop2Opposite = getOpposite(route2Copy[0], stopsData);
+      const stop1Opposite = getOpposite(route1Copy[0], oppositeStops);
+      const stop2Opposite = getOpposite(route2Copy[0], oppositeStops);
       const stop1HasOpposite = stop1Opposite && route2Copy.includes(stop1Opposite);
       const stop2HasOpposite = stop2Opposite && route1Copy.includes(stop2Opposite);
       const stop1IsLast = route1Copy.length === 1 || !route1Copy.length;
@@ -469,13 +469,14 @@ export default function StopsList(props) {
       }
     }
 
-    const stopGridStops = stopGrid
-      .flat()
-      .filter((v) => /\d/.test(v))
-      .filter((value, index, array) => array.indexOf(value) == index);
-    const routeStops = [...route1, ...(route2 || [])].filter(
-      (value, index, array) => array.indexOf(value) == index,
-    );
+    const stopGridStops = [
+      ...new Set(
+        stopGrid
+          .flat()
+          .filter((value) => typeof value === 'string' && /\d/.test(value)),
+      ),
+    ];
+    const routeStops = [...new Set([...route1, ...(route2 || [])])];
     if (stopGridStops.length !== routeStops.length) {
       console.error('Some stops are missing!', stopGridStops, routeStops);
     }
@@ -508,7 +509,7 @@ export default function StopsList(props) {
             const isEdgeRows =
               (index === 0 || index === stopGrid.length - 1) && s1 === s2;
             return (
-              <>
+              <Fragment key={`row-${index}`}>
                 {/*
                   Safari needs this empty row
                   Else the table will break for A->B,C->D routes
@@ -543,7 +544,7 @@ export default function StopsList(props) {
                               index === stopGrid.length - 1 ||
                               index === 0
                                 ? 1
-                                : rowSpaner(stopGrid, 0, s1)
+                                : rowSpaner(stopGrid, 0, index)
                             }
                           >
                             <StopLink stop={s1} />
@@ -567,7 +568,7 @@ export default function StopsList(props) {
                               index === stopGrid.length - 1 ||
                               index === 0
                                 ? 1
-                                : rowSpaner(stopGrid, 1, s2)
+                                : rowSpaner(stopGrid, 1, index)
                             }
                           >
                             <StopLink stop={s2} />
@@ -580,7 +581,7 @@ export default function StopsList(props) {
                     </>
                   )}
                 </tr>
-              </>
+              </Fragment>
             );
           },
         )}
@@ -589,3 +590,5 @@ export default function StopsList(props) {
   }
   return null;
 }
+
+export default memo(StopsList);

@@ -1,6 +1,9 @@
 import { getApiUrl, isApiDisabled } from '../city-config.js';
 import { LIVE_DATA_MAX_AGE_MS } from './fetchArrivals.js';
 
+const recentRequests = new Map();
+const REQUEST_DEDUPE_MS = 2000;
+
 /**
  * Return true if a vehicle has lastRefreshMs and it is older than LIVE_DATA_MAX_AGE_MS (15 min).
  * @param {Object} vehicle - Vehicle object (may have lastRefreshMs)
@@ -19,34 +22,52 @@ export function isVehicleStale(vehicle) {
  * @param {number} serviceTypeId - The service type ID (default: 0 for all types)
  * @returns {Promise} Promise resolving to vehicle data with vehicles array and geoJSON
  */
-export async function fetchVehicles(
+export function fetchVehicles(
   apiPath,
   routeIdentifier,
   serviceTypeId = 0,
 ) {
   if (!apiPath || !routeIdentifier || isApiDisabled()) {
-    return null;
+    return Promise.resolve(null);
   }
 
-  try {
-    // Determine if routeIdentifier is a number (route ID) or string (route name)
-    const isRouteId = typeof routeIdentifier === 'number';
-    const paramName = isRouteId ? 'routeid' : 'routetext';
-    const paramValue = encodeURIComponent(routeIdentifier);
+  // Determine if routeIdentifier is a number (route ID) or string (route name)
+  const isRouteId = typeof routeIdentifier === 'number';
+  const paramName = isRouteId ? 'routeid' : 'routetext';
+  const paramValue = encodeURIComponent(routeIdentifier);
+  const url = `${getApiUrl(apiPath)}?${paramName}=${paramValue}&servicetypeid=${serviceTypeId}`;
 
-    const url = `${getApiUrl(apiPath)}?${paramName}=${paramValue}&servicetypeid=${serviceTypeId}`;
-    const response = await fetch(url);
+  const cached = recentRequests.get(url);
+  if (
+    cached &&
+    (cached.settledAt === null || Date.now() - cached.settledAt < REQUEST_DEDUPE_MS)
+  ) {
+    return cached.promise;
+  }
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch vehicles: ${response.status}`);
+  const promise = (async () => {
+    try {
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch vehicles: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Error fetching vehicles:', error);
+      return null;
     }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Error fetching vehicles:', error);
-    return null;
-  }
+  })();
+  const entry = { promise, settledAt: null };
+  recentRequests.set(url, entry);
+  promise.finally(() => {
+    entry.settledAt = Date.now();
+    setTimeout(() => {
+      if (recentRequests.get(url) === entry) recentRequests.delete(url);
+    }, REQUEST_DEDUPE_MS);
+  });
+  return promise;
 }
 
 /**
@@ -166,11 +187,15 @@ export function createVehicleTracker({
   const currentVehicles = new Map(); // Map service number to vehicles array
   const routeIdCache = new Map(); // Cache route IDs: service number -> route ID
   const subscribers = new Set(); // Subscribers for vehicle updates
+  let activeServicesKey = '';
+  let generation = 0;
+  let startPromise = null;
+  let hasRenderedVehicles = false;
 
   /**
    * Update vehicles for all tracked services
    */
-  async function updatePositions() {
+  async function updatePositions(expectedGeneration = generation) {
     const vehicleTracking = cityConfig?.liveVehicles;
 
     // Early return if vehicle tracking is disabled or no services are tracked
@@ -209,40 +234,30 @@ export function createVehicleTracker({
       );
 
       const results = await Promise.all(fetchPromises);
+      if (expectedGeneration !== generation) return;
 
       // Combine all vehicles from all services
       const allVehicles = [];
 
       results.forEach(({ serviceNumber, response }) => {
-        if (response) {
-          if (response.vehicles) {
-            // Exclude vehicles with lastRefreshMs older than 15 minutes, then check location
-            const vehiclesWithLocation = response.vehicles.filter(
-              (v) =>
-                !isVehicleStale(v) &&
-                v.location &&
-                typeof v.location.lat === 'number' &&
-                typeof v.location.lng === 'number',
-            );
-
-            currentVehicles.set(
-              serviceNumber,
-              response.vehicles.filter((v) => !isVehicleStale(v)),
-            );
-            allVehicles.push(
-              ...response.vehicles.filter((v) => !isVehicleStale(v)),
-            );
-          }
-        }
+        if (!response?.vehicles) return;
+        const freshVehicles = response.vehicles.filter(
+          (vehicle) => !isVehicleStale(vehicle),
+        );
+        currentVehicles.set(serviceNumber, freshVehicles);
+        allVehicles.push(...freshVehicles);
       });
 
       // Generate GeoJSON from vehicles on the client side
       const combinedGeoJSON = vehiclesToGeoJSON(allVehicles);
 
       // Update map if source exists
-      if (map && map.getSource('buses-service')) {
-        map.getSource('buses-service').setData(combinedGeoJSON);
+      const source = map?.getSource('buses-service');
+      const hasVehicles = combinedGeoJSON.features.length > 0;
+      if (source && (hasVehicles || hasRenderedVehicles)) {
+        source.setData(combinedGeoJSON);
       }
+      hasRenderedVehicles = hasVehicles;
 
       // Notify subscribers
       subscribers.forEach((callback) => {
@@ -259,20 +274,29 @@ export function createVehicleTracker({
    * @param {Array<string>} serviceNumbers - Array of service numbers to track
    * @returns {Promise<boolean>} True if tracking started successfully
    */
-  async function startServices(serviceNumbers) {
+  function startServices(serviceNumbers) {
     if (!serviceNumbers || serviceNumbers.length === 0) {
       stop();
-      return false;
+      return Promise.resolve(false);
     }
 
     const vehicleTracking = cityConfig?.liveVehicles;
 
     if (!vehicleTracking?.enabled) {
       console.log('Vehicle tracking not enabled');
-      return false;
+      return Promise.resolve(false);
     }
 
-    try {
+    const normalizedServices = [...new Set(serviceNumbers.map(String))];
+    const servicesKey = normalizedServices.join('|');
+    if (servicesKey === activeServicesKey) {
+      if (startPromise) return startPromise;
+      if (intervalId) return Promise.resolve(true);
+    }
+
+    const currentGeneration = ++generation;
+    activeServicesKey = servicesKey;
+    startPromise = (async () => {
       // Stop existing tracking
       if (intervalId) {
         clearRafInterval(intervalId);
@@ -284,7 +308,7 @@ export function createVehicleTracker({
       currentVehicles.clear();
 
       // Add services to tracking
-      serviceNumbers.forEach((serviceNumber) => {
+      normalizedServices.forEach((serviceNumber) => {
         trackedServices.add(serviceNumber);
       });
 
@@ -295,20 +319,26 @@ export function createVehicleTracker({
       }
 
       // Fetch vehicles immediately for all services
-      await updatePositions();
+      await updatePositions(currentGeneration);
+      if (currentGeneration !== generation) return false;
 
       // Only set up periodic updates if we have tracked services
       if (trackedServices.size > 0) {
         intervalId = setRafInterval(() => {
-          updatePositions();
+          updatePositions(currentGeneration);
         }, 60 * 1000);
       }
 
       return true;
-    } catch (error) {
-      console.error('Error starting vehicle tracking:', error);
-      return false;
-    }
+    })()
+      .catch((error) => {
+        console.error('Error starting vehicle tracking:', error);
+        return false;
+      })
+      .finally(() => {
+        if (currentGeneration === generation) startPromise = null;
+      });
+    return startPromise;
   }
 
   /**
@@ -324,24 +354,29 @@ export function createVehicleTracker({
    * Stop tracking vehicles and clear map
    */
   function stop() {
+    generation++;
+    activeServicesKey = '';
+    startPromise = null;
     if (intervalId) {
       clearRafInterval(intervalId);
       intervalId = null;
     }
 
+    const hadVehicles = getVehicles().length > 0;
     trackedServices.clear();
     currentVehicles.clear();
 
     // Clear vehicles from map
-    if (map && map.getSource('buses-service')) {
-      map.getSource('buses-service').setData({
+    const source = map?.getSource('buses-service');
+    if (source && hasRenderedVehicles) {
+      source.setData({
         type: 'FeatureCollection',
         features: [],
       });
     }
+    hasRenderedVehicles = false;
 
-    // Notify subscribers of empty vehicles
-    subscribers.forEach((callback) => callback([]));
+    if (hadVehicles) subscribers.forEach((callback) => callback([]));
   }
 
   /**
