@@ -75,6 +75,11 @@ import {
   replaceFeatureStates,
   createFeaturesOptimized,
 } from './utils/mapOptimizations';
+import { insertNearest } from './utils/boundedNearest';
+import {
+  COLLAPSED_SEARCH_LIMIT,
+  SEARCH_RESULT_LIMIT,
+} from './utils/searchLimits';
 
 import BusServicesArrival from './components/BusServicesArrival';
 import { CLOSE_SVG } from './components/CloseControl';
@@ -129,6 +134,9 @@ const allModePoisIdx = [];     // { id, name, type, lat, lon, color, city } — 
 // (each is independently queried from OSM over its own padded bbox), so
 // de-dupe by coordinate when merging into the cross-city index.
 const allModePoisSeen = new Set();
+const indexedCities = new Set();
+const indexedPoiCities = new Set();
+let allModeSearchListCache = null;
 const pushAllModePois = (pois, cityCode) => {
   pois.forEach((poi, i) => {
     const key = locationKey(poi.lat, poi.lon);
@@ -143,8 +151,8 @@ const pushAllModePois = (pois, cityCode) => {
 // differently-shaped source data (full stop/service objects vs raw JSON
 // keyed by number) — this is the one shared entry point for both.
 const AllModeIndex = {
-  hasCity: (cityCode) => allModeServicesIdx.some((s) => s.city === cityCode),
-  hasPois: (cityCode) => allModePoisIdx.some((p) => p.city === cityCode),
+  hasCity: (cityCode) => indexedCities.has(cityCode),
+  hasPois: (cityCode) => indexedPoiCities.has(cityCode),
   addCity: (cityCode, { services, stops, pois } = {}) => {
     if (!AllModeIndex.hasCity(cityCode)) {
       services?.forEach(({ number, name }) => {
@@ -153,9 +161,12 @@ const AllModeIndex = {
       stops?.forEach(({ number, name, suffix }) => {
         allModeStopsIdx.push({ number, name: name || '', suffix, city: cityCode });
       });
+      indexedCities.add(cityCode);
+      allModeSearchListCache = null;
     }
     if (pois && !AllModeIndex.hasPois(cityCode)) {
       pushAllModePois(pois, cityCode);
+      indexedPoiCities.add(cityCode);
     }
   },
 };
@@ -203,11 +214,16 @@ const computeAllModeClosestStops = (lng, lat) => {
     if (!cityData?.stopsDataArr) continue;
     for (const stop of cityData.stopsDataArr) {
       const dist = ruler.distance([lng, lat], stop.coordinates);
-      if (dist <= 5000) results.push({ ...stop, city: cityCode, distance: dist });
+      if (dist <= 5) {
+        insertNearest(results, { stop, city: cityCode, distance: dist });
+      }
     }
   }
-  results.sort((a, b) => a.distance - b.distance);
-  return results.slice(0, 25);
+  return results.map(({ stop, city, distance }) => ({
+    ...stop,
+    city,
+    distance,
+  }));
 };
 
 // Helper to decode polylines with caching
@@ -226,6 +242,17 @@ function parseRouteKey(routeKey) {
     variantIdx: routeKey.slice(second + 1),
   };
 }
+
+const serviceRoutesCache = new WeakMap();
+const getServiceRoutes = (serviceData) => {
+  if (!serviceData || typeof serviceData !== 'object') return [];
+  if (serviceRoutesCache.has(serviceData)) return serviceRoutesCache.get(serviceData);
+  const routes = Object.entries(serviceData)
+    .filter(([key, value]) => key !== 'name' && Array.isArray(value))
+    .flatMap(([, value]) => value);
+  serviceRoutesCache.set(serviceData, routes);
+  return routes;
+};
 
 const $logo = document.getElementById('logo');
 
@@ -1311,6 +1338,7 @@ const _loadCityImpl = async (cityCode) => {
     }
 
     loadedCities.add(cityCode);
+    allModeSearchListCache = null;
     onCityLoadedCallback?.(cityCode);
   } catch (err) {
     console.error(`[all-mode] Failed to load ${cityCode}:`, err);
@@ -1337,6 +1365,7 @@ const unloadCity = (cityCode) => {
   });
   cityDataMap.delete(cityCode);
   loadedCities.delete(cityCode);
+  allModeSearchListCache = null;
   onCityUnloadedCallback?.(cityCode);
 };
 
@@ -1449,7 +1478,10 @@ const capGroups = (groups, limit) => {
 
 // Sort services for all-mode search list: loaded cities first, then by minZoom desc (higher = more specific city)
 const buildAllModeSearchList = () =>
-  [...allModeServicesIdx].sort((a, b) => compareCityPriority(a.city, b.city));
+  allModeSearchListCache ||
+  (allModeSearchListCache = [...allModeServicesIdx].sort((a, b) =>
+    compareCityPriority(a.city, b.city),
+  ));
 
 const App = () => {
   const { t, i18n } = useTranslation();
@@ -1489,9 +1521,8 @@ const App = () => {
   const [locationPopoverStops, setLocationPopoverStops] = useState([]);
   const [locationPopoverLoading, setLocationPopoverLoading] = useState(false);
   const [searching, setSearching] = useState(false);
-  const [stopsFirst, setStopsFirst] = useState(false);
   const [expandSearch, setExpandSearch] = useState(false);
-  const [expandedSearchOnce, setExpandedSearchOnce] = useState(false);
+  const expandedSearchOnce = useRef(false);
   const [shrinkSearch, setShrinkSearch] = useState(false);
   const [stopPopoverData, setStopPopoverData] = useState(null);
   const [showStopPopover, setShowStopPopover] = useState(false);
@@ -1510,6 +1541,14 @@ const App = () => {
   const [stopPopoverDestFilterExact, setStopPopoverDestFilterExact] = useState(
     () => new URLSearchParams(window.location.search).get('destExact') === '1',
   );
+  const handleStopLoadingChange = useCallback((loading) => {
+    setStopPopoverLoading(loading);
+    if (loading) setStopPopoverError(false);
+  }, []);
+  const handleStopDestFilterChange = useCallback((value, exact = false) => {
+    setStopPopoverDestFilter(value);
+    setStopPopoverDestFilterExact(exact);
+  }, []);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -1594,6 +1633,7 @@ const App = () => {
   const stopTookOverFromService = useRef(false);
   const vehicleTracker = useRef(null);
   const workerReadyRef = useRef(null);
+  const routeRenderSeq = useRef(0);
   const geolocateBtn = useRef(null);
   const geolocateControlRef = useRef(null);
   const hasPannedToLocationOnLoad = useRef(false);
@@ -1669,13 +1709,13 @@ const App = () => {
 
   const handleSearchFocus = (e) => {
     setExpandSearch(true);
-    setExpandedSearchOnce(true);
+    expandedSearchOnce.current = true;
     // $map.classList.add('fade-out');
     movePaneToBreak(searchPane, 'top');
     pinScrollTop();
     if (IS_ALL_MODE && !searchField.current?.value) {
       // Immediately populate with sorted index (no debounce delay)
-      const sorted = buildAllModeSearchList();
+      const sorted = buildAllModeSearchList().slice(0, SEARCH_RESULT_LIMIT);
       setServices(sorted);
     }
   };
@@ -1695,14 +1735,9 @@ const App = () => {
     performSearchRef.current = debounce(async (value) => {
       try {
         if (value) {
-          const seq = ++searchSeq.current;
+          const seq = searchSeq.current;
           const { services, stops, locations } = await workerSearch(value);
           if (seq !== searchSeq.current) return; // stale — a newer query is in flight
-          // Order results by the dominant character class in the query: stop names
-          // first for mostly-alphabetic input, route numbers first for numeric input.
-          const letters = (value.match(/[a-z]/gi) || []).length;
-          const digits = (value.match(/\d/g) || []).length;
-          setStopsFirst(letters > digits);
           setServicesRef.current(services);
           setStopsRef.current(stops);
           setLocations(isAlphaEnabled() && locationSearchEnabledRef.current ? locations : []);
@@ -1715,7 +1750,11 @@ const App = () => {
             servicesList.current.style['-webkit-overflow-scrolling'] = null;
           }
         } else {
-          setServicesRef.current(IS_ALL_MODE ? buildAllModeSearchList() : servicesDataArr);
+          setServicesRef.current(
+            IS_ALL_MODE
+              ? buildAllModeSearchList().slice(0, SEARCH_RESULT_LIMIT)
+              : servicesDataArr,
+          );
           setStopsRef.current(currentLocationRef.current ? closestStopsRef.current : []);
           setLocations([]);
           setLiveLocations([]);
@@ -1747,9 +1786,12 @@ const App = () => {
 
   const handleSearch = (e) => {
     const { value } = (e && e.target) || searchField;
-    // Immediately show searching state for better UX
+    searchSeq.current++;
+    // Keep pending queries bounded while the worker catches up.
     if (value && !searching) {
       setSearching(true);
+      setServices((current) => current.slice(0, COLLAPSED_SEARCH_LIMIT));
+      setStops([]);
     }
     performSearch(value);
     performGeocode(value);
@@ -1763,11 +1805,16 @@ const App = () => {
   };
 
   const resetSearch = () => {
+    searchSeq.current++;
     searchField.current?.blur();
     searchField.current.value = '';
     setSearching(false);
-    setStopsFirst(false);
-    setServices(IS_ALL_MODE ? buildAllModeSearchList() : servicesDataArr);
+    expandedSearchOnce.current = false;
+    setServices(
+      IS_ALL_MODE
+        ? buildAllModeSearchList().slice(0, SEARCH_RESULT_LIMIT)
+        : servicesDataArr,
+    );
     // Show closest stops if location is available, otherwise empty
     setStops(currentLocation ? closestStops : []);
     setLocations([]);
@@ -1775,9 +1822,9 @@ const App = () => {
   };
 
   const handleServicesScroll = () => {
-    if (expandSearch || expandedSearchOnce) return;
+    if (expandSearch || expandedSearchOnce.current) return;
     setExpandSearch(true);
-    setExpandedSearchOnce(true);
+    expandedSearchOnce.current = true;
     // $map.classList.add('fade-out');
   };
 
@@ -2098,12 +2145,8 @@ const App = () => {
   };
 
   const clickRoute = (e, service) => {
-    const { target } = e;
     e.stopPropagation();
-    if (target.classList.contains('highlight')) return;
     e.preventDefault();
-    target.classList.add('highlight');
-    highlightRoute(null, service, true);
     if (IS_ALL_MODE) {
       location.hash = e.currentTarget.getAttribute('href');
     } else {
@@ -2111,7 +2154,7 @@ const App = () => {
     }
   };
 
-  const highlightRoute = (e, service, zoomIn) => {
+  const highlightRoute = (e, service) => {
     if (e) e.target.classList.remove('highlight');
     const hoveredRouteID = encode(service);
     map.setFeatureState(
@@ -2134,49 +2177,6 @@ const App = () => {
       );
     });
 
-    if (zoomIn) {
-      // Fit map to route bounds
-      requestAnimationFrame(() => {
-        const serviceData = servicesData[service];
-        if (!serviceData) return;
-        const routes = [];
-        Object.keys(serviceData).forEach((key) => {
-          if (key !== 'name' && Array.isArray(serviceData[key])) {
-            routes.push(...serviceData[key]);
-          }
-        });
-        const coordinates = routes
-          .flat()
-          .map((stop) => stopsData[stop]?.coordinates)
-          .filter(Boolean);
-        const bounds = new maplibregl.LngLatBounds();
-        coordinates.forEach((c) => {
-          bounds.extend(c);
-        });
-        map.fitBounds(bounds, {
-          padding: largerScreen
-            ? {
-                top: floatPill.current.offsetHeight / 2,
-                right: 80,
-                bottom: 80,
-                left: floatPill.current.offsetHeight / 2,
-              }
-            : BREAKPOINT()
-              ? {
-                  top: 80,
-                  right: Math.max(floatPill.current.offsetWidth / 2, 80),
-                  bottom: 60 + 20 + floatPill.current.offsetHeight / 2,
-                  left: Math.max(floatPill.current.offsetWidth / 2, 80),
-                }
-              : {
-                  top: 80,
-                  right: 80,
-                  bottom: 60 + 20 + floatPill.current.offsetHeight, // height of search bar + float pill
-                  left: 80,
-                },
-        });
-      });
-    }
   };
 
   const unhighlightRoute = (e) => {
@@ -2644,6 +2644,11 @@ const App = () => {
 
   const renderRoute = () => {
     const route = getRoute();
+    const renderSeq = ++routeRenderSeq.current;
+    const scheduleRouteFrame = (callback) =>
+      requestAnimationFrame(() => {
+        if (renderSeq === routeRenderSeq.current) callback();
+      });
 
     // Read before the resets below clear it: was a route on screen when this
     // navigation started? Tapping a row in a route list tears that view down,
@@ -2708,6 +2713,7 @@ const App = () => {
           });
 
           const renderAllModeServices = (cityEntries) => {
+            if (renderSeq !== routeRenderSeq.current) return;
             // Merge data from all involved cities into module-level vars
             Object.keys(stopsData).forEach((k) => delete stopsData[k]);
             Object.keys(servicesData).forEach((k) => delete servicesData[k]);
@@ -2780,7 +2786,7 @@ const App = () => {
             });
 
             // Draw all route lines
-            requestAnimationFrame(() => {
+            scheduleRouteFrame(() => {
               const allGeometries = [];
               allSvcNums.forEach((svcNum) => {
                 const routes = routesData[svcNum];
@@ -2832,7 +2838,7 @@ const App = () => {
               if (stopsData[s]) bounds.extend(stopsData[s].coordinates);
             });
             if (!bounds.isEmpty()) {
-              requestAnimationFrame(() => {
+              scheduleRouteFrame(() => {
                 map.fitBounds(bounds, {
                   padding: BREAKPOINT()
                     ? { top: 80, right: (servicePopover.current?.offsetWidth || 320) + 80, bottom: 80, left: 80 }
@@ -2844,6 +2850,7 @@ const App = () => {
 
           const uniqueCities = Object.keys(cityGroups);
           Promise.all(uniqueCities.map((c) => loadCity(c))).then(() => {
+            if (renderSeq !== routeRenderSeq.current) return;
             const cityEntries = {};
             uniqueCities.forEach((c) => {
               const entry = cityDataMap.get(c);
@@ -2877,6 +2884,7 @@ const App = () => {
           } else {
             // City not loaded yet — load it, then show popover
             loadCity(stopCity).then(() => {
+              if (renderSeq !== routeRenderSeq.current) return;
               const loaded = cityDataMap.get(stopCity);
               if (loaded?.stopsData?.[stopNum]) {
                 _showStopPopover(stopNum, {
@@ -3052,20 +3060,7 @@ const App = () => {
           const serviceData = servicesData[service];
           const { name } = serviceData;
 
-          // Extract routes from all destinations
-          const routes = [];
-          Object.keys(serviceData).forEach((key) => {
-            if (key !== 'name') {
-              // Each destination has an array of route variations
-              const destinationRoutes = serviceData[key];
-              if (
-                Array.isArray(destinationRoutes) &&
-                destinationRoutes.length > 0
-              ) {
-                routes.push(...destinationRoutes);
-              }
-            }
-          });
+          const routes = getServiceRoutes(serviceData);
 
           setHead({
             title: [
@@ -3082,9 +3077,12 @@ const App = () => {
 
           // Show stops of the selected service
           if (routes.length > 0 && routes[0] && routes[0].length > 0) {
-            const endStops = [routes[0][0], routes[0][routes[0].length - 1]];
+            const endStops = new Set([
+              routes[0][0],
+              routes[0][routes[0].length - 1],
+            ]);
             if (routes[1] && routes[1].length > 0)
-              endStops.push(routes[1][0], routes[1][routes[1].length - 1]);
+              endStops.add(routes[1][0]).add(routes[1][routes[1].length - 1]);
             let routeStops = [...new Set([...routes[0], ...(routes[1] || [])])]; // Merge and unique
 
             // Fit map to route bounds
@@ -3093,7 +3091,7 @@ const App = () => {
               const { coordinates } = stopsData[stop];
               bounds.extend(coordinates);
             });
-            requestAnimationFrame(() => {
+            scheduleRouteFrame(() => {
               const mobileBottomPad = paneOrOffsetHeight(servicePopover.current) + 20;
               map.fitBounds(bounds, {
                 padding: BREAKPOINT()
@@ -3122,7 +3120,7 @@ const App = () => {
                   properties: {
                     name,
                     number: stop,
-                    type: endStops.includes(stop) ? 'end' : null,
+                    type: endStops.has(stop) ? 'end' : null,
                     left,
                   },
                   geometry: {
@@ -3134,7 +3132,7 @@ const App = () => {
             });
 
             // Show routes
-            requestAnimationFrame(() => {
+            scheduleRouteFrame(() => {
               const routes = routesData[service];
               const geometries = routes.map((route) => decodePolyline(route));
               map.getSource('routes').setData({
@@ -3147,8 +3145,6 @@ const App = () => {
               });
             });
 
-            // Start vehicle tracking for this route (will fetch route ID dynamically)
-            vehicleTracker.current?.start(service);
           }
         } else {
           const serviceNumbersNames = services
@@ -3167,19 +3163,7 @@ const App = () => {
           let serviceGeometries = [];
           services.forEach((service) => {
             const serviceData = servicesData[service];
-            // Extract routes from all destinations
-            const routes = [];
-            Object.keys(serviceData).forEach((key) => {
-              if (key !== 'name') {
-                const destinationRoutes = serviceData[key];
-                if (
-                  Array.isArray(destinationRoutes) &&
-                  destinationRoutes.length > 0
-                ) {
-                  routes.push(...destinationRoutes);
-                }
-              }
-            });
+            const routes = getServiceRoutes(serviceData);
 
             if (routes.length > 0) {
               endStops.push(routes[0][0], routes[0][routes[0].length - 1]);
@@ -3206,6 +3190,8 @@ const App = () => {
             uniqueAndIntersectingStops(routeStops);
           routeStops = dedupedRouteStops;
           setIntersectStops(intersectStops);
+          const endStopSet = new Set(endStops);
+          const intersectStopSet = new Set(intersectStops);
 
           // Fit map to route bounds
           const bounds = new maplibregl.LngLatBounds();
@@ -3213,7 +3199,7 @@ const App = () => {
             const { coordinates } = stopsData[stop];
             bounds.extend(coordinates);
           });
-          requestAnimationFrame(() => {
+          scheduleRouteFrame(() => {
             map.fitBounds(bounds, {
               padding: largerScreen
                 ? {
@@ -3248,9 +3234,9 @@ const App = () => {
                 properties: {
                   name,
                   number: stop,
-                  type: endStops.includes(stop)
+                  type: endStopSet.has(stop)
                     ? 'end'
-                    : intersectStops.includes(stop)
+                    : intersectStopSet.has(stop)
                       ? 'intersect'
                       : null,
                   left,
@@ -3264,7 +3250,7 @@ const App = () => {
           });
 
           // Show routes
-          requestAnimationFrame(() => {
+          scheduleRouteFrame(() => {
             map.getSource('routes-path').setData({
               type: 'FeatureCollection',
               features: serviceGeometries.map((sg) => ({
@@ -3331,7 +3317,7 @@ const App = () => {
           // Show all routes (cropped from current stop)
           // Find the polyline that passes through the current stop for each service
           const STOP_PROXIMITY_THRESHOLD = 0.0045; // ~500m, same as arrival.js
-          requestAnimationFrame(() => {
+          scheduleRouteFrame(() => {
             const stopCoords = coordinates; // Current stop coordinates [lng, lat]
 
             // Group routes by service to find the best polyline per service
@@ -5723,10 +5709,11 @@ const App = () => {
           const q = currentValue.toLowerCase();
           const matched = allModeServicesIdx
             .filter((s) => s.number.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))
-            .sort((a, b) => compareCityPriority(a.city, b.city));
+            .sort((a, b) => compareCityPriority(a.city, b.city))
+            .slice(0, SEARCH_RESULT_LIMIT);
           setServices(matched);
         } else {
-          setServices(buildAllModeSearchList());
+          setServices(buildAllModeSearchList().slice(0, SEARCH_RESULT_LIMIT));
         }
       };
       onCityLoadedCallback = (cityCode) => {
@@ -6025,7 +6012,7 @@ const App = () => {
     };
   }, [mapLoaded, trackerCity]);
 
-  // Auto-start vehicle tracking if a single service route is loaded initially
+  // Track vehicles for a selected single-service route.
   useEffect(() => {
     if (!vehicleTracker.current || !mapLoaded || !servicesData) return;
 
@@ -6084,89 +6071,6 @@ const App = () => {
     route.page === 'stop' &&
     route.subpage === 'routes' &&
     (IS_ALL_MODE ? !!pillStopData : (stopsData && findStopKey(route.value)));
-
-  const servicesResults = services.length
-    ? (expandedSearchOnce ? services : services.slice(0, 25)).map((s) => {
-        const isServicePage = route.page === 'service';
-        const checked =
-          route.value && route.value.split('~').includes(s.number);
-        return (
-          <li key={s.number}>
-            <a
-              href={`#${route.cityPrefix}/services/${encodeURIComponent(s.number)}`}
-              class={checked ? 'current' : ''}
-              onMouseEnter={() => previewRoute(s.number)}
-              onMouseLeave={unpreviewRoute}
-            >
-              <b class="service-tag">{s.number}</b> {s.name}
-            </a>
-            <label hidden={!isServicePage}>
-              <input
-                type="checkbox"
-                checked={checked}
-                onChange={(e) => {
-                  const { checked } = e.target;
-                  let newServices = [];
-                  if (checked) {
-                    newServices = route.value.split('~').concat(s.number);
-                  } else {
-                    newServices = route.value
-                      .split('~')
-                      .filter((service) => service !== s.number);
-                  }
-                  newServices.sort(sortServices);
-                  setTimeout(() => {
-                    if (newServices.length) {
-                      navigateTo(
-                        `/services/${newServices.map((s) => encodeURIComponent(s)).join('~')}`,
-                        route,
-                      );
-                    } else {
-                      navigateTo('/', route);
-                    }
-                  }, 250);
-                }}
-              />
-            </label>
-          </li>
-        );
-      })
-    : !searching &&
-      !closestStops.length &&
-      [1, 2, 3, 4, 5, 6, 7, 8].map((s, i) => (
-        <li key={s}>
-          <a href={`#${route.cityPrefix}/`}>
-            <b class="service-tag">&nbsp;&nbsp;&nbsp;</b>
-            <span class="placeholder">
-              █████{i % 3 == 0 ? '███' : ''} ███
-              {i % 2 == 0 ? '████' : ''}
-            </span>
-          </a>
-        </li>
-      ));
-
-  const stopsResults =
-    searching &&
-    !!stops.length &&
-    stops.map((s) => (
-      <li key={s.number}>
-        <a
-          href={`#${route.cityPrefix}/stops/${s.number}`}
-          onClick={(e) => {
-            if (directionsOrigin || editingBetweenStop) {
-              e.preventDefault();
-              selectDirectionsDestination(s.number);
-            }
-          }}
-        >
-          <b class="stop-tag">{s.number}</b>
-          <span class="stop-name-with-suffix">
-            <span class="stop-name">{s.name}</span>
-            {s.suffix && <span class="stop-suffix">{s.suffix}</span>}
-          </span>
-        </a>
-      </li>
-    ));
 
   // `#/all/between/<query>/<result-num>` (1-based) or `${cityPrefix}/between/<query>/<result-num>` —
   // selects a single itinerary/result to show as a vertical detail card instead of the list.
@@ -6376,7 +6280,7 @@ const App = () => {
                       class="plus"
                       onClick={() => {
                         setExpandSearch(true);
-                        setExpandedSearchOnce(true);
+                        expandedSearchOnce.current = true;
                       }}
                       title={t('multiRoute.addRoute')}
                     />
@@ -6546,18 +6450,19 @@ const App = () => {
               </div>
             </div>
           )}
-          <ul
-            class={`popover-list ${
-              IS_ALL_MODE
-                ? allModePreindexed ? '' : 'loading'
-                : services.length || searching || (closestStops.length && !searching)
-                  ? ''
-                  : 'loading'
-            } ${searching ? 'searching' : ''}`}
-            ref={servicesList}
-            onScroll={handleServicesScroll}
-            overflow-y="true"
-          >
+          {(!anyPopoverOpen || expandSearch) && (
+            <ul
+              class={`popover-list ${
+                IS_ALL_MODE
+                  ? allModePreindexed ? '' : 'loading'
+                  : services.length || searching || (closestStops.length && !searching)
+                    ? ''
+                    : 'loading'
+              } ${searching ? 'searching' : ''}`}
+              ref={servicesList}
+              onScroll={handleServicesScroll}
+              overflow-y="true"
+            >
             {/* Show closest stops first when not searching and location is available */}
             {!searching &&
               closestStops.length > 0 &&
@@ -6626,7 +6531,7 @@ const App = () => {
             {services.length
               ? capGroups(
                   IS_ALL_MODE ? groupByCity(services) : [{ city: null, items: services }],
-                  expandedSearchOnce ? Infinity : 25,
+                  expandSearch ? SEARCH_RESULT_LIMIT : COLLAPSED_SEARCH_LIMIT,
                 ).map((group) => (
                   <Fragment key={group.city ?? 'services'}>
                     {group.city && (
@@ -6741,7 +6646,8 @@ const App = () => {
             {searching && !stops.length && !services.length && (
               <li class="nada">No results.</li>
             )}
-          </ul>
+            </ul>
+          )}
         </div>
       </div>
       <div
@@ -6891,20 +6797,12 @@ const App = () => {
                 stopsData={IS_ALL_MODE && stopPopoverData.city
                   ? cityDataMap.get(stopPopoverData.city)?.stopsData
                   : undefined}
-                onLoadingChange={(loading) => {
-                  setStopPopoverLoading(loading);
-                  if (loading) {
-                    setStopPopoverError(false);
-                  }
-                }}
+                onLoadingChange={handleStopLoadingChange}
                 onErrorChange={setStopPopoverError}
                 cancelRef={stopPopoverCancelRef}
                 destFilter={stopPopoverDestFilter}
                 destFilterExact={stopPopoverDestFilterExact}
-                onDestFilterChange={(value, exact = false) => {
-                  setStopPopoverDestFilter(value);
-                  setStopPopoverDestFilterExact(exact);
-                }}
+                onDestFilterChange={handleStopDestFilterChange}
               />
             </ScrollableContainer>
             {renderStopFooter()}
@@ -7024,7 +6922,9 @@ const App = () => {
         >
           &times;
         </a>
-        {routeServices.length &&
+        {(showServicePopover ||
+          (showStopPopover && paneAppliesHere(supportsTouch, BREAKPOINT))) &&
+          routeServices.length &&
           (IS_ALL_MODE
             ? cityDataMap.get(route.value?.split('^')[0])?.servicesData?.[routeServices[0]]
             : servicesData[routeServices[0]]) &&
@@ -7037,19 +6937,7 @@ const App = () => {
             const serviceData = IS_ALL_MODE
               ? cityDataMap.get(route.value?.split('^')[0])?.servicesData?.[routeServices[0]]
               : servicesData[routeServices[0]];
-            // Extract routes from all destinations
-            const routes = [];
-            Object.keys(serviceData).forEach((key) => {
-              if (key !== 'name') {
-                const destinationRoutes = serviceData[key];
-                if (
-                  Array.isArray(destinationRoutes) &&
-                  destinationRoutes.length > 0
-                ) {
-                  routes.push(...destinationRoutes);
-                }
-              }
-            });
+            const routes = getServiceRoutes(serviceData);
 
             return (
               <>
@@ -7080,7 +6968,7 @@ const App = () => {
                       class="plus"
                       onClick={() => {
                         setExpandSearch(true);
-                        setExpandedSearchOnce(true);
+                        expandedSearchOnce.current = true;
                       }}
                       title={t('multiRoute.addRoute')}
                     />
@@ -7092,9 +6980,7 @@ const App = () => {
                       : stopsData}
                     cityCode={IS_ALL_MODE ? route.value?.split('^')[0] : undefined}
                     vehicles={routeVehicles}
-                    onVehicleClick={(vehicleId) =>
-                      setFollowedVehicleId(vehicleId)
-                    }
+                    onVehicleClick={setFollowedVehicleId}
                   />
                 </ScrollableContainer>
                 {renderServiceFooter()}

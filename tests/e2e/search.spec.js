@@ -20,10 +20,33 @@ test.describe('Search', () => {
     await expect(page.locator('#search-popover.expand')).toBeVisible({
       timeout: 5000,
     });
+    expect(
+      await page.locator('#search-popover .popover-list li').count(),
+    ).toBeLessThanOrEqual(50);
     await search.fill('133');
     await expect(
       page.locator('#search-popover .popover-list li a').first(),
     ).toBeVisible({ timeout: 5000 });
+  });
+
+  test('should remove inactive search results after selecting a route', async ({
+    page,
+  }) => {
+    const search = page.locator('input[type="search"]').first();
+    await search.click();
+    await search.fill('293-ZA');
+
+    const route = page
+      .locator('#search-popover a')
+      .filter({ has: page.locator('b.service-tag', { hasText: /^293-ZA$/ }) })
+      .first();
+    await expect(route).toBeVisible({ timeout: 5000 });
+    await route.click();
+
+    await expect(page.locator('#service-popover.expand')).toBeVisible({
+      timeout: 5000,
+    });
+    await expect(page.locator('#search-popover .popover-list')).toHaveCount(0);
   });
 
   test('should find stops by name', async ({ page }) => {

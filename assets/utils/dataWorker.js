@@ -9,6 +9,9 @@
 import Fuse from 'fuse.js';
 import CheapRuler from 'cheap-ruler';
 
+import { insertNearest } from './boundedNearest';
+import { SEARCH_RESULT_LIMIT } from './searchLimits';
+
 // ── Worker-local state ────────────────────────────────────────────────────────
 
 /** @type {Array<{number,name,suffix,coordinates,routes}>} */
@@ -83,10 +86,22 @@ function handleInit({ stopsArr: s, servicesArr: sa, servicesData: sd, poisArr: p
 
 function handleSearch({ query }) {
   if (!fuseServices || !fuseStops) return { services: [], stops: [], locations: [] };
-  const services = fuseServices.search(query).map((r) => r.item);
-  const stops =
-    services.length < 100 ? fuseStops.search(query).map((r) => r.item) : [];
-  const locations = fusePois ? fusePois.search(query).map((r) => r.item) : [];
+  const services = fuseServices
+    .search(query, { limit: SEARCH_RESULT_LIMIT })
+    .map(({ item: { number, name, city } }) => ({ number, name, city }));
+  const stops = fuseStops
+    .search(query, { limit: SEARCH_RESULT_LIMIT })
+    .map(({ item: { number, name, suffix, city } }) => ({
+      number,
+      name,
+      suffix,
+      city,
+    }));
+  const locations = fusePois
+    ? fusePois
+        .search(query, { limit: SEARCH_RESULT_LIMIT })
+        .map(({ item }) => item)
+    : [];
   return { services, stops, locations };
 }
 
@@ -94,10 +109,11 @@ function handleClosestStops({ lng, lat }) {
   const results = [];
   for (const stop of stopsArr) {
     const dist = ruler.distance([lng, lat], stop.coordinates);
-    if (dist <= 5 * 1000) results.push({ ...stop, distance: dist });
+    if (dist <= 5) insertNearest(results, { stop, distance: dist });
   }
-  results.sort((a, b) => a.distance - b.distance);
-  return { stops: results.slice(0, 25) };
+  return {
+    stops: results.map(({ stop, distance }) => ({ ...stop, distance })),
+  };
 }
 
 // Safety cap only — real Voronoi clusters are small (a handful of stop ids

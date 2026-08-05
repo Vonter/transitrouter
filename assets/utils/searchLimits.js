@@ -1,0 +1,2 @@
+export const COLLAPSED_SEARCH_LIMIT = 25;
+export const SEARCH_RESULT_LIMIT = 50;

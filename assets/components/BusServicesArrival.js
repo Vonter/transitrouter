@@ -60,15 +60,20 @@ export default function BusServicesArrival({
       ? `#/all/services/${cityCode}^${encodeURIComponent(service)}`
       : `#${resolvedCityPrefix}/services/${encodeURIComponent(service)}`;
 
-  // Next scheduled departure (ms) per route, computed each render to stay current:
+  // Recompute scheduled departures at most once per minute.
   //   scheduleOriginETAs — only routes that originate at this stop (live tracking
   //     has no data there until the bus departs), used alongside live arrivals.
   //   scheduleAllETAs — every route passing this stop, used as a full static
   //     fallback when live arrivals are unavailable.
-  const scheduleOriginETAs = scheduleETAByRoute(scheduleData, {
-    originStopId: id,
-  });
-  const scheduleAllETAs = scheduleETAByRoute(scheduleData);
+  const etaMinute = Math.floor(Date.now() / 60_000);
+  const scheduleOriginETAs = useMemo(
+    () => scheduleETAByRoute(scheduleData, { originStopId: id }),
+    [scheduleData, id, etaMinute],
+  );
+  const scheduleAllETAs = useMemo(
+    () => scheduleETAByRoute(scheduleData),
+    [scheduleData, etaMinute],
+  );
 
   // ETA for a route: live tracking ETA when available, otherwise a schedule ETA.
   // In static fallback (live data unavailable) every route uses its schedule ETA;
@@ -89,7 +94,7 @@ export default function BusServicesArrival({
   // a separate second set, so the soon-arriving routes aren't buried among them.
   // A third set holds routes with no ETA at all (no live tracking and no
   // schedule). Each service falls into exactly one bucket.
-  const maxArrivalTime = getConfigForCity(route.city)?.maxArrivalTime;
+  const maxArrivalTime = getConfigForCity(resolvedCity)?.maxArrivalTime;
   const arrivalBucket = (service) => {
     const eta = getServiceETA(service);
     if (eta == null) return 'noETA';
@@ -166,7 +171,7 @@ export default function BusServicesArrival({
         services: Array.from(serviceSet).sort(sortServices),
       }))
       .sort((a, b) => b.services.length - a.services.length);
-  }, [services, destFilter, destFilterExact, stopData]);
+  }, [services, destFilter, destFilterExact, stopData, stopsDataProp]);
 
   const controllerRef = useRef(null);
   const fetchServices = useCallback(async () => {
@@ -251,7 +256,7 @@ export default function BusServicesArrival({
       setIsLoading(false);
       onLoadingChange?.(false);
     }
-  }, [id, onLoadingChange]);
+  }, [id, resolvedCity, onLoadingChange, onErrorChange]);
 
   // Fetch schedule data to get trip_count for each service
   useEffect(() => {
@@ -282,7 +287,7 @@ export default function BusServicesArrival({
       clearRafInterval(intervalID);
       controllerRef.current?.abort();
     };
-  }, [id, active]);
+  }, [active, fetchServices]);
 
   // Expose cancel function via ref
   useEffect(() => {
@@ -315,13 +320,17 @@ export default function BusServicesArrival({
   // arriving later, and with no ETA at all — then group each set by terminal
   // destination. Only used when no destination filter is active.
   const groupedByDestination = useMemo(() => {
-    const withinWindowServices = services.filter(
-      (s) => arrivalBucket(s) === 'withinWindow',
-    );
-    const beyondWindowServices = services.filter(
-      (s) => arrivalBucket(s) === 'beyondWindow',
-    );
-    const noETAServices = services.filter((s) => arrivalBucket(s) === 'noETA');
+    const buckets = {
+      withinWindow: [],
+      beyondWindow: [],
+      noETA: [],
+    };
+    services.forEach((service) => buckets[arrivalBucket(service)].push(service));
+    const {
+      withinWindow: withinWindowServices,
+      beyondWindow: beyondWindowServices,
+      noETA: noETAServices,
+    } = buckets;
 
     if (!stopData?.destinationGroups) {
       // Fallback to old format if destinationGroups not available
@@ -401,6 +410,9 @@ export default function BusServicesArrival({
     servicesArrivals,
     staticFallback,
     maxArrivalTime,
+    scheduleOriginETAs,
+    scheduleAllETAs,
+    stopsDataProp,
   ]);
 
   // Renders the ETA badge for a route. Schedule-based ETAs (origin stops) are
