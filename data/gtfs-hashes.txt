@@ -17,7 +17,7 @@ hublidharwad:
 indore:
   gtfs.zip: c7e274726819c29ca9399018fe980ecdd76b2b9d0f60b62a4f9247f841db38cf
 karnataka:
-  gtfs.zip: 52ff50df43f201d5d2d06ea314f946f61ad824f6b1b4620590c49b5d43a55f9a
+  gtfs.zip: 157901cc776f96b89c6aac67782a7ed825e0ab2f8e7c5fb38f7288492e63b096
 kochi:
   gtfs.zip: 3312f4cccb48ad2c09e8b2ff3e6004d3a4eb69b3d963e4d7d4a86ae05e35ce2b
 mumbai:
@@ -25,7 +25,7 @@ mumbai:
 nyc:
   gtfs.zip: f17612e9586f2f621af0e2c1f987d7a8eda01abb52769ee0599a975514ec59a1
 pune:
-  gtfs.zip: 881850066e71f203c29b95f37f701822c31650e8b645ec3a430c0ec2ec63289b
+  gtfs.zip: 344aae56a22023e83343e47c28e45e85a6e4134de427d6f6b93cdc493e077bf0
 railways:
   gtfs.zip: 466811f9f12fffc654ebfd769e4897a017f54cffe1d8dbdc1fd5d20cab0de04c
 rajkot:
