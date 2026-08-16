@@ -1,5 +1,5 @@
 ahmedabad:
-  gtfs.zip: 027262cc30fe650791a2b5e40e47892b0e603a0972de72bc73677887715ac1cd
+  gtfs.zip: e65344627a50db8b8af85624ffc594bf609c3b4d80ec363490313b44d7572d9c
 andhrapradesh:
   gtfs.zip: f5d468c282b4f904632b24cf43fe29f309066977ef74475f8c5aab3c400058a8
 blr:
@@ -29,4 +29,4 @@ pune:
 railways:
   gtfs.zip: 466811f9f12fffc654ebfd769e4897a017f54cffe1d8dbdc1fd5d20cab0de04c
 rajkot:
-  gtfs.zip: da6e047d297af4574b644be0ce23e7ab7ad42101d41c43bf02e0dd06dde1c2c1
+  gtfs.zip: 7b1a5fbc2f2eb19bf92e626f9b768fadc86fac0d39b3ebaaeba0280c0062c4de
