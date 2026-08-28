@@ -1,5 +1,5 @@
 import { h } from 'preact';
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useMemo, useRef } from 'preact/hooks';
 import getRoute from '../utils/getRoute';
 
 import {
@@ -8,13 +8,23 @@ import {
   computeDiagramData,
   computeStopsForRoutes,
 } from './dataLoader';
-import { renderDiagramSVG } from './DiagramSVG';
+import { buildStopPoiMap, renderDiagramSVG } from './DiagramSVG';
 import MapPicker from './MapPicker';
 import Controls, {
   DEFAULT_COUNT_MAJOR_ROUTES,
   DEFAULT_TARGET_MAJOR_STOPS,
 } from './Controls';
-import { getCurrentThemeValues, patchTheme, resetTheme } from './theme';
+import { StopSelector, RouteSelector } from './Selectors';
+import EditorOverlay from './EditorOverlay';
+import {
+  EMPTY_OVERRIDES,
+  decodeOverrides,
+  encodeOverrides,
+  removeStopFromEdits,
+  updateMap,
+} from './editOverrides';
+import { isDepotTripSequence } from './algorithms';
+import { getCurrentThemeValues, patchTheme, resetTheme } from './theme.mjs';
 
 // ── URL param helpers ──────────────────────────────────────────────────────────
 
@@ -39,59 +49,19 @@ function getStopIdFromUrl() {
   return hashParts[0] || '';
 }
 
-function syncUrlParams(routes, stops, expert) {
+function syncUrlParams(routes, stops, expert, includeDepotTrips) {
   const params = new URLSearchParams(location.search);
   params.set('routes', routes);
   params.set('stops', stops);
   if (expert) params.set('expert', '1');
   else params.delete('expert');
+  if (includeDepotTrips) params.set('depot', '1');
+  else params.delete('depot');
   history.replaceState(
     null,
     '',
     `${location.pathname}?${params}${location.hash}`,
   );
-}
-
-// ── Data override URL serialization ──────────────────────────────────────────
-
-function encodeOverridesToUrl(overrides) {
-  const obj = {};
-  if (overrides.routes?.length) obj.r = overrides.routes;
-  if (overrides.stops?.length) obj.s = overrides.stops;
-  if (overrides.cellOverrides?.size)
-    obj.c = Object.fromEntries(overrides.cellOverrides);
-  if (overrides.nameOverrides?.size)
-    obj.n = Object.fromEntries(overrides.nameOverrides);
-  if (overrides.routeNameOverrides?.size)
-    obj.rn = Object.fromEntries(overrides.routeNameOverrides);
-  if (!Object.keys(obj).length) return null;
-  const bytes = new TextEncoder().encode(JSON.stringify(obj));
-  let binary = '';
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-}
-
-function decodeOverridesFromUrl(encoded) {
-  try {
-    const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
-    const binary = atob(padded);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const obj = JSON.parse(new TextDecoder().decode(bytes));
-    return {
-      routes: obj.r || null,
-      stops: obj.s || null,
-      cellOverrides: obj.c ? new Map(Object.entries(obj.c)) : null,
-      nameOverrides: obj.n ? new Map(Object.entries(obj.n)) : null,
-      routeNameOverrides: obj.rn ? new Map(Object.entries(obj.rn)) : null,
-    };
-  } catch {
-    return null;
-  }
 }
 
 function syncDataParam(encoded) {
@@ -110,7 +80,16 @@ function syncDataParam(encoded) {
 const THEME_SECTIONS = [
   {
     label: 'Canvas',
-    settings: [{ key: 'SVG_WIDTH', label: 'SVG Width', min: 300, max: 1200 }],
+    settings: [
+      { key: 'SVG_WIDTH', label: 'SVG Width', min: 300, max: 1200 },
+      {
+        key: 'SVG_ASPECT',
+        label: 'Height / Width',
+        min: 0.5,
+        max: 3,
+        step: 0.01,
+      },
+    ],
   },
   {
     label: 'Header',
@@ -179,21 +158,15 @@ const THEME_SECTIONS = [
   {
     label: 'Route Diagram',
     settings: [
-      { key: 'LABEL_SPACE', label: 'Label Space', min: 40, max: 300 },
-      { key: 'MAX_STOP_STEP_PCT', label: 'Max Stop Step %', min: 1, max: 20 },
-      { key: 'CLUSTER_SPACING', label: 'Cluster Spacing', min: 20, max: 200 },
+      { key: 'DIAGRAM_TOP_PAD', label: 'Top Padding', min: 0, max: 150 },
+      { key: 'CLUSTER_SPACING', label: 'Track Spacing', min: 12, max: 120 },
       {
-        key: 'TARGET_CLUSTER_SPAN',
-        label: 'Target Cluster Span',
-        min: 100,
-        max: 600,
-      },
-      {
-        key: 'MAX_CLUSTER_SPACING',
-        label: 'Max Cluster Spacing',
-        min: 40,
+        key: 'CLUSTER_LABEL_BAND',
+        label: 'Track Label Band',
+        min: 24,
         max: 200,
       },
+      { key: 'BRANCH_CORNER_R', label: 'Branch Corner R', min: 0, max: 40 },
       {
         key: 'ROUTE_LINE_START_X',
         label: 'Route Line Start X',
@@ -213,7 +186,8 @@ const THEME_SECTIONS = [
         min: 0,
         max: 80,
       },
-      { key: 'STOP_SPACING', label: 'Stop Spacing', min: 10, max: 100 },
+      { key: 'STOP_SPACING_MIN', label: 'Stop Spacing Min', min: 10, max: 100 },
+      { key: 'STOP_SPACING_MAX', label: 'Stop Spacing Max', min: 10, max: 100 },
       { key: 'LABEL_AREA_END_X', label: 'Label Area End X', min: 50, max: 200 },
       { key: 'LABEL_GAP', label: 'Label Gap', min: 0, max: 20 },
       { key: 'LABEL_BOX_H', label: 'Label Box Height', min: 6, max: 40 },
@@ -232,26 +206,11 @@ const THEME_SECTIONS = [
         step: 0.5,
       },
       { key: 'LABEL_BOX_PAD', label: 'Label Box Pad', min: 0, max: 20 },
-      { key: 'PILL_W_BIG', label: 'Pill Width (big)', min: 4, max: 30 },
-      { key: 'PILL_W_SMALL', label: 'Pill Width (small)', min: 4, max: 30 },
+      { key: 'PILL_W_SMALL', label: 'Pill Width', min: 4, max: 30 },
       { key: 'PILL_OVERHANG', label: 'Pill Overhang', min: 0, max: 20 },
-      { key: 'TERMINAL_RADIUS', label: 'Terminal Radius', min: 3, max: 20 },
-      { key: 'CURRENT_PILL_X', label: 'Current Pill X', min: 50, max: 150 },
+      { key: 'TERMINAL_RADIUS', label: 'Terminal Dot Radius', min: 1, max: 20 },
       { key: 'CURRENT_PILL_W', label: 'Current Pill Width', min: 4, max: 20 },
-      {
-        key: 'CURRENT_PILL_TOP_PAD',
-        label: 'Current Pill Top Pad',
-        min: 0,
-        max: 20,
-      },
-      { key: 'DIAGRAM_BOTTOM_PAD', label: 'Bottom Padding', min: 10, max: 150 },
-      {
-        key: 'EXTRA_BOTTOM_PCT',
-        label: 'Extra Bottom %',
-        min: 0,
-        max: 0.5,
-        step: 0.01,
-      },
+      { key: 'DIAGRAM_BOTTOM_PAD', label: 'Bottom Padding', min: 0, max: 150 },
     ],
   },
   {
@@ -268,7 +227,6 @@ const THEME_SECTIONS = [
       },
       { key: 'LABEL_ROW_OFFSET', label: 'Row Offset', min: 5, max: 30 },
       { key: 'LABEL_ICON_GAP', label: 'Icon Gap', min: 0, max: 20 },
-      { key: 'LABEL_MAX_DIST', label: 'Max Dist', min: 10, max: 100 },
       { key: 'LABEL_MAX_LINE_CHARS', label: 'Max Line Chars', min: 5, max: 50 },
       { key: 'LABEL_HORIZ_GAP', label: 'Horiz Gap', min: 0, max: 30 },
       {
@@ -277,19 +235,10 @@ const THEME_SECTIONS = [
         min: 0,
         max: 20,
       },
-      { key: 'LABEL_ANCHOR_CLAMP', label: 'Anchor Clamp', min: 0, max: 30 },
-    ],
-  },
-  {
-    label: 'Branch Connectors',
-    settings: [
-      { key: 'BRANCH_STROKE_W', label: 'Stroke Width', min: 1, max: 10 },
-      {
-        key: 'MIN_SHARED_FOR_BRANCH',
-        label: 'Min Shared Stops',
-        min: 1,
-        max: 10,
-      },
+      { key: 'LABEL_STACK_GAP', label: 'Label Stack Gap', min: 0, max: 12 },
+      { key: 'LABEL_MAX_ROWS', label: 'Max Label Rows', min: 1, max: 12 },
+      { key: 'LABEL_POI_ICON_SIZE', label: 'POI Icon Size', min: 4, max: 20 },
+      { key: 'LABEL_POI_ICON_GAP', label: 'POI Icon Gap', min: 0, max: 12 },
     ],
   },
   {
@@ -305,6 +254,12 @@ const THEME_SECTIONS = [
         label: 'Legend Icon Gap',
         min: 0,
         max: 20,
+      },
+      {
+        key: 'MAP_STOP_ICON_SIZE',
+        label: 'Map Stop Icon Size',
+        min: 4,
+        max: 30,
       },
       { key: 'QR_MAX_SIZE', label: 'QR Max Size', min: 60, max: 300 },
       { key: 'QR_PAD', label: 'QR Padding', min: 0, max: 80 },
@@ -328,6 +283,79 @@ const COLOR_KEYS = [
   'bgLight',
   'mapBg',
 ];
+
+// ── Route helpers ──────────────────────────────────────────────────────────────
+
+// Routes are addressed by id everywhere in the editor; the renderer needs the
+// full objects, taken from the computed diagram where possible and rebuilt from
+// city data for routes the user added by hand.
+function buildRouteObjects(
+  routeIds,
+  diagramData,
+  servicesData,
+  { currentStopId, stopsData, includeDepotTrips = false } = {},
+) {
+  return routeIds
+    .map((id) => {
+      const inDiagram = diagramData.routes.find((r) => r.routeId === id);
+      if (inDiagram) return inDiagram;
+      const routeData = servicesData[id];
+      if (!routeData) return null;
+      const normId = String(currentStopId || '');
+      let selected = null;
+      for (const [destId, sequences] of Object.entries(routeData)) {
+        if (destId === 'name') continue;
+        const stopSequence = sequences.find(
+          (seq) =>
+            (!currentStopId || seq.some((sid) => String(sid) === normId)) &&
+            (includeDepotTrips || !isDepotTripSequence(seq, stopsData)),
+        );
+        if (stopSequence) {
+          selected = { destId, stopSequence };
+          break;
+        }
+      }
+      if (!selected) return null;
+      const seq = selected.stopSequence.map(String);
+      return {
+        routeId: id,
+        routeName: routeData.name,
+        destinationStopId: selected.destId,
+        stopSequence: selected.stopSequence,
+        seqForGrouping: seq,
+        tripCount: 0,
+      };
+    })
+    .filter(Boolean);
+}
+
+// Every route that calls at the stop and isn't on the diagram already.
+function routesServingStop(
+  servicesData,
+  stopsData,
+  stopId,
+  shownRouteIds,
+  includeDepotTrips,
+) {
+  const shown = new Set(shownRouteIds);
+  const numericId = parseInt(stopId, 10);
+  return Object.keys(servicesData)
+    .filter((id) => {
+      if (shown.has(id)) return false;
+      const routeData = servicesData[id];
+      if (!routeData) return false;
+      return Object.entries(routeData).some(
+        ([key, seqs]) =>
+          key !== 'name' &&
+          seqs.some(
+            (seq) =>
+              (seq.includes(stopId) || seq.includes(numericId)) &&
+              (includeDepotTrips || !isDepotTripSequence(seq, stopsData)),
+          ),
+      );
+    })
+    .map((id) => ({ routeId: id, routeName: servicesData[id]?.name }));
+}
 
 // ── Data table ─────────────────────────────────────────────────────────────────
 
@@ -413,56 +441,24 @@ function RouteNameInput({ routeId, value, onChange }) {
   );
 }
 
-// Dropdown to pick a route from a list (mirrors StopSelector's UX).
-function RouteSelector({ routes, onSelect, onClose }) {
-  const [query, setQuery] = useState('');
-  const wrapperRef = useRef(null);
-
-  useEffect(() => {
-    const handler = (e) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target))
-        onClose();
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  const filtered = routes
-    .filter(
-      (r) =>
-        !query ||
-        r.routeId.toLowerCase().includes(query.toLowerCase()) ||
-        (r.routeName || '').toLowerCase().includes(query.toLowerCase()),
-    )
-    .slice(0, 100);
-
+function TextOverrideInput({ value, onChange, className = '' }) {
+  const [local, setLocal] = useState(value);
+  useEffect(() => setLocal(value), [value]);
   return (
-    <div class="route-selector-dropdown" ref={wrapperRef}>
-      <input
-        type="text"
-        class="stop-search-input"
-        placeholder="Search routes by ID or name…"
-        value={query}
-        onInput={(e) => setQuery(e.target.value)}
-        autoFocus
-      />
-      <div class="stop-list">
-        {filtered.length > 0 ? (
-          filtered.map((r) => (
-            <div
-              key={r.routeId}
-              class="stop-list-item"
-              onClick={() => onSelect(r.routeId)}
-            >
-              <span class="stop-list-id">{r.routeId}</span>
-              {r.routeName && <span class="stop-list-name">{r.routeName}</span>}
-            </div>
-          ))
-        ) : (
-          <div class="stop-list-empty">No routes found</div>
-        )}
-      </div>
-    </div>
+    <input
+      type="text"
+      class={className}
+      value={local}
+      onInput={(e) => setLocal(e.target.value)}
+      onBlur={() => onChange(local.trim())}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') {
+          setLocal(value);
+          e.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
 
@@ -476,6 +472,7 @@ function DataTable({
   appliedCells,
   appliedNames,
   appliedRouteNames,
+  includeDepotTrips,
   onDataChange,
 }) {
   const [tableRoutes, setTableRoutes] = useState(
@@ -495,6 +492,9 @@ function DataTable({
   );
   const [showAddStop, setShowAddStop] = useState(false);
   const [showAddRoute, setShowAddRoute] = useState(false);
+  const [insertIndex, setInsertIndex] = useState(() =>
+    Math.max(1, (appliedStops || diagramData.orderedStops).length - 1),
+  );
 
   useEffect(() => {
     setTableRoutes(appliedRoutes || diagramData.routes.map((r) => r.routeId));
@@ -502,7 +502,18 @@ function DataTable({
     setCellOverrides(appliedCells || new Map());
     setNameOverrides(appliedNames || new Map());
     setRouteNameOverrides(appliedRouteNames || new Map());
-  }, [diagramData, appliedRoutes, appliedStops]);
+  }, [
+    diagramData,
+    appliedRoutes,
+    appliedStops,
+    appliedCells,
+    appliedNames,
+    appliedRouteNames,
+  ]);
+
+  useEffect(() => {
+    setInsertIndex((index) => Math.min(index, tableStops.length));
+  }, [tableStops.length]);
 
   // For each rendered route, build the set of stop IDs it visits (forward journey).
   // Routes added from city data (not in diagramData) use their first sequence.
@@ -514,10 +525,14 @@ function DataTable({
         (inDiagram.seqForGrouping || inDiagram.stopSequence || []).map(String),
       );
     } else {
-      const rd = servicesData[routeId];
-      const destId = rd && Object.keys(rd).find((k) => k !== 'name');
       routeStopSets[routeId] = new Set(
-        destId ? (rd[destId][0] || []).map(String) : [],
+        (
+          buildRouteObjects([routeId], diagramData, servicesData, {
+            currentStopId,
+            stopsData,
+            includeDepotTrips,
+          })[0]?.stopSequence || []
+        ).map(String),
       );
     }
   }
@@ -543,12 +558,26 @@ function DataTable({
 
   const removeRoute = (routeId) =>
     setTableRoutes((prev) => prev.filter((id) => id !== routeId));
+  const moveRoute = (routeId, offset) =>
+    setTableRoutes((prev) => {
+      const from = prev.indexOf(routeId);
+      const to = from + offset;
+      if (from < 0 || to < 0 || to >= prev.length) return prev;
+      const next = [...prev];
+      [next[from], next[to]] = [next[to], next[from]];
+      return next;
+    });
   const removeStop = (stopId) =>
     setTableStops((prev) => prev.filter((id) => id !== stopId));
 
   const addStop = (stopId) => {
-    if (!tableStops.includes(stopId))
-      setTableStops((prev) => [...prev, stopId]);
+    if (!tableStops.includes(stopId)) {
+      setTableStops((prev) => {
+        const at = Math.max(0, Math.min(insertIndex, prev.length));
+        return [...prev.slice(0, at), stopId, ...prev.slice(at)];
+      });
+      setInsertIndex((i) => i + 1);
+    }
     setShowAddStop(false);
   };
 
@@ -560,8 +589,18 @@ function DataTable({
 
     // Auto-extract relevant stops from the new route
     const rd = servicesData[routeId];
-    const destId = rd && Object.keys(rd).find((k) => k !== 'name');
-    const newRouteSeq = destId ? (rd[destId][0] || []).map(String) : [];
+    const currentId = String(currentStopId);
+    const newRouteSeq = rd
+      ? Object.entries(rd)
+          .filter(([key]) => key !== 'name')
+          .flatMap(([, seqs]) => seqs)
+          .find(
+            (seq) =>
+              seq.some((sid) => String(sid) === currentId) &&
+              (includeDepotTrips || !isDepotTripSequence(seq, stopsData)),
+          )
+          ?.map(String) || []
+      : [];
 
     // Collect all stops visited by existing table routes
     const existingRouteStops = new Set();
@@ -620,6 +659,7 @@ function DataTable({
       cellOverrides: new Map(),
       nameOverrides: new Map(),
       routeNameOverrides: new Map(),
+      reset: true,
     });
   };
 
@@ -629,23 +669,13 @@ function DataTable({
   const displayRouteName = (routeId) =>
     routeNameOverrides.get(routeId) ?? routeId;
 
-  const effectiveOrigin = currentStopId;
-  const availableRoutes = Object.keys(servicesData)
-    .filter((id) => {
-      if (tableRoutes.includes(id)) return false;
-      const rd = servicesData[id];
-      if (!rd) return false;
-      return Object.entries(rd).some(
-        ([k, seqs]) =>
-          k !== 'name' &&
-          seqs.some(
-            (seq) =>
-              seq.includes(effectiveOrigin) ||
-              seq.includes(parseInt(effectiveOrigin, 10)),
-          ),
-      );
-    })
-    .map((id) => ({ routeId: id, routeName: servicesData[id]?.name }));
+  const availableRoutes = routesServingStop(
+    servicesData,
+    stopsData,
+    currentStopId,
+    tableRoutes,
+    includeDepotTrips,
+  );
 
   return (
     <div class="data-table-wrapper">
@@ -667,11 +697,33 @@ function DataTable({
           )}
         </div>
         <div class="data-table-add-wrapper">
+          <select
+            class="data-table-insert-position"
+            value={insertIndex}
+            onChange={(e) => setInsertIndex(Number(e.target.value))}
+            aria-label="Where to insert the stop"
+          >
+            {Array.from({ length: tableStops.length + 1 }, (_, index) => {
+              const before = tableStops[index - 1];
+              const after = tableStops[index];
+              const label =
+                index === 0
+                  ? `Before ${displayStopName(after)}`
+                  : index === tableStops.length
+                    ? `After ${displayStopName(before)}`
+                    : `Between ${displayStopName(before)} / ${displayStopName(after)}`;
+              return (
+                <option value={index} key={index}>
+                  {label}
+                </option>
+              );
+            })}
+          </select>
           <button
             class="data-table-add-btn"
             onClick={() => setShowAddStop((v) => !v)}
           >
-            + Add Stop
+            + Insert Stop
           </button>
           {showAddStop && (
             <StopSelector
@@ -716,7 +768,7 @@ function DataTable({
             </tr>
           </thead>
           <tbody>
-            {tableRoutes.map((routeId) => (
+            {tableRoutes.map((routeId, routeIndex) => (
               <tr key={routeId}>
                 <td class="data-table-rm-cell">
                   <button
@@ -728,18 +780,38 @@ function DataTable({
                   </button>
                 </td>
                 <td class="data-table-route-id">
-                  <RouteNameInput
-                    routeId={routeId}
-                    value={displayRouteName(routeId)}
-                    onChange={(val) =>
-                      setRouteNameOverrides((m) => {
-                        const n = new Map(m);
-                        if (val === routeId) n.delete(routeId);
-                        else n.set(routeId, val);
-                        return n;
-                      })
-                    }
-                  />
+                  <div class="data-table-route-order">
+                    <div class="data-table-order-buttons">
+                      <button
+                        type="button"
+                        onClick={() => moveRoute(routeId, -1)}
+                        disabled={routeIndex === 0}
+                        title="Move route up"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveRoute(routeId, 1)}
+                        disabled={routeIndex === tableRoutes.length - 1}
+                        title="Move route down"
+                      >
+                        ↓
+                      </button>
+                    </div>
+                    <RouteNameInput
+                      routeId={routeId}
+                      value={displayRouteName(routeId)}
+                      onChange={(val) =>
+                        setRouteNameOverrides((m) => {
+                          const n = new Map(m);
+                          if (val === routeId) n.delete(routeId);
+                          else n.set(routeId, val);
+                          return n;
+                        })
+                      }
+                    />
+                  </div>
                 </td>
                 {tableStops.map((stopId) => {
                   const hit = isCellHit(routeId, stopId);
@@ -787,6 +859,10 @@ function ExpertPanel({
   appliedCells,
   appliedNames,
   appliedRouteNames,
+  includeDepotTrips,
+  towardsText,
+  onIncludeDepotTripsChange,
+  onTowardsTextChange,
   onThemeChange,
   onDataChange,
 }) {
@@ -825,6 +901,26 @@ function ExpertPanel({
         <div class="expert-section-header">
           <span class="expert-section-title">Data Override</span>
         </div>
+        <div class="expert-content-controls">
+          <label class="expert-text-field">
+            <span>Towards text</span>
+            <TextOverrideInput
+              value={towardsText}
+              className="expert-content-input"
+              onChange={onTowardsTextChange}
+            />
+          </label>
+          <label class="expert-checkbox-field">
+            <input
+              type="checkbox"
+              checked={includeDepotTrips}
+              onChange={(e) =>
+                onIncludeDepotTripsChange(e.currentTarget.checked)
+              }
+            />
+            Include trips starting or ending at a depot
+          </label>
+        </div>
         <DataTable
           diagramData={diagramData}
           stopsData={stopsData}
@@ -835,6 +931,7 @@ function ExpertPanel({
           appliedCells={appliedCells}
           appliedNames={appliedNames}
           appliedRouteNames={appliedRouteNames}
+          includeDepotTrips={includeDepotTrips}
           onDataChange={onDataChange}
         />
       </div>
@@ -914,63 +1011,6 @@ function ExpertPanel({
   );
 }
 
-// ── Stop selector dropdown ─────────────────────────────────────────────────────
-
-function StopSelector({ stopsData, onSelect, onClose }) {
-  const [query, setQuery] = useState('');
-  const wrapperRef = useRef(null);
-
-  useEffect(() => {
-    const handler = (e) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target))
-        onClose();
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  const filtered = Object.entries(stopsData)
-    .filter(([stopId, d]) => {
-      if (!query) return true;
-      const q = query.toLowerCase();
-      return (
-        stopId.toLowerCase().includes(q) ||
-        (d[2] || '').toLowerCase().includes(q)
-      );
-    })
-    .sort(([, a], [, b]) => (a[2] || '').localeCompare(b[2] || ''))
-    .slice(0, 100);
-
-  return (
-    <div class="stop-selector-dropdown" ref={wrapperRef}>
-      <input
-        type="text"
-        class="stop-search-input"
-        placeholder="Search stops by ID or name…"
-        value={query}
-        onInput={(e) => setQuery(e.target.value)}
-        autoFocus
-      />
-      <div class="stop-list">
-        {filtered.length > 0 ? (
-          filtered.map(([stopId, d]) => (
-            <div
-              key={stopId}
-              class="stop-list-item"
-              onClick={() => onSelect(stopId)}
-            >
-              <span class="stop-list-id">{stopId}</span>
-              <span class="stop-list-name">{d[2]}</span>
-            </div>
-          ))
-        ) : (
-          <div class="stop-list-empty">No stops found</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function BusDiagram() {
@@ -992,12 +1032,25 @@ export default function BusDiagram() {
   const [expertMode, setExpertMode] = useState(
     () => new URLSearchParams(location.search).get('expert') === '1',
   );
+  const [editMode, setEditMode] = useState(false);
+  const [includeDepotTrips, setIncludeDepotTrips] = useState(
+    () => new URLSearchParams(location.search).get('depot') === '1',
+  );
   const [themeRenderKey, setThemeRenderKey] = useState(0);
-  const [routeOverrides, setRouteOverrides] = useState(null);
-  const [stopOverrides, setStopOverrides] = useState(null);
-  const [cellOverrides, setCellOverrides] = useState(null); // Map<"routeId:stopId", boolean>
-  const [nameOverrides, setNameOverrides] = useState(null); // Map<stopId, displayName>
-  const [routeNameOverrides, setRouteNameOverrides] = useState(null); // Map<routeId, displayName>
+  const [overrides, setOverrides] = useState(EMPTY_OVERRIDES);
+  const {
+    routes: routeOverrides,
+    stops: stopOverrides,
+    cells: cellOverrides,
+    names: nameOverrides,
+    routeNames: routeNameOverrides,
+    offsets: labelOffsets,
+    tracks: trackOverrides,
+    branches: branchOverrides,
+    stopIcons: stopIconOverrides,
+    towards: towardsTextOverride,
+  } = overrides;
+  const [svgRenderKey, setSvgRenderKey] = useState(0);
   const [showStopSelector, setShowStopSelector] = useState(false);
   const [showMapPicker, setShowMapPicker] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1011,11 +1064,65 @@ export default function BusDiagram() {
     stopsRef.current = targetMajorStops;
   }, [countMajorRoutes, targetMajorStops]);
 
+  // ── Override plumbing ────────────────────────────────────────────────────────
+
+  const clearOverrides = () => setOverrides(EMPTY_OVERRIDES);
+
+  // The single commit path for every edit, whoever made it: it stores the new
+  // overrides and mirrors the whole set into the shareable `d` URL param.
+  const applyOverrides = ({
+    routes,
+    stops,
+    cells,
+    names,
+    routeNames,
+    offsets,
+    tracks,
+    branches,
+    stopIcons,
+    towards,
+    recomputeStops = false,
+  }) => {
+    const newRoutes = routes.length > 0 ? routes : null;
+    let effectiveStops = stops.length > 0 ? stops : null;
+    if (recomputeStops && newRoutes && cityData && stopId) {
+      effectiveStops = computeStopsForRoutes(
+        buildRouteObjects(newRoutes, diagramData, cityData.servicesData, {
+          currentStopId: stopId,
+          stopsData: cityData.stopsData,
+          includeDepotTrips,
+        }),
+        stopId,
+        cityData.rankingData,
+        stopsRef.current,
+      );
+    }
+    const next = {
+      routes: newRoutes,
+      stops: effectiveStops,
+      cells: cells?.size ? cells : null,
+      names: names?.size ? names : null,
+      routeNames: routeNames?.size ? routeNames : null,
+      offsets: offsets?.size ? offsets : null,
+      tracks: tracks?.size ? tracks : null,
+      branches: branches?.size ? branches : null,
+      stopIcons: stopIcons?.size ? stopIcons : null,
+      towards: towards ?? null,
+    };
+    setOverrides(next);
+    syncDataParam(encodeOverrides(next));
+  };
+
   // ── Sync URL params ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    syncUrlParams(countMajorRoutes, targetMajorStops, expertMode);
-  }, [countMajorRoutes, targetMajorStops, expertMode]);
+    syncUrlParams(
+      countMajorRoutes,
+      targetMajorStops,
+      expertMode,
+      includeDepotTrips,
+    );
+  }, [countMajorRoutes, targetMajorStops, expertMode, includeDepotTrips]);
 
   // ── Load city data ───────────────────────────────────────────────────────────
 
@@ -1045,11 +1152,7 @@ export default function BusDiagram() {
       if (!resolvedStopId) {
         setShowMapPicker(true);
         setStopId(null);
-        setRouteOverrides(null);
-        setStopOverrides(null);
-        setCellOverrides(null);
-        setNameOverrides(null);
-        setRouteNameOverrides(null);
+        clearOverrides();
         syncDataParam(null);
         setLoading(false);
         return;
@@ -1076,6 +1179,7 @@ export default function BusDiagram() {
         {
           targetMajorStops: stopsRef.current,
           countMajorRoutes: countRef.current,
+          includeDepotTrips,
         },
       );
 
@@ -1087,28 +1191,16 @@ export default function BusDiagram() {
 
       // Read data overrides from URL param
       const dParam = new URLSearchParams(location.search).get('d');
-      const urlOverrides = dParam ? decodeOverridesFromUrl(dParam) : null;
+      const urlOverrides = dParam ? decodeOverrides(dParam) : null;
 
       setDiagramData(result);
-      if (urlOverrides) {
-        setRouteOverrides(urlOverrides.routes);
-        setStopOverrides(urlOverrides.stops);
-        setCellOverrides(urlOverrides.cellOverrides);
-        setNameOverrides(urlOverrides.nameOverrides);
-        setRouteNameOverrides(urlOverrides.routeNameOverrides);
-      } else {
-        setRouteOverrides(null);
-        setStopOverrides(null);
-        setCellOverrides(null);
-        setNameOverrides(null);
-        setRouteNameOverrides(null);
-      }
+      setOverrides(urlOverrides || EMPTY_OVERRIDES);
       setLoading(false);
     };
 
     window.onhashchange = handleHashChange;
     handleHashChange();
-  }, [cityData]);
+  }, [cityData, includeDepotTrips]);
 
   // Recompute when controls change
   useEffect(() => {
@@ -1154,37 +1246,28 @@ export default function BusDiagram() {
 
     const baseRoutes =
       routeOverrides && routeOverrides.length > 0
-        ? routeOverrides
-            .map((id) => {
-              const inDiagram = diagramData.routes.find(
-                (r) => r.routeId === id,
-              );
-              if (inDiagram) return inDiagram;
-              const rd = cityData.servicesData[id];
-              if (!rd) return null;
-              const destId = Object.keys(rd).find((k) => k !== 'name');
-              if (!destId) return null;
-              const seq = (rd[destId][0] || []).map(String);
-              return {
-                routeId: id,
-                routeName: rd.name,
-                destinationStopId: destId,
-                stopSequence: rd[destId][0] || [],
-                seqForGrouping: seq,
-                tripCount: 0,
-              };
-            })
-            .filter(Boolean)
+        ? buildRouteObjects(
+            routeOverrides,
+            diagramData,
+            cityData.servicesData,
+            {
+              currentStopId: stopId,
+              stopsData: cityData.stopsData,
+              includeDepotTrips,
+            },
+          )
         : diagramData.routes;
     const cellRoutes = applyCell(
       baseRoutes.length > 0 ? baseRoutes : diagramData.routes,
     );
 
+    // A renamed route keeps its real name for tooltips; `displayId` is what the
+    // badges and track chips print.
     const effectiveRoutes =
       routeNameOverrides?.size > 0
         ? cellRoutes.map((route) =>
             routeNameOverrides.has(route.routeId)
-              ? { ...route, routeName: routeNameOverrides.get(route.routeId) }
+              ? { ...route, displayId: routeNameOverrides.get(route.routeId) }
               : route,
           )
         : cellRoutes;
@@ -1217,8 +1300,18 @@ export default function BusDiagram() {
       orderedStops: effectiveStops,
       city,
       poisData: cityData?.poisData || [],
+      railData: cityData?.railData,
+      stopIconOverrides,
+      trackOverrides,
+      branchOverrides,
+      labelOffsets,
+      towardsText: towardsTextOverride,
+      preserveRouteOrder: Boolean(routeOverrides?.length),
+      interactive: true,
     }).then((node) => {
-      if (!cancelled) svgNodeRef.current = node;
+      if (cancelled) return;
+      svgNodeRef.current = node;
+      setSvgRenderKey((k) => k + 1);
     });
 
     return () => {
@@ -1235,6 +1328,12 @@ export default function BusDiagram() {
     cellOverrides,
     nameOverrides,
     routeNameOverrides,
+    labelOffsets,
+    trackOverrides,
+    branchOverrides,
+    stopIconOverrides,
+    towardsTextOverride,
+    includeDepotTrips,
   ]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -1247,7 +1346,8 @@ export default function BusDiagram() {
   const handleExportSvg = () => {
     const svg = svgNodeRef.current || svgHostRef.current?.querySelector('svg');
     if (!svg) return;
-    const xml = new XMLSerializer().serializeToString(svg);
+    const clean = cleanSvgForExport(svg);
+    const xml = new XMLSerializer().serializeToString(clean);
     const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1258,6 +1358,133 @@ export default function BusDiagram() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
+
+  const cleanSvgForExport = (svg) => {
+    // The editor's invisible drag targets have no business in an export.
+    const clean = svg.cloneNode(true);
+    clean.removeAttribute('class');
+    clean.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clean.querySelectorAll('[data-edit-hit]').forEach((el) => el.remove());
+    return clean;
+  };
+
+  const handleExportPng = async () => {
+    const svg = svgNodeRef.current || svgHostRef.current?.querySelector('svg');
+    if (!svg) return;
+    await document.fonts?.ready;
+
+    const clean = cleanSvgForExport(svg);
+    const viewBox = clean.viewBox.baseVal;
+    const width = viewBox.width || Number(clean.getAttribute('width'));
+    const height = viewBox.height || Number(clean.getAttribute('height'));
+    const scale = 2;
+    const xml = new XMLSerializer().serializeToString(clean);
+    const svgUrl = URL.createObjectURL(
+      new Blob([xml], { type: 'image/svg+xml;charset=utf-8' }),
+    );
+
+    try {
+      const image = new Image();
+      await new Promise((resolve, reject) => {
+        image.onload = resolve;
+        image.onerror = reject;
+        image.src = svgUrl;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(width * scale);
+      canvas.height = Math.round(height * scale);
+      const context = canvas.getContext('2d');
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve) =>
+        canvas.toBlob(resolve, 'image/png'),
+      );
+      if (!blob) return;
+      const pngUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = pngUrl;
+      a.download = `stop-diagram-${stopId}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(pngUrl);
+    } finally {
+      URL.revokeObjectURL(svgUrl);
+    }
+  };
+
+  const handleResetOverrides = () => {
+    clearOverrides();
+    syncDataParam(null);
+    setCountMajorRoutes(DEFAULT_COUNT_MAJOR_ROUTES);
+    setTargetMajorStops(DEFAULT_TARGET_MAJOR_STOPS);
+    setIncludeDepotTrips(false);
+    resetTheme();
+    setThemeRenderKey((key) => key + 1);
+  };
+
+  // ── What the diagram is showing right now — the editor's starting point ──────
+
+  const shownRouteIds =
+    routeOverrides?.length > 0
+      ? routeOverrides
+      : diagramData?.routes.map((r) => r.routeId) || [];
+
+  const shownRoutes =
+    diagramData && cityData
+      ? buildRouteObjects(shownRouteIds, diagramData, cityData.servicesData, {
+          currentStopId: stopId,
+          stopsData: cityData.stopsData,
+          includeDepotTrips,
+        }).map((route) =>
+          routeNameOverrides?.has(route.routeId)
+            ? { ...route, displayId: routeNameOverrides.get(route.routeId) }
+            : route,
+        )
+      : [];
+
+  // Scanning every service in the city is not free, so only redo it when the
+  // set of routes on the diagram actually changes.
+  const addableRoutes = useMemo(
+    () =>
+      cityData && stopId
+        ? routesServingStop(
+            cityData.servicesData,
+            cityData.stopsData,
+            stopId,
+            shownRouteIds,
+            includeDepotTrips,
+          )
+        : [],
+    [cityData, stopId, includeDepotTrips, shownRouteIds.join(',')],
+  );
+
+  const detectedStopIcons = useMemo(
+    () =>
+      cityData
+        ? buildStopPoiMap(cityData.stopsData, cityData.poisData || [])
+        : {},
+    [cityData],
+  );
+
+  const editState = {
+    routes: shownRouteIds,
+    stops:
+      stopOverrides?.length > 0
+        ? stopOverrides
+        : diagramData?.orderedStops || [],
+    cells: cellOverrides || new Map(),
+    names: nameOverrides || new Map(),
+    routeNames: routeNameOverrides || new Map(),
+    offsets: labelOffsets || new Map(),
+    tracks: trackOverrides || new Map(),
+    branches: branchOverrides || new Map(),
+    stopIcons: stopIconOverrides || new Map(),
+    towards: towardsTextOverride,
+  };
+  const defaultTowardsText = (cityData?.stopsData[stopId]?.[3] || '')
+    .replace(/^\(|\)$/g, '')
+    .trim();
+  const effectiveTowardsText = towardsTextOverride ?? defaultTowardsText;
 
   // ── Loading / error states ────────────────────────────────────────────────────
 
@@ -1318,17 +1545,136 @@ export default function BusDiagram() {
           onCountMajorRoutesChange={setCountMajorRoutes}
           onTargetMajorStopsChange={setTargetMajorStops}
           onExportSvg={handleExportSvg}
-          expertMode={expertMode}
-          onExpertModeToggle={() => setExpertMode((m) => !m)}
+          onExportPng={handleExportPng}
+          editMode={editMode}
+          onEditModeToggle={() => {
+            setEditMode((mode) => {
+              if (mode) setExpertMode(false);
+              return !mode;
+            });
+          }}
+          onResetOverrides={handleResetOverrides}
         />
       </div>
 
-      {/* SVG host — D3 renders directly into this div */}
-      <div class="diagram-svg-host" ref={svgHostRef} />
+      {/* SVG host — D3 renders directly into this div, with the in-place
+          editor layered on top of it */}
+      <div class="diagram-stage">
+        <div class="diagram-svg-host" ref={svgHostRef} />
+        {editMode && diagramData && cityData && (
+          <EditorOverlay
+            hostRef={svgHostRef}
+            renderKey={svgRenderKey}
+            routes={shownRoutes}
+            stops={editState.stops}
+            stopsData={cityData.stopsData}
+            detectedStopIcons={detectedStopIcons}
+            stopIconOverrides={stopIconOverrides}
+            currentStopId={stopId}
+            labelOffsets={labelOffsets}
+            branchOverrides={branchOverrides}
+            availableRoutes={addableRoutes}
+            onRenameTowards={(text) =>
+              applyOverrides({
+                ...editState,
+                towards: text === defaultTowardsText ? null : text,
+              })
+            }
+            onApplyStop={(id, name, iconOverride) => {
+              const defaultName = cityData.stopsData[id]?.[2] || id;
+              applyOverrides({
+                ...editState,
+                names: updateMap(editState.names, id, name, name === defaultName),
+                stopIcons: updateMap(
+                  editState.stopIcons,
+                  id,
+                  iconOverride,
+                  !iconOverride,
+                ),
+              });
+            }}
+            onMoveLabel={(id, offset) =>
+              applyOverrides({
+                ...editState,
+                offsets: updateMap(editState.offsets, id, offset),
+              })
+            }
+            onApplyRoute={({
+              routeId,
+              label,
+              trackKey,
+              branchOverride,
+            }) =>
+              applyOverrides({
+                ...editState,
+                routeNames: updateMap(
+                  editState.routeNames,
+                  routeId,
+                  label,
+                  label === routeId,
+                ),
+                branches: updateMap(
+                  editState.branches,
+                  trackKey,
+                  branchOverride,
+                  !branchOverride,
+                ),
+              })
+            }
+            onRemoveRoute={(id) => {
+              applyOverrides({
+                ...editState,
+                routes: editState.routes.filter((r) => r !== id),
+                tracks: updateMap(editState.tracks, id, null, true),
+                branches: updateMap(editState.branches, id, null, true),
+                recomputeStops: true,
+              });
+            }}
+            onMoveRouteToTrack={(id, trackKey) =>
+              applyOverrides({
+                ...editState,
+                tracks: updateMap(editState.tracks, id, trackKey),
+              })
+            }
+            onAddRoute={(id) =>
+              applyOverrides({
+                ...editState,
+                routes: [...editState.routes, id],
+                recomputeStops: true,
+              })
+            }
+            onAddStop={(id, index) =>
+              applyOverrides({
+                ...editState,
+                stops: [
+                  ...editState.stops.slice(0, index),
+                  id,
+                  ...editState.stops.slice(index),
+                ],
+              })
+            }
+            onRemoveStop={(id) =>
+              applyOverrides(removeStopFromEdits(editState, id))
+            }
+          />
+        )}
+      </div>
 
-      {/* Expert panel — shown below the diagram in expert mode */}
-      {expertMode && diagramData && cityData && (
+      {/* Expert mode stays at the bottom and is available only while editing. */}
+      {editMode && diagramData && cityData && (
+        <div class="diagram-edit-footer">
+          <button
+            class={`expert-toggle-button${expertMode ? ' expert-toggle-button--active' : ''}`}
+            onClick={() => setExpertMode((mode) => !mode)}
+            title={expertMode ? 'Hide expert mode' : 'Show expert mode'}
+          >
+            Expert Mode
+          </button>
+        </div>
+      )}
+      {editMode && expertMode && diagramData && cityData && (
         <ExpertPanel
+          key={themeRenderKey}
           diagramData={diagramData}
           stopsData={cityData.stopsData}
           servicesData={cityData.servicesData}
@@ -1338,6 +1684,15 @@ export default function BusDiagram() {
           appliedCells={cellOverrides}
           appliedNames={nameOverrides}
           appliedRouteNames={routeNameOverrides}
+          includeDepotTrips={includeDepotTrips}
+          towardsText={effectiveTowardsText}
+          onIncludeDepotTripsChange={setIncludeDepotTrips}
+          onTowardsTextChange={(text) =>
+            applyOverrides({
+              ...editState,
+              towards: text === defaultTowardsText ? null : text,
+            })
+          }
           onThemeChange={() => setThemeRenderKey((k) => k + 1)}
           onDataChange={({
             routes,
@@ -1345,62 +1700,24 @@ export default function BusDiagram() {
             cellOverrides: co,
             nameOverrides: no,
             routeNameOverrides: rno,
-          }) => {
-            const newRoutes = routes.length > 0 ? routes : null;
-            const newCells = co?.size > 0 ? co : null;
-            const newNames = no?.size > 0 ? no : null;
-            const newRouteNames = rno?.size > 0 ? rno : null;
-            setRouteOverrides(newRoutes);
-            setCellOverrides(newCells);
-            setNameOverrides(newNames);
-            setRouteNameOverrides(newRouteNames);
-
-            let effectiveStops = stops.length > 0 ? stops : null;
-
-            if (newRoutes && cityData && stopId) {
-              const routeObjects = newRoutes
-                .map((id) => {
-                  const inDiagram = diagramData.routes.find(
-                    (r) => r.routeId === id,
-                  );
-                  if (inDiagram) return inDiagram;
-                  const rd = cityData.servicesData[id];
-                  if (!rd) return null;
-                  const destId = Object.keys(rd).find((k) => k !== 'name');
-                  if (!destId) return null;
-                  const seq = (rd[destId][0] || []).map(String);
-                  return {
-                    routeId: id,
-                    routeName: rd.name,
-                    destinationStopId: destId,
-                    stopSequence: rd[destId][0] || [],
-                    seqForGrouping: seq,
-                    tripCount: 0,
-                  };
-                })
-                .filter(Boolean);
-
-              const recomputedStops = computeStopsForRoutes(
-                routeObjects,
-                stopId,
-                cityData.rankingData,
-                stopsRef.current,
-              );
-              effectiveStops = recomputedStops;
-            }
-
-            setStopOverrides(effectiveStops);
-
-            // Sync data overrides to URL
-            const encoded = encodeOverridesToUrl({
+            reset,
+          }) =>
+            applyOverrides({
               routes,
-              stops: effectiveStops || [],
-              cellOverrides: co,
-              nameOverrides: no,
-              routeNameOverrides: rno,
-            });
-            syncDataParam(encoded);
-          }}
+              stops,
+              cells: co,
+              names: no,
+              routeNames: rno,
+              offsets: reset ? new Map() : editState.offsets,
+              tracks: reset ? new Map() : editState.tracks,
+              branches: reset ? new Map() : editState.branches,
+              stopIcons: reset ? new Map() : editState.stopIcons,
+              towards: editState.towards,
+              // The table owns its explicit stop ordering, including stops
+              // inserted between two existing columns.
+              recomputeStops: false,
+            })
+          }
         />
       )}
     </div>

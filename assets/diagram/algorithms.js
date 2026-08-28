@@ -36,22 +36,36 @@ export const calculateRouteTripCount = (
     .reduce((sum, [, sequences]) => sum + sequences.length, 0);
 };
 
-export const findRoutesForStop = (stopId, servicesData) => {
+export const isDepotStop = (stopId, stopsData) =>
+  /depot/i.test(stopsData?.[String(stopId)]?.[2] || '');
+
+export const isDepotTripSequence = (sequence, stopsData) =>
+  sequence.length > 0 &&
+  (isDepotStop(sequence[0], stopsData) ||
+    isDepotStop(sequence[sequence.length - 1], stopsData));
+
+export const findRoutesForStop = (
+  stopId,
+  servicesData,
+  stopsData,
+  { includeDepotTrips = false } = {},
+) => {
   const norm = normalizeStopId(stopId);
   const routes = [];
   for (const [routeId, routeData] of Object.entries(servicesData)) {
     for (const [destId, sequences] of Object.entries(routeData)) {
       if (destId === 'name') continue;
-      if (
-        sequences.some(
-          (seq) => seq.includes(norm.num) || seq.includes(norm.str),
-        )
-      ) {
+      const stopSequence = sequences.find(
+        (seq) =>
+          (seq.includes(norm.num) || seq.includes(norm.str)) &&
+          (includeDepotTrips || !isDepotTripSequence(seq, stopsData)),
+      );
+      if (stopSequence) {
         routes.push({
           routeId,
           routeName: routeData.name,
           destinationStopId: destId,
-          stopSequence: sequences[0],
+          stopSequence,
         });
         break;
       }
@@ -215,25 +229,30 @@ export const createStopPositionMap = (
 
 // ── Route grouping by common forward stops ───────────────────────────────────
 
+// The stops a route still calls at from the current stop onwards, limited to
+// the stops the diagram displays.
+export const forwardStopsForRoute = (route, currentStopId, orderedSet) => {
+  const norm = normalizeStopId(currentStopId);
+  const curIdx = findStopIndex(route.stopSequence, currentStopId, norm);
+  const startIdx = curIdx === -1 ? 0 : curIdx;
+  return route.stopSequence
+    .slice(startIdx)
+    .map(String)
+    .filter((s) => orderedSet.has(s));
+};
+
 // Groups routes that share identical forward major-stop sequences into a single
 // "route group".  Each group is rendered as one horizontal line in the diagram.
-// Returns an array of { routes, forwardStops } sorted by group size (largest first).
+// Returns an array of { key, routes, forwardStops } sorted by size (largest first).
 export const groupRoutesByForwardStops = (
   routes,
   currentStopId,
   orderedStops,
 ) => {
-  const norm = normalizeStopId(currentStopId);
   const orderedSet = new Set(orderedStops);
-
-  const routeForwardStops = routes.map((route) => {
-    const curIdx = findStopIndex(route.stopSequence, currentStopId, norm);
-    const startIdx = curIdx === -1 ? 0 : curIdx;
-    return route.stopSequence
-      .slice(startIdx)
-      .map(String)
-      .filter((s) => orderedSet.has(s));
-  });
+  const routeForwardStops = routes.map((route) =>
+    forwardStopsForRoute(route, currentStopId, orderedSet),
+  );
 
   const groupMap = new Map();
   routes.forEach((route, i) => {
@@ -244,9 +263,63 @@ export const groupRoutesByForwardStops = (
     groupMap.get(key).routes.push(route);
   });
 
-  return Array.from(groupMap.values()).sort(
+  const groups = Array.from(groupMap.values()).sort(
     (a, b) => b.routes.length - a.routes.length,
   );
+  groups.forEach((g) => {
+    g.key = g.routes[0].routeId;
+  });
+  return groups;
+};
+
+// Reassigns routes to the tracks the editor dropped them on. A track is
+// identified by the route that led it in the automatic grouping, so the key
+// survives every move; an empty target means "give this route its own track".
+// The moved routes make their new track serve the union of their stops.
+export const applyTrackOverrides = (
+  routeGroups,
+  trackOverrides,
+  currentStopId,
+  orderedStops,
+) => {
+  if (!trackOverrides || trackOverrides.size === 0) return routeGroups;
+
+  const groups = routeGroups.map((g) => ({
+    key: g.key,
+    routes: [...g.routes],
+  }));
+  const solo = [];
+
+  for (const [routeId, targetKey] of trackOverrides) {
+    let moved = null;
+    for (const group of groups) {
+      const idx = group.routes.findIndex((r) => r.routeId === routeId);
+      if (idx === -1) continue;
+      [moved] = group.routes.splice(idx, 1);
+      break;
+    }
+    if (!moved) continue;
+    const target = targetKey && groups.find((g) => g.key === targetKey);
+    if (target) target.routes.push(moved);
+    else solo.push({ key: routeId, routes: [moved] });
+  }
+
+  const orderedSet = new Set(orderedStops);
+  return [...groups, ...solo]
+    .filter((g) => g.routes.length > 0)
+    .map((g) => {
+      const stops = new Set();
+      g.routes.forEach((route) => {
+        forwardStopsForRoute(route, currentStopId, orderedSet).forEach((s) =>
+          stops.add(s),
+        );
+      });
+      return {
+        key: g.key,
+        routes: g.routes,
+        forwardStops: orderedStops.filter((s) => stops.has(s)),
+      };
+    });
 };
 
 export const orderGroupsBySimilarity = (routeGroups) => {

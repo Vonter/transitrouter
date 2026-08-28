@@ -4,14 +4,16 @@ import QRCode from 'qrcode';
 import bmtcSvgUrl from 'url:../images/bmtc.svg';
 import ksrtcSvgUrl from 'url:../images/ksrtc.svg';
 import railwaysSvgUrl from 'url:../images/railways.svg';
-import metroStationSdfPath from '../images/metro-station-sdf.svg';
 import {
   getStopName,
   groupRoutesByForwardStops,
   orderGroupsBySimilarity,
+  applyTrackOverrides,
 } from './algorithms';
+import { computeSpiderLayout, fitDiagramArea } from './layout.mjs';
 import {
   SVG_WIDTH,
+  SVG_ASPECT,
   HDR1_H,
   HEADER_LOGO_X,
   HEADER_LOGO_Y,
@@ -40,14 +42,15 @@ import {
   BUS_ICON_W,
   BUS_ICON_H,
   BADGE_FONT_SIZE,
-  LABEL_SPACE,
+  DIAGRAM_TOP_PAD,
   CLUSTER_SPACING,
-  TARGET_CLUSTER_SPAN,
-  MAX_CLUSTER_SPACING,
+  CLUSTER_LABEL_BAND,
+  BRANCH_CORNER_R,
   ROUTE_LINE_START_X,
   ROUTE_AREA_END_PCT,
   ROUTE_LINE_MIN_EXTEND,
-  STOP_SPACING,
+  STOP_SPACING_MIN,
+  STOP_SPACING_MAX,
   LABEL_AREA_END_X,
   LABEL_GAP,
   LABEL_BOX_H,
@@ -58,33 +61,34 @@ import {
   PILL_W_SMALL,
   PILL_OVERHANG,
   TERMINAL_RADIUS,
-  CURRENT_PILL_X,
   CURRENT_PILL_W,
-  CURRENT_PILL_TOP_PAD,
   DIAGRAM_BOTTOM_PAD,
-  EXTRA_BOTTOM_PCT,
   LABEL_ROT,
   LABEL_FONT_SIZE,
   LABEL_CHAR_WIDTH,
   LABEL_ROW_OFFSET,
   LABEL_ICON_GAP,
-  LABEL_MAX_DIST,
   LABEL_MAX_LINE_CHARS,
   LABEL_HORIZ_GAP,
   LABEL_LINE_SPACING_EXTRA,
-  LABEL_ANCHOR_CLAMP,
+  LABEL_STACK_GAP,
+  LABEL_MAX_ROWS,
+  LABEL_POI_ICON_SIZE,
+  LABEL_POI_ICON_GAP,
   INFO_PANEL_H,
   LEGEND_INNER_W,
   LEGEND_VERT_PAD,
   LEGEND_ICON_TOP,
   LEGEND_ICON_SIZE,
   LEGEND_ICON_TEXT_GAP,
+  MAP_STOP_ICON_SIZE,
   QR_MAX_SIZE,
   QR_PAD,
   C,
   FONT,
   FONT_KN,
-} from './theme';
+} from './theme.mjs';
+import { STOP_ICON_ORDER } from './stopIcons';
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SVG icon path data — sourced from the SVG files in the project root.
@@ -173,7 +177,7 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function buildStopPoiMap(stopsData, poisData) {
+export function buildStopPoiMap(stopsData, poisData) {
   const stopPoiTypes = {};
   if (!poisData || poisData.length === 0) return stopPoiTypes;
   for (const [stopId, stopArr] of Object.entries(stopsData)) {
@@ -181,12 +185,17 @@ function buildStopPoiMap(stopsData, poisData) {
     if (sLon == null || sLat == null) continue;
     const poiMap = new Map();
     for (const poi of poisData) {
-      if (haversineDistance(sLat, sLon, poi.lat, poi.lon) <= POI_RADIUS_M) {
-        if (!poiMap.has(poi.type)) {
-          poiMap.set(poi.type, { type: poi.type, color: poi.color || '' });
-        } else if (poi.color && !poiMap.get(poi.type).color) {
-          poiMap.get(poi.type).color = poi.color;
-        }
+      const distance = haversineDistance(sLat, sLon, poi.lat, poi.lon);
+      if (distance > POI_RADIUS_M) continue;
+      const previous = poiMap.get(poi.type);
+      // A stop can sit within 500 m of stations on different metro lines. The
+      // closest station determines the line colour printed next to its label.
+      if (!previous || distance < previous.distance) {
+        poiMap.set(poi.type, {
+          type: poi.type,
+          color: poi.color || '',
+          distance,
+        });
       }
     }
     if (poiMap.size > 0) stopPoiTypes[stopId] = poiMap;
@@ -194,58 +203,79 @@ function buildStopPoiMap(stopsData, poisData) {
   return stopPoiTypes;
 }
 
+const EDITABLE_STOP_ICON_TYPES = new Set(STOP_ICON_ORDER);
+
+function applyStopIconOverrides(stopPoiTypes, stopIconOverrides) {
+  if (!stopIconOverrides?.size) return stopPoiTypes;
+  const result = { ...stopPoiTypes };
+  for (const [stopId, override] of stopIconOverrides) {
+    const detected = stopPoiTypes[stopId] || new Map();
+    const types = Array.isArray(override?.types)
+      ? override.types.filter((type) => EDITABLE_STOP_ICON_TYPES.has(type))
+      : [];
+    result[stopId] = new Map(
+      types.map((type) => {
+        const original = detected.get(type);
+        return [
+          type,
+          {
+            type,
+            color:
+              type === 'metro'
+                ? override.metroColor || original?.color || ''
+                : original?.color || '',
+          },
+        ];
+      }),
+    );
+  }
+  return result;
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // Stop label helpers
 // ══════════════════════════════════════════════════════════════════════════════
-
-// Splits a stop name into lines of at most LABEL_MAX_LINE_CHARS characters,
-// breaking only at space or "/" boundaries. Returns a single-element array for
-// short names so callers always receive an array.
-function splitLabelName(name) {
-  if (name.length <= LABEL_MAX_LINE_CHARS) return [name];
-  const words = name.split(/[\s/]+/);
-  const lines = [];
-  let current = '';
-  for (const word of words) {
-    if (!current) {
-      current = word;
-    } else if (current.length + 1 + word.length <= LABEL_MAX_LINE_CHARS) {
-      current += ' ' + word;
-    } else {
-      lines.push(current);
-      current = word;
-    }
-  }
-  if (current) lines.push(current);
-  return lines.length > 0 ? lines : [name];
-}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Badge layout helpers
 // ══════════════════════════════════════════════════════════════════════════════
 
-function badgeWidth(routeId) {
+// The text shown for a route — the editor's rename if there is one.
+function routeLabel(route) {
+  return route.displayId || route.routeId;
+}
+
+// One badge per route, in the order the routes are drawn.
+function badgeItems(routes) {
+  const seen = new Map();
+  for (const route of routes) {
+    if (!seen.has(route.routeId)) seen.set(route.routeId, routeLabel(route));
+  }
+  return [...seen].map(([routeId, label]) => ({ routeId, label }));
+}
+
+function badgeWidth(label) {
   return (
     BADGE_PADDING_H +
     BUS_ICON_W +
     BADGE_ICON_TEXT_GAP +
-    routeId.length * (BADGE_FONT_SIZE * BADGE_CHAR_SCALE) +
+    label.length * (BADGE_FONT_SIZE * BADGE_CHAR_SCALE) +
     BADGE_PADDING_H
   );
 }
 
-function layoutBadges(routeIds) {
+function layoutBadges(items) {
   const rows = [];
   let row = [],
     x = BADGE_ROW_MARGIN;
-  for (const id of routeIds) {
-    const w = badgeWidth(id);
+  for (const item of items) {
+    const w = badgeWidth(item.label);
     if (x + w > SVG_WIDTH - BADGE_ROW_MARGIN && row.length > 0) {
       rows.push(row);
       row = [];
       x = BADGE_ROW_MARGIN;
     }
-    row.push({ id, w, x });
+    row.push({ ...item, w, x });
     x += w + BADGE_INNER_GAP;
   }
   if (row.length) rows.push(row);
@@ -253,8 +283,7 @@ function layoutBadges(routeIds) {
 }
 
 function headerHeight(routes) {
-  const ids = [...new Set(routes.map((r) => r.routeId))];
-  const rows = layoutBadges(ids);
+  const rows = layoutBadges(badgeItems(routes));
   return (
     HDR1_H +
     BADGE_TOP_PAD +
@@ -273,7 +302,10 @@ function packClusterLabels(cluster) {
     const MAX_LABEL_W = LABEL_AREA_END_X - 2;
     return Math.min(
       MAX_LABEL_W,
-      Math.max(20, Math.ceil(r.routeId.length * 7.5 + 10)),
+      Math.max(
+        20,
+        LABEL_BOX_PAD * 2 + Math.ceil(routeLabel(r).length * LABEL_BOX_CHAR_W),
+      ),
     );
   }
 
@@ -315,58 +347,233 @@ function packClusterLabels(cluster) {
   });
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Stop label overlap avoidance — assigns each label to an above or below row
-// so that labels don't overlap after ±30° rotation.  Labels alternate between
-// above and below to distribute them evenly on both sides of the stop icons.
-// ══════════════════════════════════════════════════════════════════════════════
+// OpenFreeMap's "bright" style — street-level detail that reads like the
+// printed reference artwork without needing a self-hosted basemap.
+const BASEMAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/bright';
+const BASEMAP_ZOOM = 16;
 
-function layoutStopLabels(labelData) {
-  const COS = Math.abs(Math.cos((LABEL_ROT * Math.PI) / 180)); // ≈ 0.866
-  const sorted = [...labelData].sort((a, b) => a.x - b.x);
-  const GAP = LABEL_HORIZ_GAP;
+// Basemap detail that competes with the diagram's own stops, icons and labels.
+const HIDDEN_BASEMAP_LAYERS = [
+  // Bus stops, stations and every other point of interest
+  'poi_r20',
+  'poi_r7',
+  'poi_r1',
+  'poi_transit',
+  // Landuse polygons (parks and other landcover stay — the reference keeps them)
+  'landuse-residential',
+  'landuse-suburb',
+  'landuse-commercial',
+  'landuse-industrial',
+  'landuse-cemetery',
+  'landuse-hospital',
+  'landuse-school',
+  'landuse-railway',
+  // Administrative boundaries
+  'boundary_2',
+  'boundary_3',
+  'boundary_disputed',
+  // Footways and paths, and their names
+  'highway-path',
+  'highway-name-path',
+  'highway-name-minor',
+  'tunnel-path',
+  'bridge-path',
+  'bridge-path-casing',
+  // Offset base of the style's fake-3D buildings; `building-top` is flattened
+  // into a plain footprint instead.
+  'building',
+];
 
-  // All labels go above their stop marker (bottom-left → top-right orientation).
-  // MAX_ROWS is derived from LABEL_MAX_DIST so labels never exceed 40 px from
-  // their stop icon: floor((40 - 5) / 11) = 3, giving rows 0, 1, 2, 3.
-  const MAX_ROWS = Math.floor(
-    (LABEL_MAX_DIST - LABEL_ICON_GAP) / LABEL_ROW_OFFSET,
+// Other bus stops are drawn from the city's own stops data rather than the
+// basemap's POIs, so the map agrees with the diagram beside it. Only the stops
+// that land inside the captured viewport are handed to the map.
+const EARTH_METRES_PER_DEGREE = 111320;
+
+function visibleStopPoints(stopsData, lng, lat, w, h) {
+  const latRad = (lat * Math.PI) / 180;
+  const metresPerPixel = (156543.03392 * Math.cos(latRad)) / 2 ** BASEMAP_ZOOM;
+  // One icon of margin so markers straddling the edge still get drawn.
+  const halfW = (w / 2 + MAP_STOP_ICON_SIZE) * metresPerPixel;
+  const halfH = (h / 2 + MAP_STOP_ICON_SIZE) * metresPerPixel;
+  const lngSpan = halfW / (EARTH_METRES_PER_DEGREE * Math.cos(latRad));
+  const latSpan = halfH / EARTH_METRES_PER_DEGREE;
+
+  const points = [];
+  for (const stop of Object.values(stopsData)) {
+    const [sLng, sLat] = stop;
+    if (sLng == null || sLat == null) continue;
+    if (Math.abs(sLng - lng) > lngSpan || Math.abs(sLat - lat) > latSpan)
+      continue;
+    points.push([sLng, sLat]);
+  }
+  return points;
+}
+
+// The blue rounded square the printed legend uses for a bus stop. Drawn at
+// twice the display size so it stays crisp on high-density screens.
+const STOP_ICON_PIXEL_RATIO = 2;
+
+function roundedSquareIcon(size, color) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const r = size * 0.17;
+  ctx.beginPath();
+  ctx.moveTo(r, 0);
+  ctx.arcTo(size, 0, size, size, r);
+  ctx.arcTo(size, size, 0, size, r);
+  ctx.arcTo(0, size, 0, 0, r);
+  ctx.arcTo(0, 0, size, 0, r);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  return ctx.getImageData(0, 0, size, size);
+}
+
+function addStopMarkers(map, points) {
+  if (!points.length) return;
+  map.addImage(
+    'diagram-bus-stop',
+    roundedSquareIcon(
+      Math.round(MAP_STOP_ICON_SIZE * STOP_ICON_PIXEL_RATIO),
+      C.header1,
+    ),
+    { pixelRatio: STOP_ICON_PIXEL_RATIO },
   );
-
-  const rowEndX = [];
-  const tryPlace = (row, start, hSpan) => {
-    while (rowEndX.length <= row) rowEndX.push(-Infinity);
-    if (start >= rowEndX[row] + GAP) {
-      rowEndX[row] = start + hSpan;
-      return true;
-    }
-    return false;
-  };
-
-  return sorted.map((item) => {
-    const longestLineLen = item.lines
-      ? Math.max(...item.lines.map((l) => l.length))
-      : item.name.length;
-    const iconW = (item.poiIconCount || 0) * (LABEL_FONT_SIZE + 2);
-    const textW = longestLineLen * LABEL_CHAR_WIDTH + iconW;
-    const hSpan = textW * COS;
-    const start = item.x;
-
-    for (let r = 0; r <= MAX_ROWS; r++) {
-      if (tryPlace(r, start, hSpan)) return { ...item, row: r, below: false };
-    }
-    // Fallback: clamp to the furthest allowed row to honour LABEL_MAX_DIST
-    tryPlace(MAX_ROWS, start, hSpan);
-    return { ...item, row: MAX_ROWS, below: false };
+  map.addSource('diagram-bus-stops', {
+    type: 'geojson',
+    data: {
+      type: 'FeatureCollection',
+      features: points.map((coordinates) => ({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Point', coordinates },
+      })),
+    },
+  });
+  // No text-field: the markers carry no labels, as in the reference artwork.
+  map.addLayer({
+    id: 'diagram-bus-stops',
+    type: 'symbol',
+    source: 'diagram-bus-stops',
+    layout: {
+      'icon-image': 'diagram-bus-stop',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+    },
   });
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Async helpers — map capture and QR code generation
-// ══════════════════════════════════════════════════════════════════════════════
+// Match the main app's rail-path treatment: a light casing beneath the route
+// and the GeoJSON feature's own `stroke` colour on top. Railway geometry is
+// included too when a city supplies it, while metro lines retain their line
+// colour and the heavier white casing used on the primary map.
+function addRailLayers(map, railData) {
+  if (!railData?.features?.length) return;
+  map.addSource('diagram-rail', { type: 'geojson', data: railData });
+  const lineFilter = [
+    'all',
+    ['==', ['geometry-type'], 'LineString'],
+    ['has', 'stroke'],
+  ];
+  const lineLayout = { 'line-join': 'round', 'line-cap': 'round' };
 
-function captureMapAsDataUri(lng, lat, w, h) {
-  return new Promise((resolve) => {
+  map.addLayer({
+    id: 'diagram-rail-case',
+    type: 'line',
+    source: 'diagram-rail',
+    filter: lineFilter,
+    layout: lineLayout,
+    paint: {
+      'line-color': [
+        'match',
+        ['get', 'mode'],
+        'metro',
+        '#fff',
+        'monorail',
+        '#fff',
+        ['get', 'stroke'],
+      ],
+      'line-width': ['match', ['get', 'mode'], 'monorail', 0.85, 'rail', 5, 9],
+      'line-opacity': [
+        'match',
+        ['get', 'mode'],
+        'monorail',
+        0.5,
+        'rail',
+        0.75,
+        0.5,
+      ],
+    },
+  });
+
+  map.addLayer({
+    id: 'diagram-rail-path',
+    type: 'line',
+    source: 'diagram-rail',
+    filter: lineFilter,
+    layout: lineLayout,
+    paint: {
+      'line-color': ['get', 'stroke'],
+      'line-width': 4,
+      'line-opacity': [
+        'match',
+        ['get', 'mode'],
+        'monorail',
+        1,
+        'rail',
+        0.01,
+        0.5,
+      ],
+    },
+  });
+
+  map.addLayer({
+    id: 'diagram-rail-dots',
+    type: 'line',
+    source: 'diagram-rail',
+    filter: ['all', ...lineFilter.slice(1), ['==', ['get', 'mode'], 'rail']],
+    layout: { ...lineLayout, 'line-cap': 'butt' },
+    paint: {
+      'line-color': ['get', 'stroke'],
+      'line-width': 3,
+      'line-opacity': 1,
+      'line-dasharray': [3, 3],
+    },
+  });
+}
+
+function simplifyBasemap(map) {
+  for (const id of HIDDEN_BASEMAP_LAYERS) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
+  }
+  if (map.getLayer('building-top')) {
+    map.setPaintProperty('building-top', 'fill-translate', [0, 0]);
+    map.setPaintProperty('building-top', 'fill-opacity', 1);
+  }
+  // The bright style already groups tertiary, secondary, primary and trunk
+  // labels in this layer. Keep only that layer and reject symbols whose full
+  // label cannot fit inside the captured map viewport.
+  for (const id of ['highway-name-major']) {
+    if (!map.getLayer(id)) continue;
+    map.setLayoutProperty(id, 'symbol-avoid-edges', true);
+    map.setLayoutProperty(id, 'text-padding', 4);
+  }
+}
+
+// Rendering a basemap spins up a whole MapLibre instance, and the diagram
+// re-renders on every edit, so both async assets are memoised per stop.
+const mapUriCache = new Map();
+const qrUriCache = new Map();
+
+function captureMapAsDataUri(lng, lat, w, h, stopPoints = [], railData = null) {
+  const cacheKey = `${lng},${lat},${w},${h},${MAP_STOP_ICON_SIZE},${railData?.features?.length || 0},${stopPoints
+    .map(([x, y]) => `${x}:${y}`)
+    .join(';')}`;
+  const cached = mapUriCache.get(cacheKey);
+  if (cached) return cached;
+
+  const pending = new Promise((resolve) => {
     const div = document.createElement('div');
     Object.assign(div.style, {
       position: 'fixed',
@@ -380,9 +587,9 @@ function captureMapAsDataUri(lng, lat, w, h) {
 
     const map = new maplibregl.Map({
       container: div,
-      style: '/data/style.json',
+      style: BASEMAP_STYLE_URL,
       center: [lng, lat],
-      zoom: 16,
+      zoom: BASEMAP_ZOOM,
       preserveDrawingBuffer: true,
       interactive: false,
       renderWorldCopies: false,
@@ -400,46 +607,10 @@ function captureMapAsDataUri(lng, lat, w, h) {
 
     const timer = setTimeout(() => finish(null), 8000);
 
-    map.once('load', async () => {
-      try {
-        await new Promise((resolve, reject) => {
-          const dpr = window.devicePixelRatio || 1;
-          const img = new Image();
-          img.onload = () => {
-            map.addImage('metro-station', img, {
-              pixelRatio: (60 / img.naturalWidth) * dpr,
-              sdf: true,
-            });
-            resolve();
-          };
-          img.onerror = reject;
-          img.width = img.height = 60 * dpr;
-          img.src = metroStationSdfPath;
-        });
-      } catch {
-        /* skip if image fails */
-      }
-
-      const style = map.getStyle();
-      for (const layer of style.layers) {
-        const isLabel =
-          layer.type === 'symbol' && layer.id !== 'poi_subway_entrance';
-        const isBuilding =
-          layer['source-layer'] === 'building' || layer.id.includes('building');
-        const isLanduse =
-          layer['source-layer'] === 'landuse' ||
-          layer['source-layer'] === 'landcover' ||
-          layer.id.includes('landuse') ||
-          layer.id.includes('landcover');
-        if (isLabel || isBuilding || isLanduse) {
-          try {
-            map.setLayoutProperty(layer.id, 'visibility', 'none');
-          } catch {
-            /* skip */
-          }
-        }
-      }
-
+    map.once('load', () => {
+      simplifyBasemap(map);
+      addRailLayers(map, railData);
+      addStopMarkers(map, stopPoints);
       map.once('idle', () => {
         clearTimeout(timer);
         try {
@@ -449,19 +620,26 @@ function captureMapAsDataUri(lng, lat, w, h) {
         }
       });
     });
+  }).then((uri) => {
+    // A failed capture shouldn't be cached — the next render can retry.
+    if (!uri) mapUriCache.delete(cacheKey);
+    return uri;
   });
+
+  mapUriCache.set(cacheKey, pending);
+  return pending;
 }
 
-async function generateQrDataUri(url) {
-  try {
-    return await QRCode.toDataURL(url, {
-      width: 200,
-      margin: 0,
-      color: { dark: '#000000', light: '#ffffff' },
-    });
-  } catch {
-    return null;
-  }
+function generateQrDataUri(url) {
+  const cached = qrUriCache.get(url);
+  if (cached) return cached;
+  const pending = QRCode.toDataURL(url, {
+    width: 200,
+    margin: 0,
+    color: { dark: '#000000', light: '#ffffff' },
+  }).catch(() => null);
+  qrUriCache.set(url, pending);
+  return pending;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -520,7 +698,7 @@ function drawHeader(
   const englishName = stopData[2] || String(stopId);
   const kannadaName = stopData[4] || '';
 
-  const g = svg.append('g').attr('id', 'header');
+  const g = svg.append('g').attr('id', 'header').attr('data-stop-id', stopId);
 
   g.append('rect')
     .attr('width', SVG_WIDTH)
@@ -554,6 +732,7 @@ function drawHeader(
       .attr('fill', C.white)
       .text(displayKn);
     g.append('text')
+      .attr('class', 'stop-name-text')
       .attr('x', nameX)
       .attr('y', HDR_KN_EN_Y)
       .attr('font-family', FONT)
@@ -564,6 +743,7 @@ function drawHeader(
       .text(displayName);
     if (towardsLine) {
       g.append('text')
+        .attr('class', 'towards-text')
         .attr('x', nameX)
         .attr('y', HDR_KN_TOWARDS_Y)
         .attr('font-family', FONT)
@@ -574,6 +754,7 @@ function drawHeader(
     }
   } else {
     g.append('text')
+      .attr('class', 'stop-name-text')
       .attr('x', nameX)
       .attr('y', HDR_EN_Y)
       .attr('font-family', FONT)
@@ -583,6 +764,7 @@ function drawHeader(
       .text(displayName);
     if (towardsLine) {
       g.append('text')
+        .attr('class', 'towards-text')
         .attr('x', nameX)
         .attr('y', HDR_EN_TOWARDS_Y)
         .attr('font-family', FONT)
@@ -604,14 +786,15 @@ function drawHeader(
     .attr('height', hdrH - HDR1_H)
     .attr('fill', C.header2);
 
-  const ids = [...new Set(routes.map((r) => r.routeId))];
-  const badgeRows = layoutBadges(ids);
+  const badgeRows = layoutBadges(badgeItems(routes));
   let badgeY = BADGE_TOP_PAD;
 
   badgeRows.forEach((row) => {
-    row.forEach(({ id, w, x: bx }) => {
+    row.forEach(({ routeId, label, w, x: bx }) => {
       const bg = badgesG
         .append('g')
+        .attr('class', 'route-badge')
+        .attr('data-route-id', routeId)
         .attr('transform', `translate(${bx},${badgeY})`);
       bg.append('rect')
         .attr('width', w)
@@ -628,7 +811,7 @@ function drawHeader(
         .attr('font-size', BADGE_FONT_SIZE)
         .attr('font-weight', 700)
         .attr('fill', C.primary)
-        .text(id);
+        .text(label);
     });
     badgeY += BADGE_H + BADGE_GAP_X;
   });
@@ -638,191 +821,148 @@ function drawHeader(
 // Section: Route diagram (cluster-based rendering with branch connectors)
 // ══════════════════════════════════════════════════════════════════════════════
 
-function getContiguousSegments(sorted) {
-  if (!sorted.length) return [];
-  const segs = [];
-  let start = sorted[0],
-    prev = sorted[0];
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i] === prev + 1) {
-      prev = sorted[i];
-    } else {
-      segs.push([start, prev]);
-      start = prev = sorted[i];
-    }
-  }
-  segs.push([start, prev]);
-  return segs;
+// Theme values the shared layout module needs. Read fresh on every render so
+// live tweaks from the expert panel take effect.
+function layoutTheme(rowMinGaps) {
+  return {
+    ROW_PITCH: CLUSTER_SPACING,
+    ROW_MIN_GAPS: rowMinGaps,
+    LABEL_BAND: CLUSTER_LABEL_BAND,
+    MIN_STOP_SPACING: STOP_SPACING_MIN,
+    MAX_STOP_SPACING: STOP_SPACING_MAX,
+    START_X: ROUTE_LINE_START_X,
+    AREA_END_X: SVG_WIDTH * ROUTE_AREA_END_PCT,
+    MIN_EXTEND: ROUTE_LINE_MIN_EXTEND,
+    PILL_W: PILL_W_SMALL,
+    PILL_OVERHANG,
+    CORNER_R: BRANCH_CORNER_R,
+    TOP_PAD: DIAGRAM_TOP_PAD,
+    BOTTOM_PAD: DIAGRAM_BOTTOM_PAD,
+    LABEL_ROT,
+    LABEL_FONT_SIZE,
+    LABEL_CHAR_WIDTH,
+    LABEL_LINE_SPACING: LABEL_FONT_SIZE + LABEL_LINE_SPACING_EXTRA,
+    LABEL_MAX_LINE_CHARS,
+    LABEL_ICON_GAP,
+    LABEL_ROW_OFFSET,
+    LABEL_HORIZ_GAP,
+    LABEL_STACK_GAP,
+    LABEL_MAX_ROWS,
+    POI_ICON_SIZE: LABEL_POI_ICON_SIZE,
+    POI_ICON_GAP: LABEL_POI_ICON_GAP,
+  };
 }
 
-function drawRouteDiagram(
-  svg,
+// Half-heights of each track's stack of route ID boxes, so neighbouring tracks
+// can be pushed apart just enough for the boxes to clear each other.
+function badgeStackHalfHeights(routeGroups) {
+  return routeGroups.map((group) => {
+    const rows =
+      Math.max(0, ...packClusterLabels(group.routes).map((p) => p.row)) + 1;
+    return (rows * LABEL_BOX_H + (rows - 1) * 2) / 2;
+  });
+}
+
+export function buildRouteLayout(
   routes,
   orderedStops,
   currentStopId,
   stopsData,
+  stopPoiTypes = {},
+  {
+    trackOverrides,
+    branchOverrides,
+    labelOffsets,
+    preserveRouteOrder = false,
+  } = {},
+) {
+  const grouped = applyTrackOverrides(
+    groupRoutesByForwardStops(routes, currentStopId, orderedStops),
+    trackOverrides,
+    currentStopId,
+    orderedStops,
+  );
+  const routeGroups = preserveRouteOrder
+    ? grouped.sort((a, b) => {
+        const indexOf = (group) =>
+          Math.min(...group.routes.map((r) => routes.indexOf(r)));
+        return indexOf(a) - indexOf(b);
+      })
+    : orderGroupsBySimilarity(grouped);
+  const halves = badgeStackHalfHeights(routeGroups);
+  const rowMinGaps = halves
+    .slice(0, -1)
+    .map((h, i) => Math.ceil(h + halves[i + 1] + 2));
+
+  return computeSpiderLayout({
+    routeGroups,
+    orderedStops,
+    currentStopId,
+    getName: (sid) => getStopName(sid, stopsData),
+    getIconCount: (sid) => stopPoiTypes[sid]?.size || 0,
+    getLabelOffset: labelOffsets ? (sid) => labelOffsets.get(sid) : null,
+    getBranchConfig: branchOverrides
+      ? (trackKey) => branchOverrides.get(trackKey)
+      : null,
+    theme: layoutTheme(rowMinGaps),
+  });
+}
+
+function drawRouteDiagram(
+  svg,
+  layout,
+  currentStopId,
+  stopsData,
   yBase,
-  extraTopPad = 0,
-  extraBottomPad = 0,
+  fit,
   stopPoiTypes = {},
   svgInfos = {},
+  interactive = false,
 ) {
-  const routeGroups = orderGroupsBySimilarity(
-    groupRoutesByForwardStops(routes, currentStopId, orderedStops),
-  );
-  const nGroups = routeGroups.length;
-  if (nGroups === 0) return 0;
-
-  // Build per-group stop sets and identify which groups each stop belongs to
-  const stopGroupIndices = {};
-  routeGroups.forEach((group, gi) => {
-    group.forwardStops.forEach((sid) => {
-      if (sid === currentStopId) return;
-      (stopGroupIndices[sid] ??= new Set()).add(gi);
-    });
-  });
-
-  // Identify terminal stop per group (last forward stop)
-  const terminalGroupMap = new Map();
-  routeGroups.forEach((group, gi) => {
-    const fs = group.forwardStops.filter((s) => s !== currentStopId);
-    if (fs.length > 0) {
-      const last = fs[fs.length - 1];
-      if (!terminalGroupMap.has(last)) terminalGroupMap.set(last, new Set());
-      terminalGroupMap.get(last).add(gi);
-    }
-  });
-
-  const displayedStops = orderedStops.filter(
-    (sid) => sid !== currentStopId && stopGroupIndices[sid]?.size > 0,
-  );
-
-  // Merge same-name stops: stops with identical names share one column.
-  const nameToRep = new Map();
-  const stopToRep = new Map();
-  displayedStops.forEach((sid) => {
-    const name = getStopName(sid, stopsData);
-    if (!nameToRep.has(name)) nameToRep.set(name, sid);
-    stopToRep.set(sid, nameToRep.get(name));
-  });
-
-  // DAG-based column assignment using representatives for same-name stops.
-  const displayedSet = new Set(displayedStops);
-  const repColumn = new Map();
-  displayedStops.forEach((sid) => repColumn.set(stopToRep.get(sid), 0));
-
-  let colChanged = true;
-  while (colChanged) {
-    colChanged = false;
-    routeGroups.forEach((group) => {
-      const fs = group.forwardStops.filter(
-        (s) => s !== currentStopId && displayedSet.has(s),
-      );
-      for (let i = 1; i < fs.length; i++) {
-        const repPrev = stopToRep.get(fs[i - 1]);
-        const repCur = stopToRep.get(fs[i]);
-        if (repPrev === repCur) continue;
-        const needed = repColumn.get(repPrev) + 1;
-        if (needed > repColumn.get(repCur)) {
-          repColumn.set(repCur, needed);
-          colChanged = true;
-        }
-      }
-    });
-  }
-
-  const stopColumn = new Map();
-  displayedStops.forEach((sid) =>
-    stopColumn.set(sid, repColumn.get(stopToRep.get(sid))),
-  );
-
-  const maxCol = Math.max(0, ...stopColumn.values());
-  const availableW = SVG_WIDTH * ROUTE_AREA_END_PCT - ROUTE_LINE_START_X;
-  const colSpacing =
-    maxCol > 0 ? Math.floor(availableW / (maxCol + 1)) : STOP_SPACING;
-
-  const stopXMap = {};
-  displayedStops.forEach((sid) => {
-    stopXMap[sid] = ROUTE_LINE_START_X + colSpacing * (stopColumn.get(sid) + 1);
-  });
-
-  // Compute group spacing (vertical distance between route group lines)
-  const maxLabelRows = Math.max(
-    1,
-    ...routeGroups.map((group) => {
-      const packed = packClusterLabels(group.routes);
-      return Math.max(0, ...packed.map((p) => p.row)) + 1;
-    }),
-  );
-  const labelVerticalExtent = LABEL_MAX_DIST + LABEL_FONT_SIZE + 4;
-  const minSpacing = Math.max(
-    CLUSTER_SPACING,
-    maxLabelRows * (LABEL_BOX_H + 2) + 6,
-    labelVerticalExtent,
-  );
-  const effectiveGroupSpacing =
-    nGroups > 1
-      ? Math.max(
-          minSpacing,
-          Math.min(
-            MAX_CLUSTER_SPACING,
-            Math.round(TARGET_CLUSTER_SPAN / (nGroups - 1)),
-          ),
-        )
-      : minSpacing;
-
-  const groupY = (i) => LABEL_SPACE + extraTopPad + i * effectiveGroupSpacing;
-
-  const naturalH =
-    LABEL_SPACE + (nGroups - 1) * effectiveGroupSpacing + DIAGRAM_BOTTOM_PAD;
-  const totalH = naturalH + 2 * extraTopPad + extraBottomPad;
-
   const g = svg
     .append('g')
     .attr('id', 'route-diagram')
-    .attr('transform', `translate(0,${yBase})`);
-  g.append('rect')
-    .attr('width', SVG_WIDTH)
-    .attr('height', totalH)
-    .attr('fill', C.white);
+    .attr(
+      'transform',
+      `translate(${fit.offsetX},${yBase + fit.offsetY}) scale(${fit.scale})`,
+    );
+
+  if (!layout) return;
 
   const linesG = g.append('g').attr('id', 'group-lines');
   const pillsG = g.append('g').attr('id', 'stop-pills');
   const heroG = g.append('g').attr('id', 'current-stop-pill');
   const labelsG = g.append('g').attr('id', 'stop-labels');
 
-  // ── Route group lines and route label boxes ─────────────────────────────────
+  // ── Route group tracks and their route ID label boxes ───────────────────────
 
-  routeGroups.forEach((group, gi) => {
-    const gy = groupY(gi);
-
-    let maxX = ROUTE_LINE_START_X + ROUTE_LINE_MIN_EXTEND;
-    group.forwardStops.forEach((sid) => {
-      if (sid === currentStopId) return;
-      const x = stopXMap[sid];
-      if (x !== undefined) maxX = Math.max(maxX, x);
-    });
-
+  layout.tracks.forEach((track) => {
     linesG
-      .append('line')
-      .attr('x1', ROUTE_LINE_START_X)
-      .attr('y1', gy)
-      .attr('x2', maxX)
-      .attr('y2', gy)
+      .append('path')
+      .attr('class', 'route-track')
+      .attr('data-track-key', track.key)
+      .attr('data-track-y', track.labelY)
+      .attr('data-branch-angle', track.branch.angle)
+      .attr('data-branch-length', track.branch.length)
+      .attr('d', track.d)
+      .attr('fill', 'none')
       .attr('stroke', C.primary)
-      .attr('stroke-width', 4)
-      .attr('stroke-linecap', 'round');
+      .attr('stroke-width', 4);
 
-    // Route ID label boxes (left side)
-    const packed = packClusterLabels(group.routes);
+    const packed = packClusterLabels(track.routes);
     const numRows = Math.max(0, ...packed.map((p) => p.row)) + 1;
     const totalLabelH = numRows * LABEL_BOX_H + (numRows - 1) * 2;
-    const labelStartY = gy - totalLabelH / 2;
+    const labelStartY = track.labelY - totalLabelH / 2;
 
     packed.forEach(({ route, x, w, row }) => {
       const labelY = labelStartY + row * (LABEL_BOX_H + 2);
+      const chip = linesG
+        .append('g')
+        .attr('class', 'route-chip')
+        .attr('data-route-id', route.routeId)
+        .attr('data-track-key', track.key);
 
-      linesG
+      chip
         .append('rect')
         .attr('x', x)
         .attr('y', labelY)
@@ -832,13 +972,14 @@ function drawRouteDiagram(
         .attr('fill', C.primary)
         .attr('filter', 'url(#ds)');
 
-      const maxChars = Math.floor((w - LABEL_BOX_PAD) / LABEL_BOX_CHAR_W);
+      const text = routeLabel(route);
+      const maxChars = Math.floor((w - LABEL_BOX_PAD * 2) / LABEL_BOX_CHAR_W);
       const label =
-        route.routeId.length > maxChars
-          ? route.routeId.slice(0, Math.max(1, maxChars - 1)) + '\u2026'
-          : route.routeId;
+        text.length > maxChars
+          ? text.slice(0, Math.max(1, maxChars - 1)) + '…'
+          : text;
 
-      linesG
+      chip
         .append('text')
         .attr('x', x + w / 2)
         .attr('y', labelY + LABEL_BOX_H / 2)
@@ -854,111 +995,46 @@ function drawRouteDiagram(
     });
   });
 
-  // ── Merge same-name stops for pill rendering ────────────────────────────────
-  // Stops sharing a name (and thus X position) are drawn as one combined pill.
-  const mergedGroupIndices = {};
-  const mergedTerminalMap = new Map();
-  const drawnReps = new Set();
+  // ── Stop markers — a pill spanning every track that serves the stop, with a
+  //    dot on each track that terminates there. ─────────────────────────────────
 
-  displayedStops.forEach((sid) => {
-    const rep = stopToRep.get(sid);
-    if (!mergedGroupIndices[rep]) mergedGroupIndices[rep] = new Set();
-    const gs = stopGroupIndices[sid];
-    if (gs) gs.forEach((gi) => mergedGroupIndices[rep].add(gi));
-    const tg = terminalGroupMap.get(sid);
-    if (tg) {
-      if (!mergedTerminalMap.has(rep)) mergedTerminalMap.set(rep, new Set());
-      tg.forEach((gi) => mergedTerminalMap.get(rep).add(gi));
-    }
-  });
+  layout.markers.forEach((m) => {
+    pillsG
+      .append('rect')
+      .attr('data-stop-id', m.rep)
+      .attr('data-stop-name', m.name)
+      .attr('x', m.x - m.width / 2)
+      .attr('y', m.top)
+      .attr('width', m.width)
+      .attr('height', m.bottom - m.top)
+      .attr('rx', m.width / 2)
+      .attr('fill', C.white)
+      .attr('stroke', C.pillStroke)
+      .attr('stroke-width', 1)
+      .append('title')
+      .text(m.name);
 
-  // ── Stop marker pills ────────────────────────────────────────────────────────
-  // All non-terminal stops get a uniform pill spanning their contiguous groups.
-  // Terminal stops → filled circle.
-
-  displayedStops.forEach((sid) => {
-    const rep = stopToRep.get(sid);
-    if (drawnReps.has(rep)) return;
-    drawnReps.add(rep);
-
-    const groupSet = mergedGroupIndices[rep];
-    if (!groupSet || groupSet.size === 0) return;
-
-    const x = stopXMap[sid];
-    if (x === undefined) return;
-    const sorted = Array.from(groupSet).sort((a, b) => a - b);
-    const segs = getContiguousSegments(sorted);
-    const terminalGroups = mergedTerminalMap.get(rep);
-    segs.forEach(([first, last]) => {
-      const runs = [];
-      let runStart = first;
-      let runIsTerminal = terminalGroups?.has(first) ?? false;
-      for (let gi = first + 1; gi <= last; gi++) {
-        const giIsTerminal = terminalGroups?.has(gi) ?? false;
-        if (giIsTerminal !== runIsTerminal) {
-          runs.push({
-            start: runStart,
-            end: gi - 1,
-            isTerminal: runIsTerminal,
-          });
-          runStart = gi;
-          runIsTerminal = giIsTerminal;
-        }
-      }
-      runs.push({ start: runStart, end: last, isTerminal: runIsTerminal });
-
-      runs.forEach(({ start, end, isTerminal }) => {
-        if (isTerminal) {
-          if (start !== end) {
-            pillsG
-              .append('line')
-              .attr('x1', x)
-              .attr('y1', groupY(start))
-              .attr('x2', x)
-              .attr('y2', groupY(end))
-              .attr('stroke', C.primary)
-              .attr('stroke-width', 2);
-          }
-          for (let gi = start; gi <= end; gi++) {
-            pillsG
-              .append('circle')
-              .attr('cx', x)
-              .attr('cy', groupY(gi))
-              .attr('r', TERMINAL_RADIUS)
-              .attr('fill', C.primary)
-              .append('title')
-              .text(getStopName(sid, stopsData));
-          }
-        } else {
-          const y1 = groupY(start) - PILL_OVERHANG;
-          const y2 = groupY(end) + PILL_OVERHANG;
-          pillsG
-            .append('rect')
-            .attr('x', x - PILL_W_SMALL / 2)
-            .attr('y', y1)
-            .attr('width', PILL_W_SMALL)
-            .attr('height', y2 - y1)
-            .attr('rx', PILL_W_SMALL / 2)
-            .attr('fill', C.white)
-            .attr('stroke', C.pillStroke)
-            .attr('stroke-width', 1)
-            .append('title')
-            .text(getStopName(sid, stopsData));
-        }
-      });
+    m.dots.forEach((dot) => {
+      pillsG
+        .append('circle')
+        .attr('cx', dot.x)
+        .attr('cy', dot.y)
+        .attr('r', TERMINAL_RADIUS)
+        .attr('fill', C.primary);
     });
   });
 
-  // ── Current-stop pill (spans all group rows) ────────────────────────────────
+  // ── Current-stop pill (spans every track at the start of the diagram) ────────
 
-  const pillTop = groupY(0) - CURRENT_PILL_TOP_PAD;
-  const pillBottom = groupY(nGroups - 1) + PILL_OVERHANG;
+  const pill = layout.currentPill;
   heroG
     .append('rect')
-    .attr('x', CURRENT_PILL_X)
-    .attr('y', pillTop)
+    .attr('data-stop-id', currentStopId)
+    .attr('data-stop-name', getStopName(currentStopId, stopsData))
+    .attr('x', ROUTE_LINE_START_X - CURRENT_PILL_W / 2)
+    .attr('y', pill.y)
     .attr('width', CURRENT_PILL_W)
-    .attr('height', pillBottom - pillTop)
+    .attr('height', pill.height)
     .attr('rx', CURRENT_PILL_W / 2)
     .attr('fill', C.white)
     .attr('stroke', C.primary)
@@ -966,149 +1042,122 @@ function drawRouteDiagram(
     .append('title')
     .text(getStopName(currentStopId, stopsData));
 
-  // ── Stop labels — rotated, with overlap avoidance ────────────────────────────
-  // One label per contiguous pill segment so that separate pills for the same
-  // stop each get their own visible name.
+  // ── Stop labels — rotated, nudged clear of their neighbours ─────────────────
+  // Interchange icons sit between the marker and the text so they read as
+  // belonging to the stop rather than to the end of its name.
 
-  const rawLabels = [];
-  const drawnLabelReps = new Set();
+  function drawPoiIcons(parent, poiMap, x, y) {
+    const size = LABEL_POI_ICON_SIZE;
+    let iconX = x;
+    for (const type of STOP_ICON_ORDER) {
+      if (!poiMap.has(type)) continue;
+      const poiInfo = poiMap.get(type);
+      const ig = parent
+        .append('g')
+        .attr('transform', `translate(${iconX},${y})`);
 
-  displayedStops.forEach((sid) => {
-    const rep = stopToRep.get(sid);
-    if (drawnLabelReps.has(rep)) return;
-    drawnLabelReps.add(rep);
+      if (type === 'metro') {
+        const sg = ig.append('g').attr('transform', `scale(${size / 10})`);
+        const rawColor = poiInfo.color || C.primary;
+        const bgColor =
+          rawColor === '#ffff00' || rawColor === 'yellow'
+            ? '#FFEA00'
+            : rawColor;
+        sg.append('rect')
+          .attr('x', 0.278)
+          .attr('y', 0.278)
+          .attr('width', 9.444)
+          .attr('height', 9.444)
+          .attr('rx', 0.833)
+          .attr('fill', bgColor);
+        sg.append('path').attr('d', PATH_METRO_LETTER).attr('fill', C.white);
+      } else if (type === 'railway') {
+        insertInlineSvg(ig, svgInfos.railSvgInfo, 0, 0, size, size);
+      } else if (type === 'bus') {
+        insertInlineSvg(ig, svgInfos.bmtcSvgInfo, 0, 0, size, size);
+      } else if (type === 'airport') {
+        const sg = ig.append('g').attr('transform', `scale(${size / 10})`);
+        sg.append('rect')
+          .attr('x', 0.278)
+          .attr('y', 0.278)
+          .attr('width', 9.444)
+          .attr('height', 9.444)
+          .attr('rx', 4.722)
+          .attr('fill', C.white)
+          .attr('stroke', C.primary)
+          .attr('stroke-width', 0.556);
+        sg.append('path').attr('d', PATH_AIRPORT_PLANE).attr('fill', C.primary);
+      }
+      iconX += size + LABEL_POI_ICON_GAP;
+    }
+  }
 
-    const name = getStopName(sid, stopsData);
-    const x = stopXMap[sid];
-    const groupSet = mergedGroupIndices[rep] || stopGroupIndices[sid];
-    if (!groupSet || groupSet.size === 0) return;
-
-    const sorted = Array.from(groupSet).sort((a, b) => a - b);
-    const segs = getContiguousSegments(sorted);
-    const terminalGroups = mergedTerminalMap.get(rep);
-    const lines = splitLabelName(name);
-
-    segs.forEach(([first]) => {
-      const isTermStop = terminalGroups?.has(first) ?? false;
-      const overhang = isTermStop ? TERMINAL_RADIUS : PILL_OVERHANG;
-      rawLabels.push({
-        name,
-        lines,
-        x,
-        stopId: sid,
-        poiIconCount: stopPoiTypes[sid] ? stopPoiTypes[sid].size : 0,
-        markerTopY: groupY(first) - overhang,
-        markerBottomY: groupY(first) + overhang,
-      });
-    });
-  });
-
-  rawLabels.sort((a, b) => a.x - b.x);
-
-  const layouted = layoutStopLabels(rawLabels);
-
-  const LABEL_LINE_SPACING = LABEL_FONT_SIZE + LABEL_LINE_SPACING_EXTRA;
-  const POI_ICON_SIZE = LABEL_FONT_SIZE;
-  const POI_ICON_PAD = 2;
-
-  layouted.forEach(({ name, lines, x, markerTopY, row, stopId: sid }) => {
-    const anchorY =
-      markerTopY -
-      Math.min(LABEL_ICON_GAP + row * LABEL_ROW_OFFSET, LABEL_ANCHOR_CLAMP);
-    const labelLines = lines || [name];
-    const numLines = labelLines.length;
-
-    const poiMap = sid ? stopPoiTypes[sid] : null;
-    const iconCount = poiMap ? poiMap.size : 0;
-    const textXOffset = iconCount * (POI_ICON_SIZE + POI_ICON_PAD);
+  layout.labels.forEach((l) => {
+    const numLines = l.lines.length;
+    const poiMap = l.stopId ? stopPoiTypes[l.stopId] : null;
 
     const labelG = labelsG
       .append('g')
-      .attr('transform', `translate(${x},${anchorY}) rotate(${LABEL_ROT})`);
+      .attr('class', 'stop-label')
+      .attr('data-stop-id', l.stopId)
+      .attr('data-stop-name', l.name)
+      .attr(
+        'transform',
+        `translate(${l.anchorX},${l.anchorY}) rotate(${LABEL_ROT})`,
+      );
 
-    if (poiMap) {
-      const iconY = -(numLines - 1) * LABEL_LINE_SPACING - POI_ICON_SIZE + 1;
-      let iconX = 0;
-      const orderedTypes = ['metro', 'railway', 'bus', 'airport'];
-      for (const t of orderedTypes) {
-        if (!poiMap.has(t)) continue;
-        const poiInfo = poiMap.get(t);
-        const ig = labelG
-          .append('g')
-          .attr('transform', `translate(${iconX},${iconY})`);
-        if (t === 'metro') {
-          const s = POI_ICON_SIZE / 40;
-          const sg = ig.append('g').attr('transform', `scale(${s})`);
-          const rawColor = poiInfo.color || C.primary;
-          const bgColor =
-            rawColor === '#ffff00' || rawColor === 'yellow'
-              ? '#FFEA00'
-              : rawColor;
-          sg.append('rect')
-            .attr('x', 0.278)
-            .attr('y', 0.278)
-            .attr('width', 9.444)
-            .attr('height', 9.444)
-            .attr('rx', 0.833)
-            .attr('fill', bgColor);
-          sg.append('path').attr('d', PATH_METRO_LETTER).attr('fill', C.white);
-        } else if (t === 'railway') {
-          insertInlineSvg(
-            ig,
-            svgInfos.railSvgInfo,
-            0,
-            0,
-            POI_ICON_SIZE,
-            POI_ICON_SIZE,
-          );
-        } else if (t === 'bus') {
-          insertInlineSvg(
-            ig,
-            svgInfos.bmtcSvgInfo,
-            0,
-            0,
-            POI_ICON_SIZE,
-            POI_ICON_SIZE,
-          );
-        } else if (t === 'airport') {
-          const s = POI_ICON_SIZE / 10;
-          const sg = ig.append('g').attr('transform', `scale(${s})`);
-          sg.append('rect')
-            .attr('x', 0.278)
-            .attr('y', 0.278)
-            .attr('width', 9.444)
-            .attr('height', 9.444)
-            .attr('rx', 4.722)
-            .attr('fill', C.white)
-            .attr('stroke', C.primary)
-            .attr('stroke-width', 0.556);
-          sg.append('path')
-            .attr('d', PATH_AIRPORT_PLANE)
-            .attr('fill', C.primary);
-        }
-        iconX += POI_ICON_SIZE + POI_ICON_PAD;
-      }
+    // Rotated text is a thin target to grab; a transparent rect over the whole
+    // block makes the label easy to click and drag. Stripped on export.
+    if (interactive) {
+      const textW =
+        Math.max(...l.lines.map((line) => line.length)) * LABEL_CHAR_WIDTH;
+      const blockTop =
+        l.side === 'above'
+          ? -(numLines - 1) * l.lineSpacing - LABEL_FONT_SIZE
+          : -LABEL_FONT_SIZE;
+      labelG
+        .append('rect')
+        .attr('data-edit-hit', '1')
+        .attr('x', (l.textAnchor === 'start' ? 0 : -textW) + l.iconX - 3)
+        .attr('y', blockTop - 2)
+        .attr('width', textW + l.iconSpan + 6)
+        .attr('height', l.blockH + 4)
+        .attr('fill', 'transparent');
+    }
+
+    if (poiMap && l.iconCount > 0) {
+      // Centre the icon strip on the label's text block.
+      const blockTop =
+        l.side === 'above'
+          ? -(numLines - 1) * l.lineSpacing - LABEL_FONT_SIZE
+          : -LABEL_FONT_SIZE;
+      const iconY =
+        blockTop + (l.blockH - LABEL_POI_ICON_SIZE) / 2 - l.lineSpacing / 4;
+      drawPoiIcons(labelG, poiMap, l.iconX, iconY);
     }
 
     const textEl = labelG
       .append('text')
-      .attr('x', textXOffset)
-      .attr('text-anchor', 'start')
+      .attr('x', l.textX)
+      .attr('text-anchor', l.textAnchor)
       .attr('dominant-baseline', 'auto')
       .attr('font-family', FONT)
       .attr('font-size', LABEL_FONT_SIZE)
       .attr('font-weight', 400)
       .attr('fill', C.labelMuted);
-    labelLines.forEach((line, lineIdx) => {
+
+    l.lines.forEach((line, lineIdx) => {
       const dy =
-        lineIdx === 0
-          ? -(numLines - 1) * LABEL_LINE_SPACING
-          : LABEL_LINE_SPACING;
-      textEl.append('tspan').attr('x', textXOffset).attr('dy', dy).text(line);
+        l.side === 'above'
+          ? lineIdx === 0
+            ? -(numLines - 1) * l.lineSpacing
+            : l.lineSpacing
+          : lineIdx === 0
+            ? 0
+            : l.lineSpacing;
+      textEl.append('tspan').attr('x', l.textX).attr('dy', dy).text(line);
     });
   });
-
-  return totalH;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1150,6 +1199,19 @@ function drawMapSection(g, mapUri, colW) {
         .attr('stroke', 'rgba(0,0,0,0.07)')
         .attr('stroke-width', 1);
     }
+  }
+
+  // OpenStreetMap data is share-alike, so the printed diagram carries its
+  // credit in the corner of the map it was rendered from.
+  if (mapUri) {
+    g.append('text')
+      .attr('x', 3)
+      .attr('y', INFO_PANEL_H - 3)
+      .attr('font-family', FONT)
+      .attr('font-size', 5)
+      .attr('fill', C.nearBlack)
+      .attr('fill-opacity', 0.6)
+      .text('© OpenStreetMap contributors');
   }
 
   // "You are here" star overlaid at the stop location (center of map)
@@ -1235,19 +1297,29 @@ function drawLegendSection(
   colW,
   { bmtcSvgInfo, ksrtcSvgInfo, railSvgInfo } = {},
 ) {
+  const stopItems = {
+    metro: [{ draw: (ig) => drawMetroIcon(ig), en: 'Metro Station' }],
+    bus: [
+      {
+        draw: (ig) => drawMajorBusIcon(ig, bmtcSvgInfo),
+        en: 'Major Bus Station',
+      },
+      {
+        draw: (ig) => drawLongDistIcon(ig, ksrtcSvgInfo),
+        en: 'Long Distance Bus',
+      },
+    ],
+    railway: [
+      {
+        draw: (ig) => drawRailwayIcon(ig, railSvgInfo),
+        en: 'Railway Station',
+      },
+    ],
+    airport: [{ draw: (ig) => drawAirportIcon(ig), en: 'Airport' }],
+  };
   const items = [
     { draw: (ig) => drawYouAreHereIcon(ig), en: 'You are here' },
-    { draw: (ig) => drawMetroIcon(ig), en: 'Metro Station' },
-    {
-      draw: (ig) => drawMajorBusIcon(ig, bmtcSvgInfo),
-      en: 'Major Bus Station',
-    },
-    {
-      draw: (ig) => drawLongDistIcon(ig, ksrtcSvgInfo),
-      en: 'Long Distance Bus',
-    },
-    { draw: (ig) => drawRailwayIcon(ig, railSvgInfo), en: 'Railway Station' },
-    { draw: (ig) => drawAirportIcon(ig), en: 'Airport' },
+    ...STOP_ICON_ORDER.flatMap((type) => stopItems[type]),
   ];
 
   const subColW = LEGEND_INNER_W;
@@ -1342,7 +1414,22 @@ function drawInfoPanel(svg, y, mapUri, qrUri, svgInfos = {}) {
 
 export async function renderDiagramSVG(
   container,
-  { stopId, stopsData, routes, orderedStops, city, poisData },
+  {
+    stopId,
+    stopsData,
+    routes,
+    orderedStops,
+    city,
+    poisData,
+    railData,
+    stopIconOverrides,
+    trackOverrides,
+    branchOverrides,
+    labelOffsets,
+    towardsText = null,
+    preserveRouteOrder = false,
+    interactive = false,
+  },
 ) {
   d3.select(container).selectAll('*').remove();
 
@@ -1350,47 +1437,37 @@ export async function renderDiagramSVG(
   const [lng, lat] = stopData;
 
   const hdrH = headerHeight(routes);
-  const routeGroups = orderGroupsBySimilarity(
-    groupRoutesByForwardStops(routes, stopId, orderedStops),
+  const stopPoiTypes = applyStopIconOverrides(
+    buildStopPoiMap(stopsData, poisData || []),
+    stopIconOverrides,
   );
-  const nGroups = Math.max(routeGroups.length, 1);
+  const layout = buildRouteLayout(
+    routes,
+    orderedStops,
+    stopId,
+    stopsData,
+    stopPoiTypes,
+    { trackOverrides, branchOverrides, labelOffsets, preserveRouteOrder },
+  );
 
-  const maxLabelRows = Math.max(
-    1,
-    ...routeGroups.map((group) => {
-      const packed = packClusterLabels(group.routes);
-      return Math.max(0, ...packed.map((p) => p.row)) + 1;
-    }),
-  );
-  const labelVerticalExtentOuter = LABEL_MAX_DIST + LABEL_FONT_SIZE + 4;
-  const minSpacingOuter = Math.max(
-    CLUSTER_SPACING,
-    maxLabelRows * (LABEL_BOX_H + 2) + 6,
-    labelVerticalExtentOuter,
-  );
-  const effectiveGroupSpacing =
-    nGroups > 1
-      ? Math.max(
-          minSpacingOuter,
-          Math.min(
-            MAX_CLUSTER_SPACING,
-            Math.round(TARGET_CLUSTER_SPAN / (nGroups - 1)),
-          ),
-        )
-      : minSpacingOuter;
-
-  const naturalDiagramH =
-    LABEL_SPACE + (nGroups - 1) * effectiveGroupSpacing + DIAGRAM_BOTTOM_PAD;
-  const extraTopPad = 0;
-  const baseTotalH = hdrH + naturalDiagramH + INFO_PANEL_H;
-  const extraBottomPad = Math.round(baseTotalH * EXTRA_BOTTOM_PCT);
-  const routeDiagramH = naturalDiagramH + extraBottomPad;
-  const totalH = baseTotalH + extraBottomPad;
+  // The canvas keeps a fixed aspect ratio, so the route diagram is centred in
+  // whatever height is left over and scaled down when it would overflow.
+  const fit = fitDiagramArea({
+    width: SVG_WIDTH,
+    aspect: SVG_ASPECT,
+    headerH: hdrH,
+    infoPanelH: INFO_PANEL_H,
+    naturalH: layout ? layout.height : DIAGRAM_TOP_PAD + DIAGRAM_BOTTOM_PAD,
+  });
+  const totalH = fit.totalH;
 
   // Read "Towards" text directly from the stop's suffix field in stops data.
   // The suffix is stored as e.g. "(Towards Magadi Road Metro Station)"; strip parens.
   const rawSuffix = stopsData[stopId]?.[3] || '';
-  const towardsSuffix = rawSuffix.replace(/^\(|\)$/g, '').trim();
+  const towardsSuffix =
+    towardsText == null
+      ? rawSuffix.replace(/^\(|\)$/g, '').trim()
+      : towardsText.trim();
 
   const arrivalUrl = `https://transitrouter.pages.dev/arrival/#/${city}/${stopId}`;
   const mapColW = Math.floor(SVG_WIDTH / 3);
@@ -1400,7 +1477,14 @@ export async function renderDiagramSVG(
   const [mapUri, qrUri, bmtcSvgInfo, ksrtcSvgInfo, railSvgInfo] =
     await Promise.all([
       lng && lat
-        ? captureMapAsDataUri(lng, lat, mapColW, INFO_PANEL_H)
+        ? captureMapAsDataUri(
+            lng,
+            lat,
+            mapColW,
+            INFO_PANEL_H,
+            visibleStopPoints(stopsData, lng, lat, mapColW, INFO_PANEL_H),
+            railData,
+          )
         : Promise.resolve(null),
       generateQrDataUri(arrivalUrl),
       fetchSvgInfo(bmtcSvgUrl),
@@ -1427,23 +1511,20 @@ export async function renderDiagramSVG(
   addDefs(svg);
 
   const svgInfos = { bmtcSvgInfo, ksrtcSvgInfo, railSvgInfo };
-  const stopPoiTypes = buildStopPoiMap(stopsData, poisData || []);
   drawHeader(svg, stopId, stopsData, routes, hdrH, bmtcSvgInfo, towardsSuffix);
   drawRouteDiagram(
     svg,
-    routes,
-    orderedStops,
+    layout,
     stopId,
     stopsData,
     hdrH,
-    extraTopPad,
-    extraBottomPad,
+    fit,
     stopPoiTypes,
     svgInfos,
+    interactive,
   );
 
-  const yInfoPanel = hdrH + routeDiagramH;
-  drawInfoPanel(svg, yInfoPanel, mapUri, qrUri, svgInfos);
+  drawInfoPanel(svg, hdrH + fit.areaH, mapUri, qrUri, svgInfos);
 
   return svg.node();
 }

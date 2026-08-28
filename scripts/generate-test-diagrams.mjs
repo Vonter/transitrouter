@@ -10,6 +10,11 @@
 import { readFileSync, mkdirSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import {
+  computeSpiderLayout,
+  fitDiagramArea,
+} from '../assets/diagram/layout.mjs';
+import { DEFAULTS } from '../assets/diagram/theme.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -181,7 +186,8 @@ function orderGroupsBySimilarity(routeGroups) {
 
   let best = 0;
   for (let i = 1; i < routeGroups.length; i++) {
-    if (routeGroups[i].routes.length > routeGroups[best].routes.length) best = i;
+    if (routeGroups[i].routes.length > routeGroups[best].routes.length)
+      best = i;
   }
   ordered.push(routeGroups[best]);
   idxOf.push(best);
@@ -194,7 +200,11 @@ function orderGroupsBySimilarity(routeGroups) {
     for (let i = 0; i < routeGroups.length; i++) {
       if (used.has(i)) continue;
       const sim = similarity(lastSet, stopSets[i]);
-      if (sim > maxSim || (sim === maxSim && routeGroups[i].routes.length > routeGroups[nextIdx].routes.length)) {
+      if (
+        sim > maxSim ||
+        (sim === maxSim &&
+          routeGroups[i].routes.length > routeGroups[nextIdx].routes.length)
+      ) {
         maxSim = sim;
         nextIdx = i;
       }
@@ -209,7 +219,13 @@ function orderGroupsBySimilarity(routeGroups) {
 
 // ── Compute diagram data (mirrored from dataLoader.js) ──────────────────────
 
-function computeDiagramData(stopId, { targetMajorStops = 5, countMajorRoutes = 8 } = {}) {
+function computeDiagramData(
+  stopId,
+  {
+    targetMajorStops = Number(process.env.TARGET_MAJOR_STOPS) || 5,
+    countMajorRoutes = Number(process.env.COUNT_MAJOR_ROUTES) || 8,
+  } = {},
+) {
   let scheduleData = null;
   try {
     scheduleData = JSON.parse(
@@ -282,7 +298,9 @@ function computeDiagramData(stopId, { targetMajorStops = 5, countMajorRoutes = 8
     const ranked = fwd
       .map((s) => ({ stopId: s, ranking: rankingData[s] || 0 }))
       .sort((a, b) => b.ranking - a.ranking);
-    ranked.slice(0, targetMajorStops).forEach((s) => allMajorStops.add(s.stopId));
+    ranked
+      .slice(0, targetMajorStops)
+      .forEach((s) => allMajorStops.add(s.stopId));
   });
 
   const maxMajorStops = countMajorRoutes + targetMajorStops + 1;
@@ -324,80 +342,76 @@ function computeDiagramData(stopId, { targetMajorStops = 5, countMajorRoutes = 8
 
 // ── SVG generation (string-based, no DOM) ───────────────────────────────────
 
-const SVG_WIDTH = 660;
-const ROUTE_LINE_START_X = 112;
-const ROUTE_AREA_END_PCT = 0.9;
-const STOP_SPACING = 32;
-const LABEL_SPACE = 120;
-const CLUSTER_SPACING = 44;
-const TARGET_CLUSTER_SPAN = 240;
-const MAX_CLUSTER_SPACING = 80;
-const DIAGRAM_BOTTOM_PAD = 50;
-const PILL_W_BIG = 12;
-const PILL_W_SMALL = 8;
-const PILL_OVERHANG = 6;
-const TERMINAL_RADIUS = 7;
-const CURRENT_PILL_X = 102;
-const CURRENT_PILL_W = 8;
-const CURRENT_PILL_TOP_PAD = 5;
-const LABEL_BOX_H = 14;
-const LABEL_BOX_RX = 2;
-const LABEL_BOX_FONT_SIZE = 10;
-const LABEL_BOX_CHAR_W = 7.5;
-const LABEL_BOX_PAD = 4;
-const LABEL_AREA_END_X = 100;
-const LABEL_GAP = 2;
-const LABEL_ROT = -35;
-const LABEL_FONT_SIZE = 9;
-const LABEL_CHAR_WIDTH = 5.5;
-const LABEL_ROW_OFFSET = 13;
-const LABEL_ICON_GAP = 6;
-const LABEL_MAX_DIST = 45;
-const LABEL_MAX_LINE_CHARS = 20;
-const LABEL_HORIZ_GAP = 8;
-const LABEL_LINE_SPACING_EXTRA = 3;
-const LABEL_ANCHOR_CLAMP = 10;
-const ROUTE_LINE_MIN_EXTEND = 24;
-const BRANCH_STROKE_W = 3;
-const MIN_SHARED_FOR_BRANCH = 2;
+const {
+  SVG_WIDTH,
+  SVG_ASPECT,
+  INFO_PANEL_H,
+  ROUTE_LINE_START_X,
+  ROUTE_AREA_END_PCT,
+  ROUTE_LINE_MIN_EXTEND,
+  STOP_SPACING_MIN,
+  STOP_SPACING_MAX,
+  DIAGRAM_TOP_PAD,
+  DIAGRAM_BOTTOM_PAD,
+  CLUSTER_SPACING,
+  CLUSTER_LABEL_BAND,
+  BRANCH_CORNER_R,
+  PILL_W_SMALL,
+  PILL_OVERHANG,
+  TERMINAL_RADIUS,
+  CURRENT_PILL_W,
+  LABEL_AREA_END_X,
+  LABEL_GAP,
+  LABEL_BOX_H,
+  LABEL_BOX_RX,
+  LABEL_BOX_FONT_SIZE,
+  LABEL_BOX_CHAR_W,
+  LABEL_BOX_PAD,
+  LABEL_ROT,
+  LABEL_FONT_SIZE,
+  LABEL_CHAR_WIDTH,
+  LABEL_ROW_OFFSET,
+  LABEL_ICON_GAP,
+  LABEL_MAX_LINE_CHARS,
+  LABEL_HORIZ_GAP,
+  LABEL_LINE_SPACING_EXTRA,
+  LABEL_STACK_GAP,
+  LABEL_MAX_ROWS,
+  LABEL_POI_ICON_SIZE,
+  LABEL_POI_ICON_GAP,
+  C,
+  FONT,
+} = DEFAULTS;
 
-const C_PRIMARY = '#1B4DA9';
-const C_WHITE = '#ffffff';
-const C_PILL_STROKE = '#585858';
-const C_LABEL_MUTED = '#888888';
-const C_HEADER1 = '#0E3F9A';
-const C_HEADER2 = '#1B4CA9';
-const FONT = "'Manrope', system-ui, sans-serif";
+const C_PRIMARY = C.primary;
+const C_WHITE = C.white;
+const C_PILL_STROKE = C.pillStroke;
+const C_LABEL_MUTED = C.labelMuted;
+const C_HEADER1 = C.header1;
+const C_HEADER2 = C.header2;
 
 function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
-function splitLabelName(name) {
-  if (name.length <= LABEL_MAX_LINE_CHARS) return [name];
-  const words = name.split(/[\s/]+/);
-  const lines = [];
-  let current = '';
-  for (const word of words) {
-    if (!current) current = word;
-    else if (current.length + 1 + word.length <= LABEL_MAX_LINE_CHARS)
-      current += ' ' + word;
-    else {
-      lines.push(current);
-      current = word;
-    }
-  }
-  if (current) lines.push(current);
-  return lines.length > 0 ? lines : [name];
+function routeLabelWidth(routeId) {
+  const MAX_LABEL_W = LABEL_AREA_END_X - 2;
+  return Math.min(
+    MAX_LABEL_W,
+    Math.max(
+      20,
+      LABEL_BOX_PAD * 2 + Math.ceil(routeId.length * LABEL_BOX_CHAR_W),
+    ),
+  );
 }
 
 function packClusterLabels(routeList) {
-  function naturalWidth(r) {
-    const MAX_LABEL_W = LABEL_AREA_END_X - 2;
-    return Math.min(MAX_LABEL_W, Math.max(20, Math.ceil(r.routeId.length * 7.5 + 10)));
-  }
   const MAX_WIDTH = LABEL_AREA_END_X - 2;
-  const widths = routeList.map(naturalWidth);
+  const widths = routeList.map((r) => routeLabelWidth(r.routeId));
   const rows = [[]];
   const rowWidths = [0];
   routeList.forEach((_, i) => {
@@ -418,7 +432,8 @@ function packClusterLabels(routeList) {
     }
   });
   return rows.flatMap((row, rowIdx) => {
-    const totalW = row.reduce((acc, i) => acc + widths[i], 0) + (row.length - 1) * LABEL_GAP;
+    const totalW =
+      row.reduce((acc, i) => acc + widths[i], 0) + (row.length - 1) * LABEL_GAP;
     let x = Math.max(2, LABEL_AREA_END_X - totalW);
     return row.map((i) => {
       const item = { route: routeList[i], x, w: widths[i], row: rowIdx };
@@ -428,153 +443,72 @@ function packClusterLabels(routeList) {
   });
 }
 
-function layoutStopLabels(labelData) {
-  const COS = Math.abs(Math.cos((LABEL_ROT * Math.PI) / 180));
-  const sorted = [...labelData].sort((a, b) => a.x - b.x);
-  const GAP = LABEL_HORIZ_GAP;
-  const MAX_ROWS = Math.floor((LABEL_MAX_DIST - LABEL_ICON_GAP) / LABEL_ROW_OFFSET);
-  const rowEndX = [];
-  const tryPlace = (row, start, hSpan) => {
-    while (rowEndX.length <= row) rowEndX.push(-Infinity);
-    if (start >= rowEndX[row] + GAP) {
-      rowEndX[row] = start + hSpan;
-      return true;
-    }
-    return false;
-  };
-  return sorted.map((item) => {
-    const longestLineLen = item.lines
-      ? Math.max(...item.lines.map((l) => l.length))
-      : item.name.length;
-    const textW = longestLineLen * LABEL_CHAR_WIDTH;
-    const hSpan = textW * COS;
-    const start = item.x;
-    for (let r = 0; r <= MAX_ROWS; r++) {
-      if (tryPlace(r, start, hSpan)) return { ...item, row: r };
-    }
-    tryPlace(MAX_ROWS, start, hSpan);
-    return { ...item, row: MAX_ROWS };
-  });
-}
-
-function getContiguousSegments(sorted) {
-  if (!sorted.length) return [];
-  const segs = [];
-  let start = sorted[0], prev = sorted[0];
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i] === prev + 1) prev = sorted[i];
-    else { segs.push([start, prev]); start = prev = sorted[i]; }
-  }
-  segs.push([start, prev]);
-  return segs;
-}
-
 function generateDiagramSVG(stopId, data) {
   const { routes, orderedStops, routeGroups } = data;
-  const nGroups = routeGroups.length;
-  if (nGroups === 0) return '';
 
-  // Build per-group stop sets
-  const stopGroupIndices = {};
-  routeGroups.forEach((group, gi) => {
-    group.forwardStops.forEach((sid) => {
-      if (sid === stopId) return;
-      (stopGroupIndices[sid] ??= new Set()).add(gi);
-    });
+  const badgeHalves = routeGroups.map((group) => {
+    const rows =
+      Math.max(0, ...packClusterLabels(group.routes).map((p) => p.row)) + 1;
+    return (rows * LABEL_BOX_H + (rows - 1) * 2) / 2;
   });
+  const rowMinGaps = badgeHalves
+    .slice(0, -1)
+    .map((h, i) => Math.ceil(h + badgeHalves[i + 1] + 2));
 
-  // Terminal stops per group
-  const terminalGroupMap = new Map();
-  routeGroups.forEach((group, gi) => {
-    const fs = group.forwardStops.filter((s) => s !== stopId);
-    if (fs.length > 0) {
-      const last = fs[fs.length - 1];
-      if (!terminalGroupMap.has(last)) terminalGroupMap.set(last, new Set());
-      terminalGroupMap.get(last).add(gi);
-    }
+  const layout = computeSpiderLayout({
+    routeGroups,
+    orderedStops,
+    currentStopId: stopId,
+    getName: getStopName,
+    theme: {
+      ROW_PITCH: CLUSTER_SPACING,
+      ROW_MIN_GAPS: rowMinGaps,
+      LABEL_BAND: CLUSTER_LABEL_BAND,
+      MIN_STOP_SPACING: STOP_SPACING_MIN,
+      MAX_STOP_SPACING: STOP_SPACING_MAX,
+      START_X: ROUTE_LINE_START_X,
+      AREA_END_X: SVG_WIDTH * ROUTE_AREA_END_PCT,
+      MIN_EXTEND: ROUTE_LINE_MIN_EXTEND,
+      PILL_W: PILL_W_SMALL,
+      PILL_OVERHANG,
+      CORNER_R: BRANCH_CORNER_R,
+      TOP_PAD: DIAGRAM_TOP_PAD,
+      BOTTOM_PAD: DIAGRAM_BOTTOM_PAD,
+      LABEL_ROT,
+      LABEL_FONT_SIZE,
+      LABEL_CHAR_WIDTH,
+      LABEL_LINE_SPACING: LABEL_FONT_SIZE + LABEL_LINE_SPACING_EXTRA,
+      LABEL_MAX_LINE_CHARS,
+      LABEL_ICON_GAP,
+      LABEL_ROW_OFFSET,
+      LABEL_HORIZ_GAP,
+      LABEL_STACK_GAP,
+      LABEL_MAX_ROWS,
+      POI_ICON_SIZE: LABEL_POI_ICON_SIZE,
+      POI_ICON_GAP: LABEL_POI_ICON_GAP,
+    },
   });
+  if (!layout) return '';
 
-  const displayedStops = orderedStops.filter(
-    (sid) => sid !== stopId && stopGroupIndices[sid]?.size > 0,
-  );
-
-  // Merge same-name stops: stops with identical names share one column.
-  const nameToRep = new Map();
-  const stopToRep = new Map();
-  displayedStops.forEach((sid) => {
-    const name = getStopName(sid);
-    if (!nameToRep.has(name)) nameToRep.set(name, sid);
-    stopToRep.set(sid, nameToRep.get(name));
+  const hdrH = 82 + 10 + 30 + 14;
+  // Same fixed canvas proportions as the app, with the info panel's slot left
+  // blank — this script only exercises the route-diagram geometry.
+  const fit = fitDiagramArea({
+    width: SVG_WIDTH,
+    aspect: SVG_ASPECT,
+    headerH: hdrH,
+    infoPanelH: INFO_PANEL_H,
+    naturalH: layout.height,
   });
-
-  // DAG-based column assignment using representatives for same-name stops.
-  const displayedSet = new Set(displayedStops);
-  const repColumn = new Map();
-  displayedStops.forEach((sid) => repColumn.set(stopToRep.get(sid), 0));
-
-  let colChanged = true;
-  while (colChanged) {
-    colChanged = false;
-    routeGroups.forEach((group) => {
-      const fs = group.forwardStops.filter(
-        (s) => s !== stopId && displayedSet.has(s),
-      );
-      for (let i = 1; i < fs.length; i++) {
-        const repPrev = stopToRep.get(fs[i - 1]);
-        const repCur = stopToRep.get(fs[i]);
-        if (repPrev === repCur) continue;
-        const needed = repColumn.get(repPrev) + 1;
-        if (needed > repColumn.get(repCur)) {
-          repColumn.set(repCur, needed);
-          colChanged = true;
-        }
-      }
-    });
-  }
-
-  const stopColumn = new Map();
-  displayedStops.forEach((sid) =>
-    stopColumn.set(sid, repColumn.get(stopToRep.get(sid))),
-  );
-
-  const maxCol = Math.max(0, ...stopColumn.values());
-  const availableW = SVG_WIDTH * ROUTE_AREA_END_PCT - ROUTE_LINE_START_X;
-  const colSpacing = maxCol > 0 ? Math.floor(availableW / (maxCol + 1)) : STOP_SPACING;
-  const stopXMap = {};
-  displayedStops.forEach((sid) => {
-    stopXMap[sid] = ROUTE_LINE_START_X + colSpacing * (stopColumn.get(sid) + 1);
-  });
-
-  // Group spacing
-  const maxLabelRows = Math.max(
-    1,
-    ...routeGroups.map((g) => {
-      const packed = packClusterLabels(g.routes);
-      return Math.max(0, ...packed.map((p) => p.row)) + 1;
-    }),
-  );
-  const labelVerticalExtent = LABEL_MAX_DIST + LABEL_FONT_SIZE + 4;
-  const minSpacing = Math.max(CLUSTER_SPACING, maxLabelRows * (LABEL_BOX_H + 2) + 6, labelVerticalExtent);
-  const effectiveGroupSpacing = nGroups > 1
-    ? Math.max(minSpacing, Math.min(MAX_CLUSTER_SPACING, Math.round(TARGET_CLUSTER_SPAN / (nGroups - 1))))
-    : minSpacing;
-  const groupY = (i) => LABEL_SPACE + i * effectiveGroupSpacing;
-  const totalH = LABEL_SPACE + (nGroups - 1) * effectiveGroupSpacing + DIAGRAM_BOTTOM_PAD;
-
-  // Header height (simplified)
-  const hdrH = 82 + 10 + 30 + 14; // HDR1_H + BADGE_TOP_PAD + one badge row + BADGE_BOT_PAD
-  const fullH = hdrH + totalH;
+  const fullH = fit.totalH;
 
   let svg = '';
 
-  // Background
   svg += `<rect width="${SVG_WIDTH}" height="${fullH}" fill="${C_WHITE}"/>`;
 
-  // Simplified header
   svg += `<rect width="${SVG_WIDTH}" height="82" fill="${C_HEADER1}"/>`;
   svg += `<text x="80" y="38" font-family="${esc(FONT)}" font-size="28" font-weight="500" fill="${C_WHITE}">${esc(getStopName(stopId))}</text>`;
 
-  // Badge strip
   const routeIds = [...new Set(routes.map((r) => r.routeId))];
   svg += `<g transform="translate(0,82)">`;
   svg += `<rect width="${SVG_WIDTH}" height="${hdrH - 82}" fill="${C_HEADER2}"/>`;
@@ -587,140 +521,57 @@ function generateDiagramSVG(stopId, data) {
   });
   svg += `</g>`;
 
-  // Route diagram
-  svg += `<g transform="translate(0,${hdrH})">`;
-  svg += `<rect width="${SVG_WIDTH}" height="${totalH}" fill="${C_WHITE}"/>`;
+  svg += `<g transform="translate(${fit.offsetX},${hdrH + fit.offsetY}) scale(${fit.scale})">`;
 
-  // Group lines + route labels
-  routeGroups.forEach((group, gi) => {
-    const gy = groupY(gi);
-    let maxX = ROUTE_LINE_START_X + ROUTE_LINE_MIN_EXTEND;
-    group.forwardStops.forEach((sid) => {
-      if (sid === stopId) return;
-      const x = stopXMap[sid];
-      if (x !== undefined) maxX = Math.max(maxX, x);
-    });
-    svg += `<line x1="${ROUTE_LINE_START_X}" y1="${gy}" x2="${maxX}" y2="${gy}" stroke="${C_PRIMARY}" stroke-width="4" stroke-linecap="round"/>`;
+  // Route group tracks
+  layout.tracks.forEach((track) => {
+    svg += `<path d="${track.d}" fill="none" stroke="${C_PRIMARY}" stroke-width="4"/>`;
 
-    // Route ID labels
-    const packed = packClusterLabels(group.routes);
+    const packed = packClusterLabels(track.routes);
     const numRows = Math.max(0, ...packed.map((p) => p.row)) + 1;
     const totalLabelH = numRows * LABEL_BOX_H + (numRows - 1) * 2;
-    const labelStartY = gy - totalLabelH / 2;
+    const labelStartY = track.labelY - totalLabelH / 2;
 
     packed.forEach(({ route, x, w, row }) => {
       const labelY = labelStartY + row * (LABEL_BOX_H + 2);
-      const maxChars = Math.floor((w - LABEL_BOX_PAD) / LABEL_BOX_CHAR_W);
-      const label = route.routeId.length > maxChars
-        ? route.routeId.slice(0, Math.max(1, maxChars - 1)) + '\u2026'
-        : route.routeId;
+      const maxChars = Math.floor((w - LABEL_BOX_PAD * 2) / LABEL_BOX_CHAR_W);
+      const label =
+        route.routeId.length > maxChars
+          ? route.routeId.slice(0, Math.max(1, maxChars - 1)) + '…'
+          : route.routeId;
       svg += `<rect x="${x}" y="${labelY}" width="${w}" height="${LABEL_BOX_H}" rx="${LABEL_BOX_RX}" fill="${C_PRIMARY}"/>`;
       svg += `<text x="${x + w / 2}" y="${labelY + LABEL_BOX_H / 2}" text-anchor="middle" dominant-baseline="middle" font-family="${esc(FONT)}" font-size="${LABEL_BOX_FONT_SIZE}" font-weight="700" fill="${C_WHITE}">${esc(label)}</text>`;
     });
   });
 
-  // Merge same-name stops for pill rendering
-  const mergedGroupIndices = {};
-  const mergedTerminalMap = new Map();
-  const drawnReps = new Set();
-
-  displayedStops.forEach((sid) => {
-    const rep = stopToRep.get(sid);
-    if (!mergedGroupIndices[rep]) mergedGroupIndices[rep] = new Set();
-    const gs = stopGroupIndices[sid];
-    if (gs) gs.forEach((gi) => mergedGroupIndices[rep].add(gi));
-    const tg = terminalGroupMap.get(sid);
-    if (tg) {
-      if (!mergedTerminalMap.has(rep)) mergedTerminalMap.set(rep, new Set());
-      tg.forEach((gi) => mergedTerminalMap.get(rep).add(gi));
-    }
-  });
-
-  // Stop pills
-  displayedStops.forEach((sid) => {
-    const rep = stopToRep.get(sid);
-    if (drawnReps.has(rep)) return;
-    drawnReps.add(rep);
-
-    const groupSet = mergedGroupIndices[rep];
-    if (!groupSet || groupSet.size === 0) return;
-    const x = stopXMap[sid];
-    if (x === undefined) return;
-    const sorted = Array.from(groupSet).sort((a, b) => a - b);
-    const segs = getContiguousSegments(sorted);
-    const terminalGroups = mergedTerminalMap.get(rep);
-    segs.forEach(([first, last]) => {
-      const runs = [];
-      let runStart = first;
-      let runIsTerminal = terminalGroups?.has(first) ?? false;
-      for (let gi = first + 1; gi <= last; gi++) {
-        const giIsTerminal = terminalGroups?.has(gi) ?? false;
-        if (giIsTerminal !== runIsTerminal) {
-          runs.push({ start: runStart, end: gi - 1, isTerminal: runIsTerminal });
-          runStart = gi;
-          runIsTerminal = giIsTerminal;
-        }
-      }
-      runs.push({ start: runStart, end: last, isTerminal: runIsTerminal });
-
-      runs.forEach(({ start, end, isTerminal }) => {
-        if (isTerminal) {
-          if (start !== end) {
-            svg += `<line x1="${x}" y1="${groupY(start)}" x2="${x}" y2="${groupY(end)}" stroke="${C_PRIMARY}" stroke-width="2"/>`;
-          }
-          for (let gi = start; gi <= end; gi++) {
-            svg += `<circle cx="${x}" cy="${groupY(gi)}" r="${TERMINAL_RADIUS}" fill="${C_PRIMARY}"><title>${esc(getStopName(sid))}</title></circle>`;
-          }
-        } else {
-          const pillW = PILL_W_SMALL;
-          const y1 = groupY(start) - PILL_OVERHANG;
-          const y2 = groupY(end) + PILL_OVERHANG;
-          svg += `<rect x="${x - pillW / 2}" y="${y1}" width="${pillW}" height="${y2 - y1}" rx="${pillW / 2}" fill="${C_WHITE}" stroke="${C_PILL_STROKE}" stroke-width="1"><title>${esc(getStopName(sid))}</title></rect>`;
-        }
-      });
+  // Stop markers
+  layout.markers.forEach((m) => {
+    svg += `<rect x="${m.x - m.width / 2}" y="${m.top}" width="${m.width}" height="${m.bottom - m.top}" rx="${m.width / 2}" fill="${C_WHITE}" stroke="${C_PILL_STROKE}" stroke-width="1"><title>${esc(m.name)}</title></rect>`;
+    m.dots.forEach((dot) => {
+      svg += `<circle cx="${dot.x}" cy="${dot.y}" r="${TERMINAL_RADIUS}" fill="${C_PRIMARY}"/>`;
     });
   });
 
   // Current stop pill
-  const pillTop = groupY(0) - CURRENT_PILL_TOP_PAD;
-  const pillBottom = groupY(nGroups - 1) + PILL_OVERHANG;
-  svg += `<rect x="${CURRENT_PILL_X}" y="${pillTop}" width="${CURRENT_PILL_W}" height="${pillBottom - pillTop}" rx="${CURRENT_PILL_W / 2}" fill="${C_WHITE}" stroke="${C_PRIMARY}" stroke-width="2"><title>${esc(getStopName(stopId))}</title></rect>`;
+  const cp = layout.currentPill;
+  svg += `<rect x="${cp.x}" y="${cp.y}" width="${cp.width}" height="${cp.height}" rx="${cp.width / 2}" fill="${C_WHITE}" stroke="${C_PRIMARY}" stroke-width="2"><title>${esc(getStopName(stopId))}</title></rect>`;
 
-  // Stop labels — one per contiguous pill segment
-  const rawLabels = [];
-  const drawnLabelReps = new Set();
-  displayedStops.forEach((sid) => {
-    const rep = stopToRep.get(sid);
-    if (drawnLabelReps.has(rep)) return;
-    drawnLabelReps.add(rep);
-    const name = getStopName(sid);
-    const x = stopXMap[sid];
-    const groupSet = mergedGroupIndices[rep] || stopGroupIndices[sid];
-    if (!groupSet || groupSet.size === 0) return;
-    const sorted = Array.from(groupSet).sort((a, b) => a - b);
-    const segs = getContiguousSegments(sorted);
-    const terminalGroups = mergedTerminalMap.get(rep);
-    const lines = splitLabelName(name);
-    segs.forEach(([first]) => {
-      const isTermStop = terminalGroups?.has(first) ?? false;
-      const overhang = isTermStop ? TERMINAL_RADIUS : PILL_OVERHANG;
-      rawLabels.push({ name, lines, x, markerTopY: groupY(first) - overhang });
-    });
-  });
-  rawLabels.sort((a, b) => a.x - b.x);
-  const layouted = layoutStopLabels(rawLabels);
-
-  const LABEL_LINE_SPACING = LABEL_FONT_SIZE + LABEL_LINE_SPACING_EXTRA;
-  layouted.forEach(({ name, lines, x, markerTopY, row }) => {
-    const anchorY = markerTopY - Math.min(LABEL_ICON_GAP + row * LABEL_ROW_OFFSET, LABEL_ANCHOR_CLAMP);
-    const labelLines = lines || [name];
-    const numLines = labelLines.length;
+  // Stop labels
+  layout.labels.forEach((l) => {
+    const numLines = l.lines.length;
     let tspans = '';
-    labelLines.forEach((line, lineIdx) => {
-      const dy = lineIdx === 0 ? -(numLines - 1) * LABEL_LINE_SPACING : LABEL_LINE_SPACING;
-      tspans += `<tspan x="0" dy="${dy}">${esc(line)}</tspan>`;
+    l.lines.forEach((line, i) => {
+      const dy =
+        l.side === 'above'
+          ? i === 0
+            ? -(numLines - 1) * l.lineSpacing
+            : l.lineSpacing
+          : i === 0
+            ? 0
+            : l.lineSpacing;
+      tspans += `<tspan x="${l.textX}" dy="${dy}">${esc(line)}</tspan>`;
     });
-    svg += `<g transform="translate(${x},${anchorY}) rotate(${LABEL_ROT})"><text text-anchor="start" dominant-baseline="auto" font-family="${esc(FONT)}" font-size="${LABEL_FONT_SIZE}" font-weight="400" fill="${C_LABEL_MUTED}">${tspans}</text></g>`;
+    svg += `<g transform="translate(${l.anchorX},${l.anchorY}) rotate(${LABEL_ROT})"><text text-anchor="${l.textAnchor}" font-family="${esc(FONT)}" font-size="${LABEL_FONT_SIZE}" font-weight="400" fill="${C_LABEL_MUTED}">${tspans}</text></g>`;
   });
 
   svg += `</g>`; // close route diagram group
@@ -737,7 +588,8 @@ async function main() {
   mkdirSync(OUTPUT_DIR, { recursive: true });
 
   const defaultStops = ['20944', '20728', '20570', '21125', '20921'];
-  const testStops = process.argv.length > 2 ? process.argv.slice(2) : defaultStops;
+  const testStops =
+    process.argv.length > 2 ? process.argv.slice(2) : defaultStops;
 
   let resvg;
   try {
@@ -757,10 +609,14 @@ async function main() {
     }
 
     console.log(`  Routes: ${data.routes.map((r) => r.routeId).join(', ')}`);
-    console.log(`  Ordered stops: ${data.orderedStops.map((s) => `${s}(${getStopName(s)})`).join(', ')}`);
+    console.log(
+      `  Ordered stops: ${data.orderedStops.map((s) => `${s}(${getStopName(s)})`).join(', ')}`,
+    );
     console.log(`  Route groups: ${data.routeGroups.length}`);
     data.routeGroups.forEach((g, i) => {
-      console.log(`    Group ${i + 1}: [${g.routes.map((r) => r.routeId).join(', ')}] — ${g.forwardStops.length} stops`);
+      console.log(
+        `    Group ${i + 1}: [${g.routes.map((r) => r.routeId).join(', ')}] — ${g.forwardStops.length} stops`,
+      );
     });
 
     const svgContent = generateDiagramSVG(stopId, data);

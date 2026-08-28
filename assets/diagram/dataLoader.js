@@ -15,6 +15,11 @@ import {
 
 const SCHEDULE_BASE_URL = 'https://data.transitrouter.vonter.in';
 
+const loadOptionalJson = (url) =>
+  fetch(url)
+    .then((response) => (response.ok ? response.json() : null))
+    .catch(() => null);
+
 export const loadCityData = (city) => {
   const dataPath = `/data/${city}`;
   return Promise.all([
@@ -22,11 +27,13 @@ export const loadCityData = (city) => {
     fetchCache(`${dataPath}/stops.min.json`, 24 * 60),
     fetchCache(`${dataPath}/ranking.min.json`, 24 * 60).catch(() => ({})),
     fetchPois(city),
-  ]).then(([servicesData, stopsData, rankingData, poisData]) => ({
+    loadOptionalJson(`${dataPath}/rail.json`),
+  ]).then(([servicesData, stopsData, rankingData, poisData, railData]) => ({
     servicesData,
     stopsData,
     rankingData,
     poisData,
+    railData,
   }));
 };
 
@@ -42,29 +49,86 @@ export const computeStopsForRoutes = (
   rankingData,
   targetMajorStops,
 ) => {
+  return selectStopsForDiagram(
+    routes,
+    stopId,
+    rankingData,
+    targetMajorStops,
+  ).orderedStops;
+};
+
+function selectStopsForDiagram(
+  routes,
+  stopId,
+  rankingData,
+  targetMajorStops,
+) {
   const norm = normalizeStopId(stopId);
   const allMajorStops = new Set([stopId]);
+  const protectedStops = new Set([stopId]);
+  const terminalStops = new Set();
+  const stopRouteCount = new Map();
 
   routes.forEach((route) => {
     const currentIndex = findStopIndex(route.stopSequence, stopId, norm);
     const startIdx = currentIndex === -1 ? 0 : currentIndex;
 
     const forwardStops = route.stopSequence.slice(startIdx).map(String);
+    forwardStops.forEach((s) =>
+      stopRouteCount.set(s, (stopRouteCount.get(s) || 0) + 1),
+    );
 
     const forwardStopsRanked = forwardStops
       .map((s) => ({ stopId: s, ranking: rankingData[s] || 0 }))
       .sort((a, b) => b.ranking - a.ranking);
 
-    if (forwardStops.length > 0)
-      allMajorStops.add(forwardStops[forwardStops.length - 1]);
+    // The first calling point after the selected stop must be the first marker
+    // on that route. Ranking alone used to skip it and made labels appear to be
+    // attached to the following bar.
+    if (forwardStops.length > 1) {
+      allMajorStops.add(forwardStops[1]);
+      protectedStops.add(forwardStops[1]);
+    }
+    if (forwardStops.length > 0) {
+      const terminal = forwardStops[forwardStops.length - 1];
+      allMajorStops.add(terminal);
+      protectedStops.add(terminal);
+      terminalStops.add(terminal);
+    }
     forwardStopsRanked
       .slice(0, targetMajorStops)
       .forEach((s) => allMajorStops.add(s.stopId));
   });
 
   const allStops = getAllStopsFromRoutes(routes, stopId);
-  return allStops.filter((s) => allMajorStops.has(s));
-};
+
+  // Keep a global, coverage-aware cap. This retains branch and terminal stops
+  // while avoiding the old per-route union growing without bound. The larger
+  // budget also follows the amount of detail in the printed diagram more
+  // closely than the previous routes+stops cap.
+  const maxMajorStops =
+    1 + terminalStops.size + targetMajorStops + routes.length;
+  if (allMajorStops.size > maxMajorStops) {
+    const candidates = [...allMajorStops]
+      .filter((s) => !protectedStops.has(s))
+      .sort((a, b) => {
+        const coverage =
+          (stopRouteCount.get(a) || 0) - (stopRouteCount.get(b) || 0);
+        if (coverage !== 0) return coverage;
+        return (rankingData[a] || 0) - (rankingData[b] || 0);
+      });
+    while (allMajorStops.size > maxMajorStops && candidates.length) {
+      allMajorStops.delete(candidates.shift());
+    }
+  }
+
+  const orderedStops = allStops.filter((s) => allMajorStops.has(s));
+  const stopRouteCounts = {};
+  orderedStops.forEach((s) => {
+    stopRouteCounts[s] = stopRouteCount.get(s) || 0;
+  });
+  return { orderedStops, stopRouteCounts };
+}
 
 export const computeDiagramData = (
   stopId,
@@ -72,9 +136,11 @@ export const computeDiagramData = (
   stopsData,
   rankingData,
   scheduleData,
-  { targetMajorStops, countMajorRoutes },
+  { targetMajorStops, countMajorRoutes, includeDepotTrips = false },
 ) => {
-  const routesFound = findRoutesForStop(stopId, servicesData);
+  const routesFound = findRoutesForStop(stopId, servicesData, stopsData, {
+    includeDepotTrips,
+  });
   if (routesFound.length === 0) return null;
 
   const routesWithTripCounts = routesFound.map((route) => ({
@@ -113,65 +179,12 @@ export const computeDiagramData = (
   const groupComparator = createGroupSizeComparator(stats, stopsData);
   const routes = [...topRoutes].sort(groupComparator);
 
-  const allMajorStops = new Set([stopId]);
-  const stopRouteCount = new Map();
-
-  routes.forEach((route) => {
-    const currentIndex = findStopIndex(route.stopSequence, stopId, norm);
-    const startIdx = currentIndex === -1 ? 0 : currentIndex;
-
-    const forwardStops = route.stopSequence.slice(startIdx).map(String);
-    forwardStops.forEach((sStr) => {
-      stopRouteCount.set(sStr, (stopRouteCount.get(sStr) || 0) + 1);
-    });
-
-    const forwardStopsRanked = forwardStops
-      .map((s) => ({ stopId: s, ranking: rankingData[s] || 0 }))
-      .sort((a, b) => b.ranking - a.ranking);
-
-    if (forwardStops.length > 0)
-      allMajorStops.add(forwardStops[forwardStops.length - 1]);
-    forwardStopsRanked
-      .slice(0, targetMajorStops)
-      .forEach((s) => allMajorStops.add(s.stopId));
-  });
-
-  // Cap the number of major stops to keep the diagram readable.
-  // When too many stops are selected (often from one route with a long unique
-  // tail), prune the lowest-ranked non-terminal stops that appear in the fewest
-  // routes first.
-  const maxMajorStops = countMajorRoutes + targetMajorStops + 1;
-  if (allMajorStops.size > maxMajorStops + 1) {
-    const terminalStops = new Set(
-      routes.map((r) => String(r.stopSequence[r.stopSequence.length - 1])),
-    );
-    const pruneCandidates = [...allMajorStops]
-      .filter((s) => s !== stopId && !terminalStops.has(s))
-      .map((s) => ({
-        stopId: s,
-        ranking: rankingData[s] || 0,
-        routeCount: stopRouteCount.get(s) || 0,
-      }))
-      .sort((a, b) => {
-        if (a.routeCount !== b.routeCount) return a.routeCount - b.routeCount;
-        return a.ranking - b.ranking;
-      });
-
-    while (
-      allMajorStops.size > maxMajorStops + 1 &&
-      pruneCandidates.length > 0
-    ) {
-      allMajorStops.delete(pruneCandidates.shift().stopId);
-    }
-  }
-
-  const allStops = getAllStopsFromRoutes(routes, stopId);
-  const orderedStops = allStops.filter((s) => allMajorStops.has(s));
-
-  const stopRouteCounts = {};
-  orderedStops.forEach((s) => {
-    stopRouteCounts[s] = stopRouteCount.get(s) || 0;
-  });
+  const { orderedStops, stopRouteCounts } = selectStopsForDiagram(
+    routes,
+    stopId,
+    rankingData,
+    targetMajorStops,
+  );
 
   const routeGroups = groupRoutesByForwardStops(routes, stopId, orderedStops);
 

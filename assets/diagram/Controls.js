@@ -11,8 +11,10 @@ export default function Controls({
   onCountMajorRoutesChange,
   onTargetMajorStopsChange,
   onExportSvg,
-  expertMode,
-  onExpertModeToggle,
+  onExportPng,
+  editMode,
+  onEditModeToggle,
+  onResetOverrides,
 }) {
   const handleRouteCount = (e) => {
     const value = parseInt(e.target.value, 10);
@@ -42,30 +44,41 @@ export default function Controls({
 
   return (
     <div class="diagram-controls">
-      <label class="control-group">
-        <span class="control-label">Routes</span>
-        <input
-          type="number"
-          min="1"
-          max="100"
-          value={countMajorRoutes}
-          onChange={handleRouteCount}
-          onBlur={handleRouteCountBlur}
-          class="control-input"
-        />
-      </label>
-      <label class="control-group">
-        <span class="control-label">Stops</span>
-        <input
-          type="number"
-          min="1"
-          max="50"
-          value={targetMajorStops}
-          onChange={handleStopCount}
-          onBlur={handleStopCountBlur}
-          class="control-input"
-        />
-      </label>
+      {editMode && (
+        <div class="diagram-edit-controls">
+          <label class="control-group">
+            <span class="control-label">Routes</span>
+            <input
+              type="number"
+              min="1"
+              max="100"
+              value={countMajorRoutes}
+              onChange={handleRouteCount}
+              onBlur={handleRouteCountBlur}
+              class="control-input"
+            />
+          </label>
+          <label class="control-group">
+            <span class="control-label">Stops</span>
+            <input
+              type="number"
+              min="1"
+              max="50"
+              value={targetMajorStops}
+              onChange={handleStopCount}
+              onBlur={handleStopCountBlur}
+              class="control-input"
+            />
+          </label>
+          <button
+            class="reset-overrides-button"
+            onClick={onResetOverrides}
+            title="Reset all manual diagram edits"
+          >
+            Reset edits
+          </button>
+        </div>
+      )}
       <button
         class="export-button"
         onClick={onExportSvg}
@@ -74,11 +87,18 @@ export default function Controls({
         Export SVG
       </button>
       <button
-        class={`expert-toggle-button${expertMode ? ' expert-toggle-button--active' : ''}`}
-        onClick={onExpertModeToggle}
-        title={expertMode ? 'Disable expert mode' : 'Enable expert mode'}
+        class="export-button"
+        onClick={onExportPng}
+        title="Export diagram as PNG"
       >
-        Expert
+        Export PNG
+      </button>
+      <button
+        class={`edit-toggle-button${editMode ? ' edit-toggle-button--active' : ''}`}
+        onClick={onEditModeToggle}
+        title={editMode ? 'Finish editing' : 'Edit diagram'}
+      >
+        {editMode ? 'Done' : 'Edit'}
       </button>
     </div>
   );
