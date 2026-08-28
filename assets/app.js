@@ -19,6 +19,7 @@ import {
 } from './config';
 import { getApiUrl, isDevMode, isAlphaEnabled, CITY_CONFIGS } from './city-config';
 import { normalizeName } from './utils/normalizeNames';
+import { stripRouteHyphens } from './utils/search';
 import {
   pointDistance,
   closestPointOnSegment,
@@ -5706,9 +5707,13 @@ const App = () => {
       const refreshSearch = () => {
         const currentValue = searchField.current?.value || '';
         if (currentValue) {
-          const q = currentValue.toLowerCase();
+          const q = stripRouteHyphens(currentValue.toLowerCase());
           const matched = allModeServicesIdx
-            .filter((s) => s.number.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))
+            .filter(
+              (s) =>
+                stripRouteHyphens(s.number.toLowerCase()).includes(q) ||
+                stripRouteHyphens(s.name.toLowerCase()).includes(q),
+            )
             .sort((a, b) => compareCityPriority(a.city, b.city))
             .slice(0, SEARCH_RESULT_LIMIT);
           setServices(matched);

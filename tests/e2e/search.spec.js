@@ -29,6 +29,18 @@ test.describe('Search', () => {
     ).toBeVisible({ timeout: 5000 });
   });
 
+  test('should find service numbers when hyphens are omitted', async ({ page }) => {
+    const search = page.locator('input[type="search"]').first();
+    await search.click();
+    await search.fill('mf5');
+
+    await expect(
+      page
+        .locator('#search-popover b.service-tag')
+        .filter({ hasText: /^MF-5$/ }),
+    ).toBeVisible({ timeout: 5000 });
+  });
+
   test('should remove inactive search results after selecting a route', async ({
     page,
   }) => {

@@ -11,6 +11,7 @@ import CheapRuler from 'cheap-ruler';
 
 import { insertNearest } from './boundedNearest';
 import { SEARCH_RESULT_LIMIT } from './searchLimits';
+import { stripRouteHyphens } from './search';
 
 // ── Worker-local state ────────────────────────────────────────────────────────
 
@@ -70,7 +71,10 @@ function handleInit({ stopsArr: s, servicesArr: sa, servicesData: sd, poisArr: p
 
   fuseServices = new Fuse(servicesArr, {
     threshold: 0.3,
-    keys: ['number', 'name'],
+    keys: [
+      { name: 'number', getFn: ({ number }) => stripRouteHyphens(number) },
+      { name: 'name', getFn: ({ name }) => stripRouteHyphens(name) },
+    ],
   });
   fuseStops = new Fuse(stopsArr, {
     threshold: 0.3,
@@ -87,7 +91,7 @@ function handleInit({ stopsArr: s, servicesArr: sa, servicesData: sd, poisArr: p
 function handleSearch({ query }) {
   if (!fuseServices || !fuseStops) return { services: [], stops: [], locations: [] };
   const services = fuseServices
-    .search(query, { limit: SEARCH_RESULT_LIMIT })
+    .search(stripRouteHyphens(query), { limit: SEARCH_RESULT_LIMIT })
     .map(({ item: { number, name, city } }) => ({ number, name, city }));
   const stops = fuseStops
     .search(query, { limit: SEARCH_RESULT_LIMIT })
