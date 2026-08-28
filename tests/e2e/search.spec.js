@@ -31,6 +31,7 @@ test.describe('Search', () => {
 
   test('should remove inactive search results after selecting a route', async ({
     page,
+    isMobile,
   }) => {
     const search = page.locator('input[type="search"]').first();
     await search.click();
@@ -46,7 +47,18 @@ test.describe('Search', () => {
     await expect(page.locator('#service-popover.expand')).toBeVisible({
       timeout: 5000,
     });
-    await expect(page.locator('#search-popover .popover-list')).toHaveCount(0);
+    if (isMobile) {
+      // On mobile, the search sheet slides off-screen and its results unmount.
+      await expect(
+        page.locator('#search-popover .popover-list'),
+      ).toHaveCount(0);
+    } else {
+      // On desktop, the search sidebar stays pinned and visible, so its
+      // results must remain mounted rather than disappearing.
+      await expect(
+        page.locator('#search-popover .popover-list'),
+      ).toBeVisible();
+    }
   });
 
   test('should find stops by name', async ({ page }) => {
