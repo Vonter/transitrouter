@@ -76,5 +76,10 @@
     "not op_mini all",
     "not Android > 1",
     "not safari < 10"
-  ]
+  ],
+  "pnpm": {
+    "overrides": {
+      "form-data": "4.0.4"
+    }
+  }
 }
