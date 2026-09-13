@@ -3,7 +3,7 @@ ahmedabad:
 andhrapradesh:
   gtfs.zip: e6b59faf4d2cb29faf39111c087cbd3d3e30e095757bc8b324facc3f11fa799e
 blr:
-  gtfs.zip: 2308f8248ea954b75b3660cda7b6d85ecf80831179968baec8ae3db5b41b0b4e
+  gtfs.zip: b5fe4a8e05495f719e4c8f16452dc6c4820f342b5414c3fb51e19687b5ea3333
 chennai:
   gtfs.zip: cb2b1de54af6420c3d3dff7796e9e1f0abe3cfb6e36f8dd9c95e330bc4ac8095
 delhi:
@@ -25,7 +25,7 @@ mumbai:
 nyc:
   gtfs.zip: f17612e9586f2f621af0e2c1f987d7a8eda01abb52769ee0599a975514ec59a1
 pune:
-  gtfs.zip: 344aae56a22023e83343e47c28e45e85a6e4134de427d6f6b93cdc493e077bf0
+  gtfs.zip: 9691f5cb7c9b8c2962c85505c52154a6d516790922604ea665f161bab375896b
 railways:
   gtfs.zip: a0347d046ccc66b182f08df88dd5eb6153fd19610a58c87d14e1e6910c937be8
 rajkot:
