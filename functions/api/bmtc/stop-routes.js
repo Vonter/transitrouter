@@ -1,17 +1,14 @@
 /**
  * Cloudflare Pages Function for BMTC Stop Routes (Phase 1)
  * Returns arrival ETAs without vehicle positions for fast initial render.
- * Endpoint: /api/bmtc/stop-routes?stationid=20820
+ * Endpoint: /api/bmtc/stop-routes?stationid=20558
+ *
+ * Same Chalo stop-route-eta source as arrivals.js (see that file for the
+ * id-resolution and data-richness notes), just without the GTFS-RT
+ * location enrichment step.
  */
-
-const BMTC_HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
-  Accept: 'application/json, text/plain, */*',
-  'Content-Type': 'application/json',
-  lan: 'en',
-  deviceType: 'WEB',
-};
+import BLR_ID_MAPPING from './blr-id-mapping.js';
+import { fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './chalo.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -26,11 +23,19 @@ function jsonResponse(body, status = 200, extra = {}) {
   });
 }
 
-// Parse "DD-MM-YYYY HH:MM:SS" (IST) to a Date
-function parseBMTCDate(dateString) {
-  const [date, time = '00:00:00'] = dateString.split(' ');
-  const [dd, mm, yyyy] = date.split('-');
-  return new Date(`${yyyy}-${mm}-${dd}T${time}+05:30`);
+// chaloRouteId -> local route_short_name, built once from BLR_ID_MAPPING so
+// services can be labeled with local names rather than Chalo's own `rN`.
+let chaloRouteIdToLocalName = null;
+function getChaloRouteIdToLocalName() {
+  if (chaloRouteIdToLocalName) return chaloRouteIdToLocalName;
+  chaloRouteIdToLocalName = new Map();
+  for (const [name, entry] of Object.entries(BLR_ID_MAPPING.routes)) {
+    const { chaloRoutes } = parseRouteMapping(entry, BLR_ID_MAPPING);
+    for (const { chaloRouteId } of chaloRoutes) {
+      chaloRouteIdToLocalName.set(chaloRouteId, name);
+    }
+  }
+  return chaloRouteIdToLocalName;
 }
 
 export async function onRequest(context) {
@@ -51,25 +56,19 @@ export async function onRequest(context) {
       return jsonResponse({ error: 'stationid parameter is required' }, 400);
     }
 
-    const res = await fetch(
-      'https://bmtcmobileapi.karnataka.gov.in/WebAPI/GetMobileTripsData',
-      {
-        method: 'POST',
-        headers: BMTC_HEADERS,
-        body: JSON.stringify({ stationid: parseInt(stationId), triptype: 1 }),
-      },
-    );
-
-    if (!res.ok) throw new Error(`BMTC API returned ${res.status}`);
-
-    const result = await res.json();
     const cacheHeaders = { 'Cache-Control': 'public, max-age=10' };
 
-    if (!result.Issuccess || !result.data?.length) {
+    const stopRoutePairs = parseStopMapping(BLR_ID_MAPPING.stops[stationId], BLR_ID_MAPPING);
+    if (stopRoutePairs.length === 0) {
       return jsonResponse({ services: [] }, 200, cacheHeaders);
     }
 
-    const services = convertBMTCToServices(result.data);
+    // Each pair already carries the chalo stop id specific to that route's
+    // own direction (see parseStopMapping) — no shared/collapsed stop id.
+    const stopIdRouteIdList = stopRoutePairs.map(({ routeId, chaloStopId }) => `${chaloStopId}:${routeId}`);
+    const etaResult = await fetchStopRouteEta(stopIdRouteIdList);
+
+    const services = convertChaloToServices(etaResult, stopIdRouteIdList);
     return jsonResponse({ services }, 200, cacheHeaders);
   } catch (error) {
     console.error('BMTC Stop Routes Function Error:', error);
@@ -80,35 +79,43 @@ export async function onRequest(context) {
   }
 }
 
-function convertBMTCToServices(data) {
-  const now = new Date();
+function convertChaloToServices(etaResult, stopIdRouteIdList) {
   const MAX_MS = 90 * 60 * 1000;
+  const routeIdToLocalName = getChaloRouteIdToLocalName();
 
   const servicesMap = new Map();
-  for (const trip of data) {
-    const duration_ms = parseBMTCDate(trip.arrivaltime) - now;
-    if (duration_ms < 0 || duration_ms > MAX_MS) continue;
+  for (const pairKey of stopIdRouteIdList) {
+    const [, chaloRouteId] = pairKey.split(':');
+    const localRouteName = routeIdToLocalName.get(chaloRouteId);
+    if (!localRouteName) continue;
 
-    const key = `${trip.routeno}-${trip.tostationname}`;
-    if (!servicesMap.has(key)) {
-      servicesMap.set(key, {
-        no: trip.routeno,
-        destination: trip.tostationname,
-        trips: [],
+    const vehicleMap = etaResult.get(pairKey);
+    if (!vehicleMap) continue;
+
+    for (const [vehicleId, parsed] of vehicleMap) {
+      const etaSeconds = normalizeEtaSeconds(parsed.eta);
+      if (etaSeconds == null) continue;
+
+      const duration_ms = etaSeconds * 1000;
+      if (duration_ms > MAX_MS) continue;
+
+      const key = `${localRouteName}-${parsed.dest}`;
+      if (!servicesMap.has(key)) {
+        servicesMap.set(key, { no: localRouteName, destination: parsed.dest, trips: [] });
+      }
+
+      servicesMap.get(key).trips.push({
+        duration_ms,
+        type: 'SD',
+        load: null,
+        feature: 'WAB',
+        visit_number: 1,
+        origin_code: null,
+        destination_code: parsed.dest,
+        vehicle_id: vehicleId,
+        bus_no: parsed.vNo,
       });
     }
-
-    servicesMap.get(key).trips.push({
-      duration_ms,
-      type: 'SD',
-      load: trip.devicestatusflag === 1 ? 'SEA' : 'SDA',
-      feature: 'WAB',
-      visit_number: 1,
-      origin_code: trip.fromstationname,
-      destination_code: trip.tostationname,
-      vehicle_id: trip.vehicleid,
-      bus_no: trip.busno,
-    });
   }
 
   return Array.from(servicesMap.values()).map(({ no, destination, trips }) => {

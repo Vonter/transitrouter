@@ -1,6 +1,6 @@
 /**
- * Cloudflare Pages Function for PMPML Live Arrival Data
- * Endpoint: /api/pmpml/arrivals?stationid=41
+ * Cloudflare Pages Function for PMPML Live Arrival Data (GTFS-RT variant)
+ * Endpoint: /api/pmpml-gtfs/arrivals?stationid=41
  */
 
 const PMPML_HEADERS = {

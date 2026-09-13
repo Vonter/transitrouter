@@ -6,6 +6,7 @@ tmp
 .cache
 .parcel-cache
 .env
+.dev.vars
 data/3/route-lines
 .vscode
 

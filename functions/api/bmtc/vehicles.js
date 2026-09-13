@@ -1,24 +1,36 @@
 /**
  * Cloudflare Pages Function for BMTC Live Vehicle Tracking
- * Automatically deployed with your Pages project
  *
- * Endpoint: /api/bmtc/vehicles?routetext=KIA-14&servicetypeid=0
- *           /api/bmtc/vehicles?routeid=6463&servicetypeid=0
+ * Endpoint: /api/bmtc/vehicles?routetext=KIA-9&servicetypeid=0
+ *           /api/bmtc/vehicles?routeid=1101&servicetypeid=0
  *
- * Accepts either routetext (route name) or routeid as parameter.
- * If routetext is provided, searches for route ID first, then fetches vehicles.
- * Returns processed GeoJSON data ready for frontend use.
+ * Accepts either routetext (route name) or routeid (numeric GTFS-RT route
+ * id) as parameter.
+ *
+ * routetext is resolved via the static BLR_ID_MAPPING — a route missing
+ * from that mapping can't be served. Tries the GTFS-RT feed first once a
+ * numeric route id is known (via routeid directly, or `.gtfsRtRouteId` from
+ * the mapping); when that feed comes back empty (it only carries a sample
+ * of the fleet), falls back to Chalo's route-live-info, queried once per
+ * direction variant of the route and merged (see BLR_ID_MAPPING's
+ * `.chaloRoutes`, and chalo.js). bmtcmobileapi.karnataka.gov.in is retired.
+ *
+ * Chalo's per-vehicle schema is leaner than GTFS-RT's contract fields here
+ * (no schedule/actual times, stop info, trip position, etc.) — those are
+ * explicit `null` rather than omitted, same as the GTFS-RT branch already
+ * did before this migration.
  */
+import BLR_ID_MAPPING from './blr-id-mapping.js';
+import { fetchVehiclePositions, matchesRouteId } from './bmtc-rt.js';
+import { fetchRouteLiveInfo, normalizeEtaSeconds, parseRouteMapping } from './chalo.js';
 
 export async function onRequest(context) {
-  const { request, env } = context;
+  const { request } = context;
 
-  // Handle CORS preflight requests
   if (request.method === 'OPTIONS') {
     return handleCORS();
   }
 
-  // Only allow GET requests
   if (request.method !== 'GET') {
     return new Response('Method not allowed', {
       status: 405,
@@ -27,178 +39,76 @@ export async function onRequest(context) {
   }
 
   try {
-    // Get route parameters from URL query parameters
     const url = new URL(request.url);
     const routeText = url.searchParams.get('routetext');
-    const routeId = url.searchParams.get('routeid');
-    const serviceTypeId = url.searchParams.get('servicetypeid') || '0';
+    const routeIdParam = url.searchParams.get('routeid');
 
-    // Must provide either routetext or routeid
-    if (!routeText && !routeId) {
+    if (!routeText && !routeIdParam) {
       return new Response(
         JSON.stringify({
           error: 'Either routetext or routeid parameter is required',
         }),
         {
           status: 400,
-          headers: {
-            'Content-Type': 'application/json',
-            ...getCORSHeaders(),
-          },
+          headers: { 'Content-Type': 'application/json', ...getCORSHeaders() },
         },
       );
     }
 
-    let finalRouteId = routeId ? parseInt(routeId) : null;
-
-    // If routetext is provided, search for route ID first
-    if (routeText && !finalRouteId) {
-      console.log('BMTC Route Search API Request:', {
-        routetext: routeText,
-      });
-
-      // Fetch route ID from BMTC route search API
-      const routeSearchResponse = await fetch(
-        'https://bmtcmobileapi.karnataka.gov.in/WebAPI/SearchRoute_v2',
-        {
-          method: 'POST',
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
-            Accept: 'application/json, text/plain, */*',
-            'Content-Type': 'application/json',
-            lan: 'en',
-            deviceType: 'WEB',
-          },
-          body: JSON.stringify({
-            routetext: routeText.toLowerCase(),
-          }),
-        },
-      );
-
-      if (!routeSearchResponse.ok) {
-        throw new Error(
-          `BMTC Route Search API returned ${routeSearchResponse.status}`,
-        );
-      }
-
-      const routeSearchResult = await routeSearchResponse.json();
-
-      if (
-        !routeSearchResult.Issuccess ||
-        !routeSearchResult.data ||
-        routeSearchResult.data.length === 0
-      ) {
-        return new Response(
-          JSON.stringify({
-            routeId: null,
-            vehicles: [],
-            geoJSON: {
-              type: 'FeatureCollection',
-              features: [],
-            },
-            message: 'No routes found',
-          }),
-          {
-            status: 200,
-            headers: {
-              'Content-Type': 'application/json',
-              'Cache-Control': 'public, max-age=15',
-              ...getCORSHeaders(),
-            },
-          },
-        );
-      }
-
-      // Find exact match (case-insensitive)
-      const exactMatch = routeSearchResult.data.find(
-        (route) => route.routeno.toLowerCase() === routeText.toLowerCase(),
-      );
-
-      if (!exactMatch) {
-        return new Response(
-          JSON.stringify({
-            routeId: null,
-            vehicles: [],
-            geoJSON: {
-              type: 'FeatureCollection',
-              features: [],
-            },
-            message: 'No exact route match found',
-          }),
-          {
-            status: 200,
-            headers: {
-              'Content-Type': 'application/json',
-              'Cache-Control': 'public, max-age=15',
-              ...getCORSHeaders(),
-            },
-          },
-        );
-      }
-
-      finalRouteId = exactMatch.routeparentid;
-      console.log('Found route ID:', finalRouteId, 'for route:', routeText);
-    }
-
-    if (!finalRouteId) {
-      return new Response(
-        JSON.stringify({
-          error: 'Could not determine route ID',
-        }),
-        {
-          status: 400,
-          headers: {
-            'Content-Type': 'application/json',
-            ...getCORSHeaders(),
-          },
-        },
-      );
-    }
-
-    // Log the request
-    console.log('BMTC Vehicles API Request:', {
-      routeid: finalRouteId,
-      servicetypeid: parseInt(serviceTypeId),
-    });
-
-    // Fetch vehicle data from BMTC API
-    const bmtcResponse = await fetch(
-      'https://bmtcmobileapi.karnataka.gov.in/WebAPI/SearchByRouteDetails_v4',
-      {
-        method: 'POST',
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
-          Accept: 'application/json, text/plain, */*',
-          'Content-Type': 'application/json',
-          lan: 'en',
-          deviceType: 'WEB',
-        },
-        body: JSON.stringify({
-          routeid: finalRouteId,
-          servicetypeid: parseInt(serviceTypeId),
-        }),
-      },
+    const { gtfsRtRouteId, chaloRoutes } = parseRouteMapping(
+      routeText ? BLR_ID_MAPPING.routes[routeText] : null,
+      BLR_ID_MAPPING,
     );
 
-    if (!bmtcResponse.ok) {
-      throw new Error(`BMTC API returned ${bmtcResponse.status}`);
+    let finalRouteId = routeIdParam ? parseInt(routeIdParam, 10) : null;
+    if (!finalRouteId && gtfsRtRouteId) {
+      finalRouteId = parseInt(gtfsRtRouteId, 10);
     }
 
-    // Read the response body once and parse it
-    const result = await bmtcResponse.json();
+    // Try GTFS-RT first whenever a numeric route id is already known.
+    if (finalRouteId) {
+      const gtfsVehicles = await fetchVehiclesFromGtfsRt(finalRouteId, routeText);
+      if (gtfsVehicles.length > 0) {
+        return new Response(
+          JSON.stringify({ routeId: finalRouteId, vehicles: gtfsVehicles }),
+          {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'public, max-age=15',
+              ...getCORSHeaders(),
+            },
+          },
+        );
+      }
+      // No live GTFS-RT vehicles for this route right now (feed only
+      // samples the fleet) — fall through to Chalo below.
+    }
 
-    // Log the parsed result
-    console.log('BMTC Vehicles API Response:', result);
+    if (routeText && chaloRoutes.length > 0) {
+      const vehicles = await fetchVehiclesFromChalo(chaloRoutes, routeText);
+      return new Response(
+        JSON.stringify({ routeId: finalRouteId || null, vehicles }),
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'public, max-age=15',
+            ...getCORSHeaders(),
+          },
+        },
+      );
+    }
 
-    // Check if API returned valid data
-    if (!result.up && !result.down) {
+    // routetext not found in the mapping (no GTFS-RT id, no Chalo route) —
+    // there's no live lookup left to fall back to.
+    if (routeText && !finalRouteId) {
       return new Response(
         JSON.stringify({
-          routeId: finalRouteId,
+          routeId: null,
           vehicles: [],
-          message: 'No vehicle tracking data available',
+          geoJSON: { type: 'FeatureCollection', features: [] },
+          message: 'No routes found',
         }),
         {
           status: 200,
@@ -211,26 +121,15 @@ export async function onRequest(context) {
       );
     }
 
-    // Convert BMTC API response to a cleaner format
-    const vehicleData = {
-      up: convertDirectionData(result.up),
-      down: convertDirectionData(result.down),
-    };
-
-    // Extract vehicles from both directions WITH location
-    // Client will generate GeoJSON from vehicles array
-    const vehicles = extractVehiclesWithLocation(vehicleData);
-
+    // Numeric routeid given but GTFS-RT had nothing and there's no
+    // routetext to resolve a Chalo fallback from.
     return new Response(
-      JSON.stringify({
-        routeId: finalRouteId,
-        vehicles,
-      }),
+      JSON.stringify({ routeId: finalRouteId, vehicles: [], message: 'No vehicle tracking data available' }),
       {
         status: 200,
         headers: {
           'Content-Type': 'application/json',
-          'Cache-Control': 'public, max-age=15', // Cache for 15 seconds
+          'Cache-Control': 'public, max-age=15',
           ...getCORSHeaders(),
         },
       },
@@ -244,192 +143,105 @@ export async function onRequest(context) {
       }),
       {
         status: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          ...getCORSHeaders(),
-        },
+        headers: { 'Content-Type': 'application/json', ...getCORSHeaders() },
       },
     );
   }
 }
 
 /**
- * Parse BMTC date string in DD-MM-YYYY HH:MM:SS format to JavaScript Date
- * BMTC API returns dates in IST timezone
- * @param {string} dateString - Date string in format "DD-MM-YYYY HH:MM:SS"
- * @returns {Date} JavaScript Date object in UTC
+ * Fetches vehicles for a route from the GTFS-RT feed, in the same shape
+ * fetchVehiclesFromChalo below produces — fields the source has no
+ * equivalent for (schedule, actual times, stop info, trip position, etc.)
+ * are explicit `null` rather than omitted.
  */
-function parseBMTCDate(dateString) {
-  if (!dateString || dateString.trim() === '') {
-    return null;
-  }
-
+async function fetchVehiclesFromGtfsRt(routeId, routeText) {
+  let allVehicles;
   try {
-    // Expected format: "31-10-2025 14:30:00" (DD-MM-YYYY HH:MM:SS in IST)
-    const parts = dateString.split(' ');
-    const dateParts = parts[0].split('-');
-    const timeParts = parts[1] ? parts[1].split(':') : ['0', '0', '0'];
-
-    const day = parseInt(dateParts[0], 10);
-    const month = parseInt(dateParts[1], 10) - 1; // JavaScript months are 0-indexed
-    const year = parseInt(dateParts[2], 10);
-    const hours = parseInt(timeParts[0], 10);
-    const minutes = parseInt(timeParts[1], 10);
-    const seconds = parseInt(timeParts[2], 10);
-
-    // Create date in ISO format with IST timezone offset
-    // Format: YYYY-MM-DDTHH:MM:SS+05:30
-    const isoString = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}+05:30`;
-
-    return new Date(isoString);
-  } catch (e) {
-    console.error('Error parsing date:', dateString, e);
-    return null;
-  }
-}
-
-/**
- * Convert direction data from BMTC API to a cleaner format
- */
-function convertDirectionData(directionData) {
-  if (
-    !directionData ||
-    !directionData.data ||
-    directionData.data.length === 0
-  ) {
+    allVehicles = await fetchVehiclePositions();
+  } catch (error) {
+    console.error('BMTC GTFS-RT feed fetch failed, falling back to Chalo:', error);
     return [];
   }
 
-  return directionData.data.map((station) => {
-    const vehicles = station.vehicleDetails
-      ? station.vehicleDetails.map((vehicle) => {
-          // Parse last refresh time
-          const lastRefreshDate = parseBMTCDate(vehicle.lastrefreshon);
-          const lastRefreshMs = lastRefreshDate
-            ? lastRefreshDate.getTime()
-            : null;
-
-          return {
-            vehicleId: vehicle.vehicleid,
-            vehicleNumber: vehicle.vehiclenumber,
-            serviceType: vehicle.servicetype,
-            serviceTypeId: vehicle.servicetypeid,
-            location: {
-              lat: parseFloat(vehicle.centerlat),
-              lng: parseFloat(vehicle.centerlong),
-            },
-            heading: vehicle.heading,
-            eta: vehicle.eta || null,
-            schedule: {
-              arrivalTime: vehicle.sch_arrivaltime || null,
-              departureTime: vehicle.sch_departuretime || null,
-              tripStartTime: vehicle.sch_tripstarttime || null,
-              tripEndTime: vehicle.sch_tripendtime || null,
-            },
-            actual: {
-              arrivalTime: vehicle.actual_arrivaltime || null,
-              departureTime: vehicle.actual_departuretime || null,
-            },
-            stops: {
-              last: vehicle.laststop,
-              current: vehicle.currentstop,
-              next: vehicle.nextstop,
-              lastLocationId: vehicle.lastlocationid,
-              currentLocationId: vehicle.currentlocationid,
-              nextLocationId: vehicle.nextlocationid,
-            },
-            stopCoveredStatus: vehicle.stopCoveredStatus,
-            tripPosition: vehicle.tripposition,
-            lastRefresh: vehicle.lastrefreshon,
-            lastRefreshMs: lastRefreshMs,
-            lastReceivedFlag: vehicle.lastreceiveddatetimeflag,
-          };
-        })
-      : [];
-
-    return {
-      routeId: station.routeid,
-      stationId: station.stationid,
-      stationName: station.stationname,
-      routeNo: station.routeno,
-      from: station.from,
-      to: station.to,
-      distanceOnStation: station.distance_on_station,
-      location: {
-        lat: parseFloat(station.centerlat),
-        lng: parseFloat(station.centerlong),
+  return allVehicles
+    .filter((v) => matchesRouteId(v, routeId) && v.lat != null && v.lng != null)
+    .map((v) => ({
+      vehicleId: v.vehicleId,
+      vehicleNumber: v.vehicleLabel || v.vehicleId,
+      serviceType: null,
+      serviceTypeId: null,
+      location: { lat: v.lat, lng: v.lng },
+      heading: v.bearing,
+      eta: null,
+      schedule: { arrivalTime: null, departureTime: null, tripStartTime: null, tripEndTime: null },
+      actual: { arrivalTime: null, departureTime: null },
+      stops: {
+        last: null, current: null, next: null,
+        lastLocationId: null, currentLocationId: null, nextLocationId: null,
       },
-      responseCode: station.responsecode,
-      isNotify: station.isnotify,
-      vehicles: vehicles,
-    };
-  });
+      stopCoveredStatus: null,
+      tripPosition: null,
+      lastRefresh: null,
+      lastRefreshMs: v.timestamp ? v.timestamp * 1000 : null,
+      lastReceivedFlag: null,
+      direction: null,
+      stationName: null,
+      routeNo: routeText || null,
+    }));
 }
 
 /**
- * Extract all vehicles from the API response (both directions) WITH location
- * Used for GeoJSON conversion before location is removed
- * @param {Object} vehicleData - The API response containing up and down direction data
- * @returns {Array} Array of vehicle objects with normalized structure including location, deduplicated by vehicle number
+ * Fetches vehicles for every direction variant of a route from Chalo's
+ * route-live-info, merged and deduplicated by vehicle id.
  */
-function extractVehiclesWithLocation(vehicleData) {
-  if (!vehicleData || (!vehicleData.up && !vehicleData.down)) {
-    return [];
-  }
+async function fetchVehiclesFromChalo(chaloRoutes, routeText) {
+  const results = await Promise.all(
+    chaloRoutes.map(async ({ chaloRouteId, sampleStopId }) => {
+      try {
+        return await fetchRouteLiveInfo(chaloRouteId, sampleStopId);
+      } catch (error) {
+        console.error(`Chalo route-live-info failed for ${chaloRouteId}:`, error);
+        return new Map();
+      }
+    }),
+  );
 
+  const seen = new Set();
   const vehicles = [];
-  const seenVehicleNumbers = new Set();
-
-  // Process up direction
-  if (vehicleData.up && vehicleData.up.length > 0) {
-    vehicleData.up.forEach((station) => {
-      if (station.vehicles && station.vehicles.length > 0) {
-        station.vehicles.forEach((vehicle) => {
-          // Skip duplicate vehicle numbers
-          if (seenVehicleNumbers.has(vehicle.vehicleNumber)) {
-            return;
-          }
-
-          vehicles.push({
-            ...vehicle,
-            direction: 'up',
-            stationName: station.stationName,
-            routeNo: station.routeNo,
-          });
-          seenVehicleNumbers.add(vehicle.vehicleNumber);
-        });
-      }
-    });
+  for (const vehicleMap of results) {
+    for (const [vehicleId, parsed] of vehicleMap) {
+      if (seen.has(vehicleId)) continue;
+      if (typeof parsed._latitude !== 'number' || typeof parsed._longitude !== 'number') continue;
+      seen.add(vehicleId);
+      vehicles.push({
+        vehicleId,
+        vehicleNumber: parsed.vNo || vehicleId,
+        serviceType: null,
+        serviceTypeId: null,
+        location: { lat: parsed._latitude, lng: parsed._longitude },
+        heading: parsed.bearing ?? null,
+        eta: normalizeEtaSeconds(parsed.eta),
+        schedule: { arrivalTime: null, departureTime: null, tripStartTime: null, tripEndTime: null },
+        actual: { arrivalTime: null, departureTime: null },
+        stops: {
+          last: null, current: null, next: null,
+          lastLocationId: null, currentLocationId: null, nextLocationId: null,
+        },
+        stopCoveredStatus: null,
+        tripPosition: null,
+        lastRefresh: null,
+        lastRefreshMs: parsed.tS ?? null,
+        lastReceivedFlag: null,
+        direction: null,
+        stationName: null,
+        routeNo: routeText || null,
+      });
+    }
   }
-
-  // Process down direction
-  if (vehicleData.down && vehicleData.down.length > 0) {
-    vehicleData.down.forEach((station) => {
-      if (station.vehicles && station.vehicles.length > 0) {
-        station.vehicles.forEach((vehicle) => {
-          // Skip duplicate vehicle numbers
-          if (seenVehicleNumbers.has(vehicle.vehicleNumber)) {
-            return;
-          }
-
-          vehicles.push({
-            ...vehicle,
-            direction: 'down',
-            stationName: station.stationName,
-            routeNo: station.routeNo,
-          });
-          seenVehicleNumbers.add(vehicle.vehicleNumber);
-        });
-      }
-    });
-  }
-
   return vehicles;
 }
 
-/**
- * Get CORS headers
- */
 function getCORSHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
@@ -438,12 +250,6 @@ function getCORSHeaders() {
   };
 }
 
-/**
- * Handle CORS preflight requests
- */
 function handleCORS() {
-  return new Response(null, {
-    status: 204,
-    headers: getCORSHeaders(),
-  });
+  return new Response(null, { status: 204, headers: getCORSHeaders() });
 }
