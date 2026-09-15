@@ -29,6 +29,25 @@ test.describe('Search', () => {
     ).toBeVisible({ timeout: 5000 });
   });
 
+  test('should keep the expanded mobile search sheet within 80% of the viewport', async ({
+    page,
+  }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith('Mobile'));
+
+    await page.locator('input[type="search"]').first().click();
+    const searchPopover = page.locator('#search-popover');
+    await expect(searchPopover).toHaveClass(/expand/);
+
+    await expect
+      .poll(async () =>
+        searchPopover.evaluate((el) => {
+          const pane = el.parentElement;
+          return pane.getBoundingClientRect().height / window.innerHeight;
+        }),
+      )
+      .toBeLessThanOrEqual(0.801);
+  });
+
   test('should find service numbers when hyphens are omitted', async ({ page }) => {
     const search = page.locator('input[type="search"]').first();
     await search.click();

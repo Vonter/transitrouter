@@ -73,7 +73,7 @@ export function computeSearchBreaks(el) {
   // much keeps the input bar itself on screen and tappable at "bottom".
   const peekHeight = 60;
   return {
-    top: { enabled: true, height: Math.max(0, vh - 80) },
+    top: { enabled: true, height: Math.max(0, Math.floor(vh * 0.8)) },
     middle: { enabled: true, height: Math.round(vh * 0.45) },
     bottom: { enabled: true, height: peekHeight },
   };
