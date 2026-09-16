@@ -4,25 +4,18 @@
  * Endpoint: /api/bmtc/vehicles?routetext=KIA-9&servicetypeid=0
  *           /api/bmtc/vehicles?routeid=1101&servicetypeid=0
  *
- * Accepts either routetext (route name) or routeid (numeric GTFS-RT route
- * id) as parameter.
- *
- * routetext is resolved via the static BLR_ID_MAPPING — a route missing
- * from that mapping can't be served. Tries the GTFS-RT feed first once a
- * numeric route id is known (via routeid directly, or `.gtfsRtRouteId` from
- * the mapping); when that feed comes back empty (it only carries a sample
- * of the fleet), falls back to Chalo's route-live-info, queried once per
- * direction variant of the route and merged (see BLR_ID_MAPPING's
- * `.chaloRoutes`, and chalo.js). bmtcmobileapi.karnataka.gov.in is retired.
- *
- * Chalo's per-vehicle schema is leaner than GTFS-RT's contract fields here
- * (no schedule/actual times, stop info, trip position, etc.) — those are
- * explicit `null` rather than omitted, same as the GTFS-RT branch already
- * did before this migration.
+ * routetext is resolved via BLR_ID_MAPPING — a route missing from it can't
+ * be served. Tries the GTFS-RT feed first (lower latency than a live
+ * call), matching against every known id for the route: Namma BMTC's ids
+ * first, then the legacy numeric BMTC id — trying Namma BMTC ids first
+ * means the fast path keeps working automatically if gtfs.bengawalk.com
+ * ever switches its route_id scheme to match Namma BMTC's. Only falls back
+ * to a live Namma BMTC route-live-info call (once per direction variant,
+ * merged) when neither matches. bmtcmobileapi.karnataka.gov.in is retired.
  */
 import BLR_ID_MAPPING from './blr-id-mapping.js';
 import { fetchVehiclePositions, matchesRouteId } from './bmtc-rt.js';
-import { fetchRouteLiveInfo, normalizeEtaSeconds, parseRouteMapping } from './chalo.js';
+import { fetchRouteLiveInfo, normalizeEtaSeconds, parseRouteMapping } from './namma-bmtc.js';
 
 export async function onRequest(context) {
   const { request } = context;
@@ -55,7 +48,7 @@ export async function onRequest(context) {
       );
     }
 
-    const { gtfsRtRouteId, chaloRoutes } = parseRouteMapping(
+    const { gtfsRtRouteId, nammaBmtcRoutes } = parseRouteMapping(
       routeText ? BLR_ID_MAPPING.routes[routeText] : null,
       BLR_ID_MAPPING,
     );
@@ -65,28 +58,31 @@ export async function onRequest(context) {
       finalRouteId = parseInt(gtfsRtRouteId, 10);
     }
 
-    // Try GTFS-RT first whenever a numeric route id is already known.
-    if (finalRouteId) {
-      const gtfsVehicles = await fetchVehiclesFromGtfsRt(finalRouteId, routeText);
-      if (gtfsVehicles.length > 0) {
-        return new Response(
-          JSON.stringify({ routeId: finalRouteId, vehicles: gtfsVehicles }),
-          {
-            status: 200,
-            headers: {
-              'Content-Type': 'application/json',
-              'Cache-Control': 'public, max-age=15',
-              ...getCORSHeaders(),
+    // Try GTFS-RT first, against every id scheme we know for this route.
+    const gtfsAllVehicles = await fetchGtfsRtVehicles();
+    if (gtfsAllVehicles) {
+      const gtfsCandidates = [...nammaBmtcRoutes.map((r) => r.nammaBmtcRouteId), finalRouteId].filter(Boolean);
+      for (const candidateId of gtfsCandidates) {
+        const matched = matchGtfsRtVehicles(gtfsAllVehicles, candidateId, routeText);
+        if (matched.length > 0) {
+          return new Response(
+            JSON.stringify({ routeId: finalRouteId || null, vehicles: matched }),
+            {
+              status: 200,
+              headers: {
+                'Content-Type': 'application/json',
+                'Cache-Control': 'public, max-age=15',
+                ...getCORSHeaders(),
+              },
             },
-          },
-        );
+          );
+        }
       }
-      // No live GTFS-RT vehicles for this route right now (feed only
-      // samples the fleet) — fall through to Chalo below.
+      // No live GTFS-RT vehicles under any known id — fall through.
     }
 
-    if (routeText && chaloRoutes.length > 0) {
-      const vehicles = await fetchVehiclesFromChalo(chaloRoutes, routeText);
+    if (routeText && nammaBmtcRoutes.length > 0) {
+      const vehicles = await fetchVehiclesFromNammaBmtc(nammaBmtcRoutes, routeText);
       return new Response(
         JSON.stringify({ routeId: finalRouteId || null, vehicles }),
         {
@@ -100,8 +96,7 @@ export async function onRequest(context) {
       );
     }
 
-    // routetext not found in the mapping (no GTFS-RT id, no Chalo route) —
-    // there's no live lookup left to fall back to.
+    // routetext not found in the mapping — nothing left to fall back to.
     if (routeText && !finalRouteId) {
       return new Response(
         JSON.stringify({
@@ -122,7 +117,7 @@ export async function onRequest(context) {
     }
 
     // Numeric routeid given but GTFS-RT had nothing and there's no
-    // routetext to resolve a Chalo fallback from.
+    // routetext to resolve a Namma BMTC fallback from.
     return new Response(
       JSON.stringify({ routeId: finalRouteId, vehicles: [], message: 'No vehicle tracking data available' }),
       {
@@ -149,21 +144,21 @@ export async function onRequest(context) {
   }
 }
 
-/**
- * Fetches vehicles for a route from the GTFS-RT feed, in the same shape
- * fetchVehiclesFromChalo below produces — fields the source has no
- * equivalent for (schedule, actual times, stop info, trip position, etc.)
- * are explicit `null` rather than omitted.
- */
-async function fetchVehiclesFromGtfsRt(routeId, routeText) {
-  let allVehicles;
+/** Fetches the GTFS-RT feed once; `null` on failure so callers can tell a
+ * feed outage apart from "fetched OK, nothing matched". */
+async function fetchGtfsRtVehicles() {
   try {
-    allVehicles = await fetchVehiclePositions();
+    return await fetchVehiclePositions();
   } catch (error) {
-    console.error('BMTC GTFS-RT feed fetch failed, falling back to Chalo:', error);
-    return [];
+    console.error('BMTC GTFS-RT feed fetch failed, falling back to Namma BMTC:', error);
+    return null;
   }
+}
 
+/** Filters already-fetched GTFS-RT vehicles by route id, in the same
+ * shape fetchVehiclesFromNammaBmtc below produces (fields the feed has no
+ * equivalent for are explicit `null` rather than omitted). */
+function matchGtfsRtVehicles(allVehicles, routeId, routeText) {
   return allVehicles
     .filter((v) => matchesRouteId(v, routeId) && v.lat != null && v.lng != null)
     .map((v) => ({
@@ -191,17 +186,15 @@ async function fetchVehiclesFromGtfsRt(routeId, routeText) {
     }));
 }
 
-/**
- * Fetches vehicles for every direction variant of a route from Chalo's
- * route-live-info, merged and deduplicated by vehicle id.
- */
-async function fetchVehiclesFromChalo(chaloRoutes, routeText) {
+/** Fetches vehicles for every direction variant of a route from Namma
+ * BMTC's route-live-info, merged and deduplicated by vehicle id. */
+async function fetchVehiclesFromNammaBmtc(nammaBmtcRoutes, routeText) {
   const results = await Promise.all(
-    chaloRoutes.map(async ({ chaloRouteId, sampleStopId }) => {
+    nammaBmtcRoutes.map(async ({ nammaBmtcRouteId, sampleStopId }) => {
       try {
-        return await fetchRouteLiveInfo(chaloRouteId, sampleStopId);
+        return await fetchRouteLiveInfo(nammaBmtcRouteId, sampleStopId);
       } catch (error) {
-        console.error(`Chalo route-live-info failed for ${chaloRouteId}:`, error);
+        console.error(`Namma BMTC route-live-info failed for ${nammaBmtcRouteId}:`, error);
         return new Map();
       }
     }),

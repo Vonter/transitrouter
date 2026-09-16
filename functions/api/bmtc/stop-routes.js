@@ -3,12 +3,12 @@
  * Returns arrival ETAs without vehicle positions for fast initial render.
  * Endpoint: /api/bmtc/stop-routes?stationid=20558
  *
- * Same Chalo stop-route-eta source as arrivals.js (see that file for the
+ * Same Namma BMTC stop-route-eta source as arrivals.js (see that file for the
  * id-resolution and data-richness notes), just without the GTFS-RT
  * location enrichment step.
  */
 import BLR_ID_MAPPING from './blr-id-mapping.js';
-import { fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './chalo.js';
+import { fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './namma-bmtc.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -23,19 +23,19 @@ function jsonResponse(body, status = 200, extra = {}) {
   });
 }
 
-// chaloRouteId -> local route_short_name, built once from BLR_ID_MAPPING so
-// services can be labeled with local names rather than Chalo's own `rN`.
-let chaloRouteIdToLocalName = null;
-function getChaloRouteIdToLocalName() {
-  if (chaloRouteIdToLocalName) return chaloRouteIdToLocalName;
-  chaloRouteIdToLocalName = new Map();
+// nammaBmtcRouteId -> local route_short_name, built once from BLR_ID_MAPPING so
+// services can be labeled with local names rather than Namma BMTC's own `rN`.
+let nammaBmtcRouteIdToLocalName = null;
+function getNammaBmtcRouteIdToLocalName() {
+  if (nammaBmtcRouteIdToLocalName) return nammaBmtcRouteIdToLocalName;
+  nammaBmtcRouteIdToLocalName = new Map();
   for (const [name, entry] of Object.entries(BLR_ID_MAPPING.routes)) {
-    const { chaloRoutes } = parseRouteMapping(entry, BLR_ID_MAPPING);
-    for (const { chaloRouteId } of chaloRoutes) {
-      chaloRouteIdToLocalName.set(chaloRouteId, name);
+    const { nammaBmtcRoutes } = parseRouteMapping(entry, BLR_ID_MAPPING);
+    for (const { nammaBmtcRouteId } of nammaBmtcRoutes) {
+      nammaBmtcRouteIdToLocalName.set(nammaBmtcRouteId, name);
     }
   }
-  return chaloRouteIdToLocalName;
+  return nammaBmtcRouteIdToLocalName;
 }
 
 export async function onRequest(context) {
@@ -63,12 +63,12 @@ export async function onRequest(context) {
       return jsonResponse({ services: [] }, 200, cacheHeaders);
     }
 
-    // Each pair already carries the chalo stop id specific to that route's
+    // Each pair already carries the Namma BMTC stop id specific to that route's
     // own direction (see parseStopMapping) — no shared/collapsed stop id.
-    const stopIdRouteIdList = stopRoutePairs.map(({ routeId, chaloStopId }) => `${chaloStopId}:${routeId}`);
+    const stopIdRouteIdList = stopRoutePairs.map(({ routeId, nammaBmtcStopId }) => `${nammaBmtcStopId}:${routeId}`);
     const etaResult = await fetchStopRouteEta(stopIdRouteIdList);
 
-    const services = convertChaloToServices(etaResult, stopIdRouteIdList);
+    const services = convertNammaBmtcToServices(etaResult, stopIdRouteIdList);
     return jsonResponse({ services }, 200, cacheHeaders);
   } catch (error) {
     console.error('BMTC Stop Routes Function Error:', error);
@@ -79,14 +79,14 @@ export async function onRequest(context) {
   }
 }
 
-function convertChaloToServices(etaResult, stopIdRouteIdList) {
+function convertNammaBmtcToServices(etaResult, stopIdRouteIdList) {
   const MAX_MS = 90 * 60 * 1000;
-  const routeIdToLocalName = getChaloRouteIdToLocalName();
+  const routeIdToLocalName = getNammaBmtcRouteIdToLocalName();
 
   const servicesMap = new Map();
   for (const pairKey of stopIdRouteIdList) {
-    const [, chaloRouteId] = pairKey.split(':');
-    const localRouteName = routeIdToLocalName.get(chaloRouteId);
+    const [, nammaBmtcRouteId] = pairKey.split(':');
+    const localRouteName = routeIdToLocalName.get(nammaBmtcRouteId);
     if (!localRouteName) continue;
 
     const vehicleMap = etaResult.get(pairKey);

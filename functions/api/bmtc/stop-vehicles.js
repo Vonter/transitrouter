@@ -3,17 +3,16 @@
  * Fetches vehicle positions for multiple routes at a stop.
  * Endpoint: /api/bmtc/stop-vehicles?routes=KIA-9,335E,500CA
  *
- * Route names are resolved via the static BLR_ID_MAPPING — a route missing
- * from that mapping is dropped, with no live lookup to fall back to. Tries
- * the GTFS-RT feed first for each route's numeric `.gtfsRtRouteId`; when
- * the feed has no vehicles for it right now (this feed only carries a
- * sample of the fleet, so that doesn't mean none are running), falls back
- * to Chalo's route-live-info, queried once per direction variant in
- * `.chaloRoutes` and merged. bmtcmobileapi.karnataka.gov.in is retired.
+ * Route names are resolved via BLR_ID_MAPPING — a name missing from it is
+ * dropped, no fallback. Tries the GTFS-RT feed first per route, matching
+ * against Namma BMTC's ids then the legacy numeric BMTC id (so the fast
+ * path keeps working if the feed's id scheme ever switches). Falls back to
+ * a live Namma BMTC route-live-info call per direction variant, merged.
+ * bmtcmobileapi.karnataka.gov.in is retired.
  */
 import BLR_ID_MAPPING from './blr-id-mapping.js';
 import { fetchVehiclePositions, matchesRouteId } from './bmtc-rt.js';
-import { fetchRouteLiveInfo, parseRouteMapping } from './chalo.js';
+import { fetchRouteLiveInfo, parseRouteMapping } from './namma-bmtc.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -55,73 +54,93 @@ export async function onRequest(context) {
       return jsonResponse({ vehicles: [] }, 200);
     }
 
-    // Resolve route names to GTFS-RT ids and Chalo route variants. A name
-    // missing from the mapping has no live lookup to fall back to, so it's
-    // simply dropped.
+    // Resolve each name to its legacy GTFS-RT id and Namma BMTC variants.
     const gtfsRouteIdToNames = new Map(); // gtfsRtRouteId -> names[]
-    const chaloRouteIdToNames = new Map(); // chaloRouteId -> {sampleStopId, names[]}
+    const nammaRouteIdToNames = new Map(); // nammaBmtcRouteId -> {sampleStopId, names[]}
     for (const name of routeNames) {
-      const { gtfsRtRouteId, chaloRoutes } = parseRouteMapping(BLR_ID_MAPPING.routes[name], BLR_ID_MAPPING);
+      const { gtfsRtRouteId, nammaBmtcRoutes } = parseRouteMapping(BLR_ID_MAPPING.routes[name], BLR_ID_MAPPING);
       if (gtfsRtRouteId) {
         if (!gtfsRouteIdToNames.has(gtfsRtRouteId)) gtfsRouteIdToNames.set(gtfsRtRouteId, []);
         gtfsRouteIdToNames.get(gtfsRtRouteId).push(name);
       }
-      for (const { chaloRouteId, sampleStopId } of chaloRoutes) {
-        if (!chaloRouteIdToNames.has(chaloRouteId)) {
-          chaloRouteIdToNames.set(chaloRouteId, { sampleStopId, names: [] });
+      for (const { nammaBmtcRouteId, sampleStopId } of nammaBmtcRoutes) {
+        if (!nammaRouteIdToNames.has(nammaBmtcRouteId)) {
+          nammaRouteIdToNames.set(nammaBmtcRouteId, { sampleStopId, names: [] });
         }
-        chaloRouteIdToNames.get(chaloRouteId).names.push(name);
+        nammaRouteIdToNames.get(nammaBmtcRouteId).names.push(name);
       }
     }
 
     const allVehicles = [];
-    const chaloNeeded = new Map(chaloRouteIdToNames); // routes still needing Chalo
+    const satisfiedNames = new Set();
 
-    if (gtfsRouteIdToNames.size > 0) {
+    if (gtfsRouteIdToNames.size > 0 || nammaRouteIdToNames.size > 0) {
       let gtfsVehicles = [];
       try {
         gtfsVehicles = await fetchVehiclePositions();
       } catch (error) {
-        console.error('BMTC GTFS-RT feed fetch failed, using Chalo for all routes:', error);
+        console.error('BMTC GTFS-RT feed fetch failed, using Namma BMTC for all routes:', error);
+      }
+
+      // Try Namma BMTC ids against the feed first, then the legacy id —
+      // whichever the feed happens to use, this satisfies these names
+      // without a live call.
+      for (const [nammaBmtcRouteId, { names }] of nammaRouteIdToNames) {
+        const matches = gtfsVehicles.filter(
+          (v) => matchesRouteId(v, nammaBmtcRouteId) && v.lat != null && v.lng != null,
+        );
+        if (matches.length === 0) continue;
+        matches.forEach((v) => {
+          allVehicles.push({
+            vehicleId: v.vehicleId,
+            vehicleNumber: v.vehicleLabel || v.vehicleId,
+            lat: v.lat,
+            lng: v.lng,
+            heading: v.bearing,
+            routeNames: names,
+          });
+        });
+        names.forEach((n) => satisfiedNames.add(n));
       }
 
       for (const [routeId, names] of gtfsRouteIdToNames) {
+        const stillNeeded = names.filter((n) => !satisfiedNames.has(n));
+        if (stillNeeded.length === 0) continue;
+
         const matches = gtfsVehicles.filter(
           (v) => matchesRouteId(v, routeId) && v.lat != null && v.lng != null,
         );
-        if (matches.length > 0) {
-          matches.forEach((v) => {
-            allVehicles.push({
-              vehicleId: v.vehicleId,
-              vehicleNumber: v.vehicleLabel || v.vehicleId,
-              lat: v.lat,
-              lng: v.lng,
-              heading: v.bearing,
-              routeNames: names,
-            });
+        if (matches.length === 0) continue;
+        matches.forEach((v) => {
+          allVehicles.push({
+            vehicleId: v.vehicleId,
+            vehicleNumber: v.vehicleLabel || v.vehicleId,
+            lat: v.lat,
+            lng: v.lng,
+            heading: v.bearing,
+            routeNames: stillNeeded,
           });
-          // GTFS-RT already covered these names — don't also query Chalo
-          // for whichever of their chalo route variants are still pending.
-          for (const name of names) {
-            for (const [chaloRouteId, entry] of chaloNeeded) {
-              entry.names = entry.names.filter((n) => n !== name);
-              if (entry.names.length === 0) chaloNeeded.delete(chaloRouteId);
-            }
-          }
-        }
-        // No live GTFS-RT vehicles for this route right now — its Chalo
-        // variants (already queued in chaloNeeded) will be queried below.
+        });
+        stillNeeded.forEach((n) => satisfiedNames.add(n));
       }
     }
 
-    // Fetch vehicle positions from Chalo for all routes still needing it.
+    // Routes still needing a live call: those with names GTFS-RT didn't
+    // satisfy under either id scheme.
+    const nammaBmtcNeeded = new Map();
+    for (const [nammaBmtcRouteId, { sampleStopId, names }] of nammaRouteIdToNames) {
+      const remaining = names.filter((n) => !satisfiedNames.has(n));
+      if (remaining.length > 0) nammaBmtcNeeded.set(nammaBmtcRouteId, { sampleStopId, names: remaining });
+    }
+
+    // Fetch vehicle positions from Namma BMTC for all routes still needing it.
     await Promise.all(
-      Array.from(chaloNeeded.entries()).map(async ([chaloRouteId, { sampleStopId, names }]) => {
+      Array.from(nammaBmtcNeeded.entries()).map(async ([nammaBmtcRouteId, { sampleStopId, names }]) => {
         let vehicleMap;
         try {
-          vehicleMap = await fetchRouteLiveInfo(chaloRouteId, sampleStopId);
+          vehicleMap = await fetchRouteLiveInfo(nammaBmtcRouteId, sampleStopId);
         } catch (error) {
-          console.error(`Chalo route-live-info failed for ${chaloRouteId}:`, error);
+          console.error(`Namma BMTC route-live-info failed for ${nammaBmtcRouteId}:`, error);
           return;
         }
         for (const [vehicleId, parsed] of vehicleMap) {
