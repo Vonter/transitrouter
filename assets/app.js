@@ -2661,6 +2661,14 @@ const App = () => {
     if (IS_ALL_MODE) {
       $map.classList.remove('fade-out');
       setShowServicePopover(false);
+      // Cleared unconditionally, same as showServicePopover above — the
+      // 'service' branch below re-sets it immediately if that's where we
+      // land. Left stale otherwise (e.g. after stop->service->back), it
+      // keeps has-floating-footer applied and the service popover's own
+      // content block eligible to render (it's gated on this length, not
+      // showServicePopover, whenever showStopPopover+paneAppliesHere is
+      // also true) even though no service is actually selected anymore.
+      setRouteServices([]);
       setShowBetweenPopover(false);
       if (route.page !== 'between') setAllModeBetween(null);
       if (route.page !== 'location') {
@@ -3007,6 +3015,10 @@ const App = () => {
     $map.classList.remove('fade-out');
     setShowStopPopover(false);
     setShowServicePopover(false);
+    // Cleared unconditionally, same as showServicePopover above — see the
+    // matching comment in the IS_ALL_MODE branch for why leaving this
+    // stale matters even once showServicePopover is correctly false.
+    setRouteServices([]);
     if (!isSameBetweenQuery) setShowBetweenPopover(false);
     if (route.page !== 'location') {
       setShowLocationPopover(false);
@@ -3867,10 +3879,30 @@ const App = () => {
   const [mapLoaded, setMapLoaded] = useState(false);
   let workerReady = Promise.resolve();
   const onLoad = async () => {
-    window.onhashchange = () => {
+    // Split across two listeners because they're not interchangeable: a
+    // plain `location.hash =` assignment reliably fires hashchange but
+    // popstate's firing for it is implementation-defined, while a real
+    // back/forward through a history entry whose *other* URL components
+    // (query string — see saveViewportToUrl in all-mode) also differ from
+    // the current entry fires only popstate — per spec, hashchange fires
+    // only when a traversal changes the fragment alone. Relying on either
+    // one exclusively silently drops the other's navigations.
+    //
+    // Most real navigations fire *both* events (confirmed by logging real
+    // traversals), so dedupe on the fragment itself rather than letting
+    // renderRoute() run twice back-to-back — its resets mutate refs
+    // (prevStopNumber.current etc.) that a second, redundant pass would
+    // then read back already-cleared, which is its own source of
+    // stale/incorrect renders independent of the missing-event bug above.
+    let lastHandledHash = location.hash;
+    const handleRouteChange = () => {
+      if (location.hash === lastHandledHash) return;
+      lastHandledHash = location.hash;
       setRoute(getRoute());
       renderRoute();
     };
+    window.onhashchange = handleRouteChange;
+    window.addEventListener('popstate', handleRouteChange);
 
     if (!IS_ALL_MODE) {
       const fetchStopsP = fetchCache(stopsJSONPath, CACHE_TIME);
@@ -4241,7 +4273,15 @@ const App = () => {
       stopPopover.current,
       showStopPopover,
       {
-        onDismiss: () => hideStopPopover(),
+        // Navigate away (not just flip the boolean) — same reasoning as the
+        // service pane's own onDismiss below: a drag-dismiss doesn't go
+        // through renderRoute otherwise, so none of its resets run. This app
+        // has no defined page-stack, so dismissing always closes out to home
+        // rather than trying to reconstruct "whatever was there before" —
+        // that also fully closes a service popover left open underneath
+        // (renderRoute's reset resets showServicePopover too), rather than
+        // leaving it revealed the way flipping only showStopPopover would.
+        onDismiss: () => navigateTo('/', route),
         paneOptions: {
           zIndex: PANE_Z.stop,
           onBreakChange: (b) => setStopPaneAtBottom(b === 'bottom'),
@@ -6455,7 +6495,7 @@ const App = () => {
               </div>
             </div>
           )}
-          {(!anyPopoverOpen || expandSearch) && (
+          {(!anyPopoverOpen || expandSearch || !paneAppliesHere(supportsTouch, BREAKPOINT)) && (
             <ul
               class={`popover-list ${
                 IS_ALL_MODE

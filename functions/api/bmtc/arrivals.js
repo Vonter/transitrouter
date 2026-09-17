@@ -1,17 +1,19 @@
 /**
  * Cloudflare Pages Function for BMTC Live Arrival Data
- * Endpoint: /api/bmtc/arrivals?stationid=20820
+ * Endpoint: /api/bmtc/arrivals?stationid=20558
+ *
+ * ETAs come from Namma BMTC's stop-route-eta (bmtcmobileapi.karnataka.gov.in
+ * is retired). `stationid` is the local numeric stop id — resolved to a
+ * Namma BMTC stop id + serving route ids via BLR_ID_MAPPING.stops. Vehicle
+ * locations still come from the GTFS-RT feed, unchanged by this migration.
+ *
+ * Namma BMTC has no equivalent for BMTC's `devicestatusflag` (load) or
+ * `fromstationname` (origin_code) — explicit `null` now; the frontend
+ * doesn't read either beyond an equality check.
  */
-import BLR_ROUTE_MAPPING from './blr-route-mapping.js';
-
-const BMTC_HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
-  Accept: 'application/json, text/plain, */*',
-  'Content-Type': 'application/json',
-  lan: 'en',
-  deviceType: 'WEB',
-};
+import BLR_ID_MAPPING from './blr-id-mapping.js';
+import { fetchVehiclePositions, buildVehicleLocationLookup } from './bmtc-rt.js';
+import { fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './namma-bmtc.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -24,6 +26,21 @@ function jsonResponse(body, status = 200, extra = {}) {
     status,
     headers: { 'Content-Type': 'application/json', ...CORS_HEADERS, ...extra },
   });
+}
+
+// nammaBmtcRouteId -> local route_short_name, built once from BLR_ID_MAPPING so
+// services can be labeled with local names rather than Namma BMTC's own `rN`.
+let nammaBmtcRouteIdToLocalName = null;
+function getNammaBmtcRouteIdToLocalName() {
+  if (nammaBmtcRouteIdToLocalName) return nammaBmtcRouteIdToLocalName;
+  nammaBmtcRouteIdToLocalName = new Map();
+  for (const [name, entry] of Object.entries(BLR_ID_MAPPING.routes)) {
+    const { nammaBmtcRoutes } = parseRouteMapping(entry, BLR_ID_MAPPING);
+    for (const { nammaBmtcRouteId } of nammaBmtcRoutes) {
+      nammaBmtcRouteIdToLocalName.set(nammaBmtcRouteId, name);
+    }
+  }
+  return nammaBmtcRouteIdToLocalName;
 }
 
 export async function onRequest(context) {
@@ -44,28 +61,22 @@ export async function onRequest(context) {
       return jsonResponse({ error: 'stationid parameter is required' }, 400);
     }
 
-    const res = await fetch(
-      'https://bmtcmobileapi.karnataka.gov.in/WebAPI/GetMobileTripsData',
-      {
-        method: 'POST',
-        headers: BMTC_HEADERS,
-        body: JSON.stringify({ stationid: parseInt(stationId), triptype: 1 }),
-      },
-    );
-
-    if (!res.ok) throw new Error(`BMTC API returned ${res.status}`);
-
-    const result = await res.json();
     const cacheHeaders = { 'Cache-Control': 'public, max-age=10' };
 
-    if (!result.Issuccess || !result.data?.length) {
+    const stopRoutePairs = parseStopMapping(BLR_ID_MAPPING.stops[stationId], BLR_ID_MAPPING);
+    if (stopRoutePairs.length === 0) {
       return jsonResponse({ services: [] }, 200, cacheHeaders);
     }
 
-    const services = await convertBMTCToServices(result.data);
+    // Each pair already carries the Namma BMTC stop id specific to that route's
+    // own direction (see parseStopMapping) — no shared/collapsed stop id.
+    const stopIdRouteIdList = stopRoutePairs.map(({ routeId, nammaBmtcStopId }) => `${nammaBmtcStopId}:${routeId}`);
+    const etaResult = await fetchStopRouteEta(stopIdRouteIdList);
+
+    const services = await convertNammaBmtcToServices(etaResult, stopIdRouteIdList);
     return jsonResponse({ services }, 200, cacheHeaders);
   } catch (error) {
-    console.error('BMTC API Function Error:', error);
+    console.error('BMTC Arrivals Function Error:', error);
     return jsonResponse(
       { error: 'Failed to fetch arrival data', message: error.message },
       500,
@@ -73,109 +84,56 @@ export async function onRequest(context) {
   }
 }
 
-// Parse "DD-MM-YYYY HH:MM:SS" (IST) to a Date
-function parseBMTCDate(dateString) {
-  const [date, time = '00:00:00'] = dateString.split(' ');
-  const [dd, mm, yyyy] = date.split('-');
-  return new Date(`${yyyy}-${mm}-${dd}T${time}+05:30`);
-}
-
-async function fetchVehicleDataForRoute(routeId) {
-  try {
-    const res = await fetch(
-      'https://bmtcmobileapi.karnataka.gov.in/WebAPI/SearchByRouteDetails_v4',
-      {
-        method: 'POST',
-        headers: BMTC_HEADERS,
-        body: JSON.stringify({
-          routeid: parseInt(routeId, 10),
-          servicetypeid: 0,
-        }),
-      },
-    );
-
-    if (!res.ok) return null;
-
-    const result = await res.json();
-    const vehicles = new Map();
-
-    for (const dir of [result.up, result.down]) {
-      dir?.data?.forEach((station) =>
-        station.vehicleDetails?.forEach((v) => {
-          if (!v.centerlat || !v.centerlong) return;
-          const loc = {
-            lat: parseFloat(v.centerlat),
-            lng: parseFloat(v.centerlong),
-          };
-          if (v.vehicleid && !vehicles.has(v.vehicleid))
-            vehicles.set(v.vehicleid, loc);
-          if (v.vehiclenumber && !vehicles.has(v.vehiclenumber))
-            vehicles.set(v.vehiclenumber, loc);
-        }),
-      );
-    }
-
-    return vehicles;
-  } catch (error) {
-    console.error(`Error fetching vehicle data for route ${routeId}:`, error);
-    return null;
-  }
-}
-
-async function convertBMTCToServices(data) {
-  const now = new Date();
+async function convertNammaBmtcToServices(etaResult, stopIdRouteIdList) {
   const MAX_MS = 90 * 60 * 1000;
+  const routeIdToLocalName = getNammaBmtcRouteIdToLocalName();
 
-  // Resolve unique route IDs for trips that have a GPS vehicle
-  const routeIds = new Map();
-  for (const trip of data) {
-    if (trip.vehicleid && !routeIds.has(trip.routeno)) {
-      const routeId = BLR_ROUTE_MAPPING[trip.routeno];
-      if (routeId) routeIds.set(trip.routeno, routeId);
-    }
+  let allVehicles = new Map();
+  try {
+    allVehicles = buildVehicleLocationLookup(await fetchVehiclePositions());
+  } catch (error) {
+    console.error('GTFS-RT feed fetch failed, continuing without locations:', error);
   }
 
-  // Fetch vehicle locations for all routes in parallel
-  const allVehicles = new Map();
-  await Promise.all(
-    Array.from(routeIds.values()).map(async (routeId) => {
-      const vehicles = await fetchVehicleDataForRoute(routeId);
-      vehicles?.forEach((loc, key) => allVehicles.set(key, loc));
-    }),
-  );
-
-  // Group trips into services
   const servicesMap = new Map();
-  for (const trip of data) {
-    const duration_ms = parseBMTCDate(trip.arrivaltime) - now;
-    if (duration_ms < 0 || duration_ms > MAX_MS) continue;
+  for (const pairKey of stopIdRouteIdList) {
+    const [, nammaBmtcRouteId] = pairKey.split(':');
+    const localRouteName = routeIdToLocalName.get(nammaBmtcRouteId);
+    if (!localRouteName) continue;
 
-    const key = `${trip.routeno}-${trip.tostationname}`;
-    if (!servicesMap.has(key)) {
-      servicesMap.set(key, {
-        no: trip.routeno,
-        destination: trip.tostationname,
-        trips: [],
+    const vehicleMap = etaResult.get(pairKey);
+    if (!vehicleMap) continue;
+
+    for (const [vehicleId, parsed] of vehicleMap) {
+      const etaSeconds = normalizeEtaSeconds(parsed.eta);
+      if (etaSeconds == null) continue;
+
+      const duration_ms = etaSeconds * 1000;
+      if (duration_ms > MAX_MS) continue;
+
+      const key = `${localRouteName}-${parsed.dest}`;
+      if (!servicesMap.has(key)) {
+        servicesMap.set(key, { no: localRouteName, destination: parsed.dest, trips: [] });
+      }
+
+      const location =
+        allVehicles.get(vehicleId) ||
+        (parsed.vNo && allVehicles.get(parsed.vNo)) ||
+        null;
+
+      servicesMap.get(key).trips.push({
+        duration_ms,
+        type: 'SD',
+        load: null,
+        feature: 'WAB',
+        visit_number: 1,
+        origin_code: null,
+        destination_code: parsed.dest,
+        vehicle_id: vehicleId,
+        bus_no: parsed.vNo,
+        location,
       });
     }
-
-    const location =
-      (trip.vehicleid && allVehicles.get(trip.vehicleid)) ||
-      (trip.busno && allVehicles.get(trip.busno)) ||
-      null;
-
-    servicesMap.get(key).trips.push({
-      duration_ms,
-      type: 'SD',
-      load: trip.devicestatusflag === 1 ? 'SEA' : 'SDA',
-      feature: 'WAB',
-      visit_number: 1,
-      origin_code: trip.fromstationname,
-      destination_code: trip.tostationname,
-      vehicle_id: trip.vehicleid,
-      bus_no: trip.busno,
-      location,
-    });
   }
 
   return Array.from(servicesMap.values()).map(({ no, destination, trips }) => {

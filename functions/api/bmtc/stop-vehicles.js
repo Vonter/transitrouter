@@ -1,18 +1,18 @@
 /**
  * Cloudflare Pages Function for BMTC Stop Vehicles (Phase 2)
  * Fetches vehicle positions for multiple routes at a stop.
- * Endpoint: /api/bmtc/stop-vehicles?routes=KIA-14,335E,500CA
+ * Endpoint: /api/bmtc/stop-vehicles?routes=KIA-9,335E,500CA
+ *
+ * Route names are resolved via BLR_ID_MAPPING — a name missing from it is
+ * dropped, no fallback. Tries the GTFS-RT feed first per route, matching
+ * against Namma BMTC's ids then the legacy numeric BMTC id (so the fast
+ * path keeps working if the feed's id scheme ever switches). Falls back to
+ * a live Namma BMTC route-live-info call per direction variant, merged.
+ * bmtcmobileapi.karnataka.gov.in is retired.
  */
-import BLR_ROUTE_MAPPING from './blr-route-mapping.js';
-
-const BMTC_HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
-  Accept: 'application/json, text/plain, */*',
-  'Content-Type': 'application/json',
-  lan: 'en',
-  deviceType: 'WEB',
-};
+import BLR_ID_MAPPING from './blr-id-mapping.js';
+import { fetchVehiclePositions, matchesRouteId } from './bmtc-rt.js';
+import { fetchRouteLiveInfo, parseRouteMapping } from './namma-bmtc.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -54,88 +54,129 @@ export async function onRequest(context) {
       return jsonResponse({ vehicles: [] }, 200);
     }
 
-    // Resolve route names to route IDs using the mapping, deduplicate
-    const routeIdToNames = new Map();
+    // Resolve each name to its legacy GTFS-RT id and Namma BMTC variants.
+    const gtfsRouteIdToNames = new Map(); // gtfsRtRouteId -> names[]
+    const nammaRouteIdToNames = new Map(); // nammaBmtcRouteId -> {sampleStopId, names[]}
     for (const name of routeNames) {
-      const routeId = BLR_ROUTE_MAPPING[name];
-      if (routeId) {
-        if (!routeIdToNames.has(routeId)) {
-          routeIdToNames.set(routeId, []);
+      const { gtfsRtRouteId, nammaBmtcRoutes } = parseRouteMapping(BLR_ID_MAPPING.routes[name], BLR_ID_MAPPING);
+      if (gtfsRtRouteId) {
+        if (!gtfsRouteIdToNames.has(gtfsRtRouteId)) gtfsRouteIdToNames.set(gtfsRtRouteId, []);
+        gtfsRouteIdToNames.get(gtfsRtRouteId).push(name);
+      }
+      for (const { nammaBmtcRouteId, sampleStopId } of nammaBmtcRoutes) {
+        if (!nammaRouteIdToNames.has(nammaBmtcRouteId)) {
+          nammaRouteIdToNames.set(nammaBmtcRouteId, { sampleStopId, names: [] });
         }
-        routeIdToNames.get(routeId).push(name);
+        nammaRouteIdToNames.get(nammaBmtcRouteId).names.push(name);
       }
     }
 
-    // Fetch vehicle positions for all unique route IDs in parallel
     const allVehicles = [];
-    await Promise.all(
-      Array.from(routeIdToNames.entries()).map(
-        async ([routeId, serviceNames]) => {
-          const vehicles = await fetchVehiclesForRoute(routeId);
-          if (!vehicles) return;
-          vehicles.forEach((v) => {
-            allVehicles.push({
-              ...v,
-              routeNames: serviceNames,
-            });
+    const satisfiedNames = new Set();
+
+    if (gtfsRouteIdToNames.size > 0 || nammaRouteIdToNames.size > 0) {
+      let gtfsVehicles = [];
+      try {
+        gtfsVehicles = await fetchVehiclePositions();
+      } catch (error) {
+        console.error('BMTC GTFS-RT feed fetch failed, using Namma BMTC for all routes:', error);
+      }
+
+      // Try Namma BMTC ids against the feed first, then the legacy id —
+      // whichever the feed happens to use, this satisfies these names
+      // without a live call.
+      for (const [nammaBmtcRouteId, { names }] of nammaRouteIdToNames) {
+        const matches = gtfsVehicles.filter(
+          (v) => matchesRouteId(v, nammaBmtcRouteId) && v.lat != null && v.lng != null,
+        );
+        if (matches.length === 0) continue;
+        matches.forEach((v) => {
+          allVehicles.push({
+            vehicleId: v.vehicleId,
+            vehicleNumber: v.vehicleLabel || v.vehicleId,
+            lat: v.lat,
+            lng: v.lng,
+            heading: v.bearing,
+            routeNames: names,
           });
-        },
-      ),
+        });
+        names.forEach((n) => satisfiedNames.add(n));
+      }
+
+      for (const [routeId, names] of gtfsRouteIdToNames) {
+        const stillNeeded = names.filter((n) => !satisfiedNames.has(n));
+        if (stillNeeded.length === 0) continue;
+
+        const matches = gtfsVehicles.filter(
+          (v) => matchesRouteId(v, routeId) && v.lat != null && v.lng != null,
+        );
+        if (matches.length === 0) continue;
+        matches.forEach((v) => {
+          allVehicles.push({
+            vehicleId: v.vehicleId,
+            vehicleNumber: v.vehicleLabel || v.vehicleId,
+            lat: v.lat,
+            lng: v.lng,
+            heading: v.bearing,
+            routeNames: stillNeeded,
+          });
+        });
+        stillNeeded.forEach((n) => satisfiedNames.add(n));
+      }
+    }
+
+    // Routes still needing a live call: those with names GTFS-RT didn't
+    // satisfy under either id scheme.
+    const nammaBmtcNeeded = new Map();
+    for (const [nammaBmtcRouteId, { sampleStopId, names }] of nammaRouteIdToNames) {
+      const remaining = names.filter((n) => !satisfiedNames.has(n));
+      if (remaining.length > 0) nammaBmtcNeeded.set(nammaBmtcRouteId, { sampleStopId, names: remaining });
+    }
+
+    // Fetch vehicle positions from Namma BMTC for all routes still needing it.
+    await Promise.all(
+      Array.from(nammaBmtcNeeded.entries()).map(async ([nammaBmtcRouteId, { sampleStopId, names }]) => {
+        let vehicleMap;
+        try {
+          vehicleMap = await fetchRouteLiveInfo(nammaBmtcRouteId, sampleStopId);
+        } catch (error) {
+          console.error(`Namma BMTC route-live-info failed for ${nammaBmtcRouteId}:`, error);
+          return;
+        }
+        for (const [vehicleId, parsed] of vehicleMap) {
+          if (typeof parsed._latitude !== 'number' || typeof parsed._longitude !== 'number') continue;
+          allVehicles.push({
+            vehicleId,
+            vehicleNumber: parsed.vNo || vehicleId,
+            lat: parsed._latitude,
+            lng: parsed._longitude,
+            heading: parsed.bearing ?? null,
+            routeNames: names,
+          });
+        }
+      }),
     );
 
+    // Dedup by vehicleNumber||vehicleId, merging routeNames of duplicates
+    // (a vehicle could legitimately surface once per queried route/source).
+    const byKey = new Map();
+    for (const v of allVehicles) {
+      const key = v.vehicleNumber || v.vehicleId;
+      if (byKey.has(key)) {
+        const existing = byKey.get(key);
+        existing.routeNames = Array.from(new Set([...existing.routeNames, ...v.routeNames]));
+      } else {
+        byKey.set(key, v);
+      }
+    }
+
     const cacheHeaders = { 'Cache-Control': 'public, max-age=15' };
-    return jsonResponse({ vehicles: allVehicles }, 200, cacheHeaders);
+    return jsonResponse({ vehicles: Array.from(byKey.values()) }, 200, cacheHeaders);
   } catch (error) {
     console.error('BMTC Stop Vehicles Function Error:', error);
     return jsonResponse(
       { error: 'Failed to fetch vehicle data', message: error.message },
       500,
     );
-  }
-}
-
-async function fetchVehiclesForRoute(routeId) {
-  try {
-    const res = await fetch(
-      'https://bmtcmobileapi.karnataka.gov.in/WebAPI/SearchByRouteDetails_v4',
-      {
-        method: 'POST',
-        headers: BMTC_HEADERS,
-        body: JSON.stringify({
-          routeid: parseInt(routeId, 10),
-          servicetypeid: 0,
-        }),
-      },
-    );
-
-    if (!res.ok) return null;
-
-    const result = await res.json();
-    const vehicles = [];
-    const seen = new Set();
-
-    for (const dir of [result.up, result.down]) {
-      dir?.data?.forEach((station) =>
-        station.vehicleDetails?.forEach((v) => {
-          if (!v.centerlat || !v.centerlong) return;
-          const key = v.vehiclenumber || v.vehicleid;
-          if (seen.has(key)) return;
-          seen.add(key);
-
-          vehicles.push({
-            vehicleId: v.vehicleid,
-            vehicleNumber: v.vehiclenumber,
-            lat: parseFloat(v.centerlat),
-            lng: parseFloat(v.centerlong),
-            heading: v.heading || null,
-          });
-        }),
-      );
-    }
-
-    return vehicles;
-  } catch (error) {
-    console.error(`Error fetching vehicles for route ${routeId}:`, error);
-    return null;
   }
 }
