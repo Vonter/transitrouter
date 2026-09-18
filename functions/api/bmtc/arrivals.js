@@ -7,13 +7,14 @@
  * Namma BMTC stop id + serving route ids via BLR_ID_MAPPING.stops. Vehicle
  * locations still come from the GTFS-RT feed, unchanged by this migration.
  *
- * Namma BMTC has no equivalent for BMTC's `devicestatusflag` (load) or
- * `fromstationname` (origin_code) — explicit `null` now; the frontend
- * doesn't read either beyond an equality check.
+ * `load` (BMTC's old `devicestatusflag`) now comes from Namma BMTC's seat-availability
+ * API (fetchBusLoads in namma-bmtc.js). Namma BMTC has no equivalent for `fromstationname`
+ * (origin_code) — explicit `null` now; the frontend doesn't read it beyond an
+ * equality check.
  */
 import BLR_ID_MAPPING from './blr-id-mapping.js';
 import { fetchVehiclePositions, buildVehicleLocationLookup } from './bmtc-rt.js';
-import { fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './namma-bmtc.js';
+import { fetchBusLoads, fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './namma-bmtc.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -45,6 +46,7 @@ function getNammaBmtcRouteIdToLocalName() {
 
 export async function onRequest(context) {
   const { request } = context;
+  const userAgent = request.headers.get('User-Agent');
 
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -71,9 +73,9 @@ export async function onRequest(context) {
     // Each pair already carries the Namma BMTC stop id specific to that route's
     // own direction (see parseStopMapping) — no shared/collapsed stop id.
     const stopIdRouteIdList = stopRoutePairs.map(({ routeId, nammaBmtcStopId }) => `${nammaBmtcStopId}:${routeId}`);
-    const etaResult = await fetchStopRouteEta(stopIdRouteIdList);
+    const etaResult = await fetchStopRouteEta(stopIdRouteIdList, userAgent);
 
-    const services = await convertNammaBmtcToServices(etaResult, stopIdRouteIdList);
+    const services = await convertNammaBmtcToServices(etaResult, stopIdRouteIdList, userAgent);
     return jsonResponse({ services }, 200, cacheHeaders);
   } catch (error) {
     console.error('BMTC Arrivals Function Error:', error);
@@ -84,7 +86,7 @@ export async function onRequest(context) {
   }
 }
 
-async function convertNammaBmtcToServices(etaResult, stopIdRouteIdList) {
+async function convertNammaBmtcToServices(etaResult, stopIdRouteIdList, userAgent) {
   const MAX_MS = 90 * 60 * 1000;
   const routeIdToLocalName = getNammaBmtcRouteIdToLocalName();
 
@@ -93,6 +95,16 @@ async function convertNammaBmtcToServices(etaResult, stopIdRouteIdList) {
     allVehicles = buildVehicleLocationLookup(await fetchVehiclePositions());
   } catch (error) {
     console.error('GTFS-RT feed fetch failed, continuing without locations:', error);
+  }
+
+  let busLoads = new Map();
+  try {
+    busLoads = await fetchBusLoads(
+      [...etaResult.values()].flatMap((m) => [...m.values()].map((v) => v.vNo)),
+      userAgent,
+    );
+  } catch (error) {
+    console.error('Namma BMTC seat availability failed, defaulting load to SEA:', error);
   }
 
   const servicesMap = new Map();
@@ -124,7 +136,7 @@ async function convertNammaBmtcToServices(etaResult, stopIdRouteIdList) {
       servicesMap.get(key).trips.push({
         duration_ms,
         type: 'SD',
-        load: null,
+        load: busLoads.get(parsed.vNo) || 'SEA',
         feature: 'WAB',
         visit_number: 1,
         origin_code: null,

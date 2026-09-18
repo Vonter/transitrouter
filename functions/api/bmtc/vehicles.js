@@ -3,6 +3,7 @@
  *
  * Endpoint: /api/bmtc/vehicles?routetext=KIA-9&servicetypeid=0
  *           /api/bmtc/vehicles?routeid=1101&servicetypeid=0
+ * routeid is reverse-resolved to a routetext via BLR_ID_MAPPING when possible.
  *
  * routetext is resolved via BLR_ID_MAPPING — a route missing from it can't
  * be served. Tries the GTFS-RT feed first (lower latency than a live
@@ -14,11 +15,12 @@
  * merged) when neither matches. bmtcmobileapi.karnataka.gov.in is retired.
  */
 import BLR_ID_MAPPING from './blr-id-mapping.js';
-import { fetchVehiclePositions, matchesRouteId } from './bmtc-rt.js';
-import { fetchRouteLiveInfo, normalizeEtaSeconds, parseRouteMapping } from './namma-bmtc.js';
+import { fetchGtfsRtFeed, matchesRouteId } from './bmtc-rt.js';
+import { fetchRouteLiveInfo, getRouteStopIndex, normalizeEtaSeconds, parseRouteMapping } from './namma-bmtc.js';
 
 export async function onRequest(context) {
   const { request } = context;
+  const userAgent = request.headers.get('User-Agent');
 
   if (request.method === 'OPTIONS') {
     return handleCORS();
@@ -33,8 +35,9 @@ export async function onRequest(context) {
 
   try {
     const url = new URL(request.url);
-    const routeText = url.searchParams.get('routetext');
     const routeIdParam = url.searchParams.get('routeid');
+    const routeText =
+      url.searchParams.get('routetext') || resolveRouteTextFromId(routeIdParam);
 
     if (!routeText && !routeIdParam) {
       return new Response(
@@ -59,11 +62,12 @@ export async function onRequest(context) {
     }
 
     // Try GTFS-RT first, against every id scheme we know for this route.
-    const gtfsAllVehicles = await fetchGtfsRtVehicles();
-    if (gtfsAllVehicles) {
-      const gtfsCandidates = [...nammaBmtcRoutes.map((r) => r.nammaBmtcRouteId), finalRouteId].filter(Boolean);
+    const gtfsFeed = await fetchGtfsRtFeedOrNull();
+    if (gtfsFeed) {
+      // The feed's route_id is currently the route text (e.g. "KIA-9").
+      const gtfsCandidates = [routeText, ...nammaBmtcRoutes.map((r) => r.nammaBmtcRouteId), finalRouteId].filter(Boolean);
       for (const candidateId of gtfsCandidates) {
-        const matched = matchGtfsRtVehicles(gtfsAllVehicles, candidateId, routeText);
+        const matched = matchGtfsRtVehicles(gtfsFeed, candidateId, routeText, nammaBmtcRoutes);
         if (matched.length > 0) {
           return new Response(
             JSON.stringify({ routeId: finalRouteId || null, vehicles: matched }),
@@ -82,7 +86,7 @@ export async function onRequest(context) {
     }
 
     if (routeText && nammaBmtcRoutes.length > 0) {
-      const vehicles = await fetchVehiclesFromNammaBmtc(nammaBmtcRoutes, routeText);
+      const vehicles = await fetchVehiclesFromNammaBmtc(nammaBmtcRoutes, routeText, userAgent);
       return new Response(
         JSON.stringify({ routeId: finalRouteId || null, vehicles }),
         {
@@ -144,11 +148,29 @@ export async function onRequest(context) {
   }
 }
 
+let routeTextById = null;
+
+/** Reverse-resolves a route id (GTFS-RT id or Namma BMTC id) to its
+ * routetext via BLR_ID_MAPPING, so routeid queries can use the same
+ * Namma BMTC fallback as routetext ones. */
+function resolveRouteTextFromId(routeId) {
+  if (!routeId) return null;
+  if (!routeTextById) {
+    routeTextById = new Map();
+    for (const [text, entry] of Object.entries(BLR_ID_MAPPING.routes)) {
+      const { gtfsRtRouteId, nammaBmtcRoutes } = parseRouteMapping(entry, BLR_ID_MAPPING);
+      if (gtfsRtRouteId) routeTextById.set(gtfsRtRouteId, text);
+      for (const r of nammaBmtcRoutes) routeTextById.set(r.nammaBmtcRouteId, text);
+    }
+  }
+  return routeTextById.get(String(routeId)) || null;
+}
+
 /** Fetches the GTFS-RT feed once; `null` on failure so callers can tell a
  * feed outage apart from "fetched OK, nothing matched". */
-async function fetchGtfsRtVehicles() {
+async function fetchGtfsRtFeedOrNull() {
   try {
-    return await fetchVehiclePositions();
+    return await fetchGtfsRtFeed();
   } catch (error) {
     console.error('BMTC GTFS-RT feed fetch failed, falling back to Namma BMTC:', error);
     return null;
@@ -157,42 +179,70 @@ async function fetchGtfsRtVehicles() {
 
 /** Filters already-fetched GTFS-RT vehicles by route id, in the same
  * shape fetchVehiclesFromNammaBmtc below produces (fields the feed has no
- * equivalent for are explicit `null` rather than omitted). */
-function matchGtfsRtVehicles(allVehicles, routeId, routeText) {
-  return allVehicles
+ * equivalent for are explicit `null` rather than omitted). Each vehicle's
+ * trip update (joined on vehicle id — the feed leaves trip_id empty) gives
+ * the next stop it is heading to and the ETA there: the first remaining
+ * stop_time_update, in Namma BMTC stop ids. */
+function matchGtfsRtVehicles({ vehicles, tripUpdates }, routeId, routeText, nammaBmtcRoutes) {
+  const tripUpdateByVehicle = new Map();
+  for (const tu of tripUpdates) {
+    for (const key of [tu.vehicleId, tu.vehicleLabel]) {
+      if (key && !tripUpdateByVehicle.has(key)) tripUpdateByVehicle.set(key, tu);
+    }
+  }
+  const stopIndex = getRouteStopIndex(BLR_ID_MAPPING);
+  const nowSec = Date.now() / 1000;
+
+  const nextStopFor = (v) => {
+    const tu = tripUpdateByVehicle.get(v.vehicleId) || tripUpdateByVehicle.get(v.vehicleLabel);
+    const next = tu?.stopTimeUpdates?.[0];
+    if (!next?.stopId) return { localStopId: null, etaSeconds: null };
+    let localStopId = null;
+    for (const { nammaBmtcRouteId } of nammaBmtcRoutes) {
+      localStopId = stopIndex.get(nammaBmtcRouteId)?.get(next.stopId) ?? null;
+      if (localStopId) break;
+    }
+    const time = next.arrival?.time ?? next.departure?.time;
+    return { localStopId, etaSeconds: time ? Math.max(0, Math.round(time - nowSec)) : null };
+  };
+
+  return vehicles
     .filter((v) => matchesRouteId(v, routeId) && v.lat != null && v.lng != null)
-    .map((v) => ({
-      vehicleId: v.vehicleId,
-      vehicleNumber: v.vehicleLabel || v.vehicleId,
-      serviceType: null,
-      serviceTypeId: null,
-      location: { lat: v.lat, lng: v.lng },
-      heading: v.bearing,
-      eta: null,
-      schedule: { arrivalTime: null, departureTime: null, tripStartTime: null, tripEndTime: null },
-      actual: { arrivalTime: null, departureTime: null },
-      stops: {
-        last: null, current: null, next: null,
-        lastLocationId: null, currentLocationId: null, nextLocationId: null,
-      },
-      stopCoveredStatus: null,
-      tripPosition: null,
-      lastRefresh: null,
-      lastRefreshMs: v.timestamp ? v.timestamp * 1000 : null,
-      lastReceivedFlag: null,
-      direction: null,
-      stationName: null,
-      routeNo: routeText || null,
-    }));
+    .map((v) => {
+      const { localStopId, etaSeconds } = nextStopFor(v);
+      return {
+        vehicleId: v.vehicleId,
+        vehicleNumber: v.vehicleLabel || v.vehicleId,
+        serviceType: null,
+        serviceTypeId: null,
+        location: { lat: v.lat, lng: v.lng },
+        heading: v.bearing,
+        eta: etaSeconds,
+        schedule: { arrivalTime: null, departureTime: null, tripStartTime: null, tripEndTime: null },
+        actual: { arrivalTime: null, departureTime: null },
+        stops: {
+          last: null, current: null, next: null,
+          lastLocationId: null, currentLocationId: null, nextLocationId: localStopId,
+        },
+        stopCoveredStatus: null,
+        tripPosition: null,
+        lastRefresh: null,
+        lastRefreshMs: v.timestamp ? v.timestamp * 1000 : null,
+        lastReceivedFlag: null,
+        direction: null,
+        stationName: null,
+        routeNo: routeText || null,
+      };
+    });
 }
 
 /** Fetches vehicles for every direction variant of a route from Namma
  * BMTC's route-live-info, merged and deduplicated by vehicle id. */
-async function fetchVehiclesFromNammaBmtc(nammaBmtcRoutes, routeText) {
+async function fetchVehiclesFromNammaBmtc(nammaBmtcRoutes, routeText, userAgent) {
   const results = await Promise.all(
     nammaBmtcRoutes.map(async ({ nammaBmtcRouteId, sampleStopId }) => {
       try {
-        return await fetchRouteLiveInfo(nammaBmtcRouteId, sampleStopId);
+        return await fetchRouteLiveInfo(nammaBmtcRouteId, sampleStopId, userAgent);
       } catch (error) {
         console.error(`Namma BMTC route-live-info failed for ${nammaBmtcRouteId}:`, error);
         return new Map();

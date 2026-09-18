@@ -8,7 +8,7 @@
  * location enrichment step.
  */
 import BLR_ID_MAPPING from './blr-id-mapping.js';
-import { fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './namma-bmtc.js';
+import { fetchBusLoads, fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './namma-bmtc.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -40,6 +40,7 @@ function getNammaBmtcRouteIdToLocalName() {
 
 export async function onRequest(context) {
   const { request } = context;
+  const userAgent = request.headers.get('User-Agent');
 
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -66,9 +67,9 @@ export async function onRequest(context) {
     // Each pair already carries the Namma BMTC stop id specific to that route's
     // own direction (see parseStopMapping) — no shared/collapsed stop id.
     const stopIdRouteIdList = stopRoutePairs.map(({ routeId, nammaBmtcStopId }) => `${nammaBmtcStopId}:${routeId}`);
-    const etaResult = await fetchStopRouteEta(stopIdRouteIdList);
+    const etaResult = await fetchStopRouteEta(stopIdRouteIdList, userAgent);
 
-    const services = convertNammaBmtcToServices(etaResult, stopIdRouteIdList);
+    const services = await convertNammaBmtcToServices(etaResult, stopIdRouteIdList, userAgent);
     return jsonResponse({ services }, 200, cacheHeaders);
   } catch (error) {
     console.error('BMTC Stop Routes Function Error:', error);
@@ -79,9 +80,19 @@ export async function onRequest(context) {
   }
 }
 
-function convertNammaBmtcToServices(etaResult, stopIdRouteIdList) {
+async function convertNammaBmtcToServices(etaResult, stopIdRouteIdList, userAgent) {
   const MAX_MS = 90 * 60 * 1000;
   const routeIdToLocalName = getNammaBmtcRouteIdToLocalName();
+
+  let busLoads = new Map();
+  try {
+    busLoads = await fetchBusLoads(
+      [...etaResult.values()].flatMap((m) => [...m.values()].map((v) => v.vNo)),
+      userAgent,
+    );
+  } catch (error) {
+    console.error('Namma BMTC seat availability failed, defaulting load to SEA:', error);
+  }
 
   const servicesMap = new Map();
   for (const pairKey of stopIdRouteIdList) {
@@ -107,7 +118,7 @@ function convertNammaBmtcToServices(etaResult, stopIdRouteIdList) {
       servicesMap.get(key).trips.push({
         duration_ms,
         type: 'SD',
-        load: null,
+        load: busLoads.get(parsed.vNo) || 'SEA',
         feature: 'WAB',
         visit_number: 1,
         origin_code: null,

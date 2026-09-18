@@ -3,16 +3,21 @@
  * (production.zophop.com), used by vehicles/stop-vehicles/arrivals/
  * stop-routes in place of the retired bmtcmobileapi.karnataka.gov.in.
  * Needs a browser-like User-Agent (bare requests get a CloudFront 403) but
- * no auth. Every response nests per-vehicle records as JSON-encoded
+ * no auth: callers pass the visiting client's own User-Agent through, with
+ * DEFAULT_USER_AGENT only as the fallback when the request carries none. Every response nests per-vehicle records as JSON-encoded
  * strings, hence the double-parse via `safeParse`.
  */
 
 const NAMMA_BMTC_BASE = 'https://production.zophop.com';
-const NAMMA_BMTC_HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
-  Accept: 'application/json, text/plain, */*',
-};
+const DEFAULT_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0';
+
+function nammaBmtcHeaders(userAgent) {
+  return {
+    'User-Agent': userAgent || DEFAULT_USER_AGENT,
+    Accept: 'application/json, text/plain, */*',
+  };
+}
 
 function safeParse(value) {
   if (typeof value !== 'string') return value;
@@ -28,7 +33,7 @@ function safeParse(value) {
  * body: {stopIdRouteIdList: ["<nammaBmtcStopId>:<nammaBmtcRouteId>", ...]}
  * Returns Map<"<stopId>:<routeId>", Map<vehicleId, parsedRecord>>.
  */
-export async function fetchStopRouteEta(stopIdRouteIdList) {
+export async function fetchStopRouteEta(stopIdRouteIdList, userAgent) {
   const result = new Map();
   if (!stopIdRouteIdList.length) return result;
 
@@ -36,7 +41,7 @@ export async function fetchStopRouteEta(stopIdRouteIdList) {
     `${NAMMA_BMTC_BASE}/vasudha/cities/bengaluru/stop-route-eta`,
     {
       method: 'POST',
-      headers: { ...NAMMA_BMTC_HEADERS, 'Content-Type': 'application/json' },
+      headers: { ...nammaBmtcHeaders(userAgent), 'Content-Type': 'application/json' },
       body: JSON.stringify({ stopIdRouteIdList }),
     },
   );
@@ -60,9 +65,9 @@ export async function fetchStopRouteEta(stopIdRouteIdList) {
  * unused `stopsEta` section) — any valid stop id on the route works.
  * Returns Map<vehicleId, parsedRecord> for every vehicle on the route.
  */
-export async function fetchRouteLiveInfo(nammaBmtcRouteId, anyStopId) {
+export async function fetchRouteLiveInfo(nammaBmtcRouteId, anyStopId, userAgent) {
   const url = `${NAMMA_BMTC_BASE}/vasudha/track/route-live-info/bengaluru/${nammaBmtcRouteId}?stopIds=${encodeURIComponent(anyStopId)}`;
-  const res = await fetch(url, { headers: NAMMA_BMTC_HEADERS });
+  const res = await fetch(url, { headers: nammaBmtcHeaders(userAgent) });
   if (!res.ok) throw new Error(`Namma BMTC route-live-info returned ${res.status}`);
 
   const data = await res.json();
@@ -72,6 +77,47 @@ export async function fetchRouteLiveInfo(nammaBmtcRouteId, anyStopId) {
     if (parsed) vehicles.set(vehicleId, parsed);
   }
   return vehicles;
+}
+
+// Seat availability is served from chalo.com/app/api, not production.zophop.com
+// (which rejects requests without a current app version).
+const SEAT_AVAILABILITY_URL = 'https://chalo.com/app/api/seat/availability';
+
+// Load codes the frontend styles (.time-sea/.time-sda/.time-lsd).
+const SEAT_STATUS_TO_LOAD = { 3: 'SEA', 4: 'SDA', 5: 'LSD' };
+
+/** Seat-availability status 3 (least occupied) … 5 (most occupied); -1 or
+ * anything unknown is treated as clear. */
+export function seatStatusToLoad(status) {
+  return SEAT_STATUS_TO_LOAD[status] || 'SEA';
+}
+
+/**
+ * POST chalo.com/app/api/seat/availability
+ * body: {mode: 2, cityId: "bengaluru", vehicle: [{number: "<busNumber>"}, ...]}
+ * Returns Map<busNumber, 'SEA'|'SDA'|'LSD'> for the buses it knows about.
+ */
+export async function fetchBusLoads(busNumbers, userAgent) {
+  const loads = new Map();
+  const numbers = [...new Set(busNumbers.filter(Boolean))];
+  if (!numbers.length) return loads;
+
+  const res = await fetch(SEAT_AVAILABILITY_URL, {
+    method: 'POST',
+    headers: { ...nammaBmtcHeaders(userAgent), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode: 2,
+      cityId: 'bengaluru',
+      vehicle: numbers.map((number) => ({ number })),
+    }),
+  });
+  if (!res.ok) throw new Error(`Namma BMTC seat availability returned ${res.status}`);
+
+  const data = await res.json();
+  for (const { number, status } of data.vehicle || []) {
+    loads.set(number, seatStatusToLoad(status));
+  }
+  return loads;
 }
 
 /** eta===-1 (or missing) means "unknown" — never surface as negative. */
@@ -118,4 +164,23 @@ export function parseStopMapping(entry, mapping) {
       const [rIdx, sIdx] = pair.split(':');
       return { routeId: mapping.r[rIdx], nammaBmtcStopId: mapping.s[sIdx] };
     });
+}
+
+let routeStopIndex = null;
+
+/**
+ * nammaBmtcRouteId -> Map<nammaBmtcStopId, localStopId>, inverted once from
+ * `mapping.stops`. Translates the Namma BMTC stop ids the GTFS-RT feed's
+ * trip updates use back to local stop ids.
+ */
+export function getRouteStopIndex(mapping) {
+  if (routeStopIndex) return routeStopIndex;
+  routeStopIndex = new Map();
+  for (const [localStopId, entry] of Object.entries(mapping.stops)) {
+    for (const { routeId, nammaBmtcStopId } of parseStopMapping(entry, mapping)) {
+      if (!routeStopIndex.has(routeId)) routeStopIndex.set(routeId, new Map());
+      routeStopIndex.get(routeId).set(nammaBmtcStopId, localStopId);
+    }
+  }
+  return routeStopIndex;
 }
