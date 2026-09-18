@@ -137,6 +137,10 @@ export const CITY_CONFIGS = {
         minZoom: 8,
       },
     },
+    liveVehicles: {
+      enabled: true,
+      apiPath: '/api/delhi/vehicles',
+    },
   },
   pune: {
     city: {

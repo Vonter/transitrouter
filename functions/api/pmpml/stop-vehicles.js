@@ -1,8 +1,16 @@
 /**
- * Cloudflare Pages Function for PMPML Stop Vehicles (Phase 2)
+ * Cloudflare Pages Function for PMPML Stop Vehicles (Phase 2, GTFS-RT variant)
  * Fetches vehicle positions for multiple routes at a stop.
- * Endpoint: /api/pmpml/stop-vehicles?routes=220,50,14RING
+ * Endpoint: /api/pmpml-gtfs/stop-vehicles?routes=220,50,14RING
+ *
+ * Filters the GTFS-RT feed's VehiclePositions by route_id, translating each
+ * public route number to route_id(s) via pmpml-route-mapping.js (see the
+ * caveat in pmpml-rt.js for why that translation is needed). Falls back to
+ * chartr's buses-on-route API for any route missing from that mapping
+ * (e.g. a new route added after the mapping was last generated).
  */
+import { fetchVehiclePositions, matchesRouteIds } from './pmpml-rt.js';
+import ROUTE_MAPPING from './pmpml-route-mapping.js';
 
 const PMPML_HEADERS = {
   'User-Agent':
@@ -52,34 +60,46 @@ export async function onRequest(context) {
       return jsonResponse({ vehicles: [] }, 200);
     }
 
-    // Resolve route names to route IDs using the mapping, deduplicate
-    const routeIdToNames = new Map();
+    const mappedNames = [];
+    const unmappedNames = [];
     for (const name of routeNames) {
-      const names = [name+'UP', name+'DOWN', name];
-      for (const n of names) {
-        if (!routeIdToNames.has(n)) {
-          routeIdToNames.set(n, []);
-        }
-        routeIdToNames.get(n).push(name);
-      }
+      if (ROUTE_MAPPING[name]?.length) mappedNames.push(name);
+      else unmappedNames.push(name);
     }
 
-    // Fetch vehicle positions for all unique route IDs in parallel
-    const allVehicles = [];
-    await Promise.all(
-      Array.from(routeIdToNames.entries()).map(
-        async ([routeId, serviceNames]) => {
-          const vehicles = await fetchVehiclesForRoute(routeId);
-          if (!vehicles) return;
-          vehicles.forEach((v) => {
-            allVehicles.push({
-              ...v,
-              routeNames: serviceNames,
-            });
-          });
-        },
-      ),
-    );
+    const [gtfsVehicles, chartrVehicles] = await Promise.all([
+      mappedNames.length ? fetchVehiclePositions() : Promise.resolve([]),
+      unmappedNames.length ? fetchVehiclesFromChartr(unmappedNames) : Promise.resolve([]),
+    ]);
+
+    const allVehicles = [...chartrVehicles];
+
+    if (mappedNames.length) {
+      // A vehicle can match more than one requested route if their mapped
+      // route_ids overlap (shouldn't normally happen, but merge defensively).
+      const matched = new Map(); // vehicleId -> { vehicle, routeNames: Set }
+      for (const v of gtfsVehicles) {
+        if (v.lat == null || v.lng == null) continue;
+        for (const name of mappedNames) {
+          if (!matchesRouteIds(v, ROUTE_MAPPING[name])) continue;
+
+          const key = v.vehicleId || `${v.routeId}:${v.lat},${v.lng}`;
+          if (!matched.has(key)) matched.set(key, { vehicle: v, routeNames: new Set() });
+          matched.get(key).routeNames.add(name);
+        }
+      }
+
+      for (const { vehicle, routeNames: names } of matched.values()) {
+        allVehicles.push({
+          vehicleId: vehicle.vehicleId,
+          vehicleNumber: vehicle.vehicleLabel || vehicle.vehicleId,
+          lat: vehicle.lat,
+          lng: vehicle.lng,
+          bearing: vehicle.bearing || null,
+          routeNames: Array.from(names),
+        });
+      }
+    }
 
     const cacheHeaders = { 'Cache-Control': 'public, max-age=15' };
     return jsonResponse({ vehicles: allVehicles }, 200, cacheHeaders);
@@ -90,6 +110,31 @@ export async function onRequest(context) {
       500,
     );
   }
+}
+
+async function fetchVehiclesFromChartr(routeNames) {
+  // Resolve route names to route long name variants, deduplicate
+  const routeIdToNames = new Map();
+  for (const name of routeNames) {
+    const names = [name + 'UP', name + 'DOWN', name];
+    for (const n of names) {
+      if (!routeIdToNames.has(n)) routeIdToNames.set(n, []);
+      routeIdToNames.get(n).push(name);
+    }
+  }
+
+  const allVehicles = [];
+  await Promise.all(
+    Array.from(routeIdToNames.entries()).map(async ([routeId, serviceNames]) => {
+      const vehicles = await fetchVehiclesForRoute(routeId);
+      if (!vehicles) return;
+      vehicles.forEach((v) => {
+        allVehicles.push({ ...v, routeNames: serviceNames });
+      });
+    }),
+  );
+
+  return allVehicles;
 }
 
 async function fetchVehiclesForRoute(routeLongName) {
@@ -109,7 +154,6 @@ async function fetchVehiclesForRoute(routeLongName) {
 
     const result = await res.json();
     const vehicles = new Map();
-    console.log(result);
     for (const v of result.data) {
       if(v.id && !vehicles.has(v.id)) {
         vehicles.set(v.id, {
@@ -124,7 +168,7 @@ async function fetchVehiclesForRoute(routeLongName) {
 
     return Array.from(vehicles.values());
   } catch (error) {
-    console.error(`Error fetching vehicle data for route ${routeId}:`, error);
+    console.error(`Error fetching vehicle data for route ${routeLongName}:`, error);
     return null;
   }
 }

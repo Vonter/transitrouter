@@ -1,7 +1,15 @@
 /**
- * Cloudflare Pages Function for PMPML Live Vehicle Tracking
- * Endpoint: /api/pmpml/vehicles?routetext=220
+ * Cloudflare Pages Function for PMPML Live Vehicle Tracking (GTFS-RT variant)
+ * Endpoint: /api/pmpml-gtfs/vehicles?routetext=220
+ *
+ * Filters the GTFS-RT feed's VehiclePositions by route_id, translating the
+ * public route number to route_id(s) via pmpml-route-mapping.js (see the
+ * caveat in pmpml-rt.js for why that translation is needed). Falls back to
+ * chartr's buses-on-route API for any route missing from that mapping
+ * (e.g. a new route added after the mapping was last generated).
  */
+import { fetchVehiclePositions, matchesRouteIds } from './pmpml-rt.js';
+import ROUTE_MAPPING from './pmpml-route-mapping.js';
 
 const PMPML_HEADERS = {
   'User-Agent':
@@ -43,24 +51,12 @@ export async function onRequest(context) {
       return jsonResponse({ error: 'routetext parameter is required' }, 400);
     }
 
-    // Try UP, DOWN, and plain variants of the route long name
-    const variants = [routeText + 'UP', routeText + 'DOWN', routeText];
-    const seenIds = new Set();
-    const allVehicles = [];
+    const routeIds = ROUTE_MAPPING[routeText];
+    const vehicles = routeIds?.length
+      ? await fetchVehiclesFromGtfsRt(routeIds)
+      : await fetchVehiclesFromChartr(routeText);
 
-    const results = await Promise.all(variants.map(fetchVehiclesForRoute));
-
-    for (const vehicles of results) {
-      if (!vehicles) continue;
-      for (const v of vehicles) {
-        if (!seenIds.has(v.vehicleId)) {
-          seenIds.add(v.vehicleId);
-          allVehicles.push(v);
-        }
-      }
-    }
-
-    return jsonResponse({ routeText, vehicles: allVehicles }, 200, {
+    return jsonResponse({ routeText, vehicles }, 200, {
       'Cache-Control': 'public, max-age=15',
     });
   } catch (error) {
@@ -70,6 +66,48 @@ export async function onRequest(context) {
       500,
     );
   }
+}
+
+async function fetchVehiclesFromGtfsRt(routeIds) {
+  const allVehicles = await fetchVehiclePositions();
+  const vehicles = [];
+
+  for (const v of allVehicles) {
+    if (!matchesRouteIds(v, routeIds)) continue;
+
+    vehicles.push({
+      vehicleId: v.vehicleId,
+      vehicleNumber: v.vehicleLabel || v.vehicleId,
+      location: {
+        lat: v.lat,
+        lng: v.lng,
+      },
+      bearing: v.bearing || null,
+    });
+  }
+
+  return vehicles;
+}
+
+async function fetchVehiclesFromChartr(routeText) {
+  // Try UP, DOWN, and plain variants of the route long name
+  const variants = [routeText + 'UP', routeText + 'DOWN', routeText];
+  const seenIds = new Set();
+  const allVehicles = [];
+
+  const results = await Promise.all(variants.map(fetchVehiclesForRoute));
+
+  for (const vehicles of results) {
+    if (!vehicles) continue;
+    for (const v of vehicles) {
+      if (!seenIds.has(v.vehicleId)) {
+        seenIds.add(v.vehicleId);
+        allVehicles.push(v);
+      }
+    }
+  }
+
+  return allVehicles;
 }
 
 async function fetchVehiclesForRoute(routeLongName) {

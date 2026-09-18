@@ -1,7 +1,23 @@
 /**
- * Cloudflare Pages Function for PMPML Live Arrival Data
- * Endpoint: /api/pmpml/arrivals?stationid=41
+ * Cloudflare Pages Function for PMPML Live Arrival Data (GTFS-RT variant)
+ * Endpoint: /api/pmpml-gtfs/arrivals?stationid=41
+ *
+ * ETAs come from GTFS-RT TripUpdates for this stop when the feed publishes
+ * them for it; otherwise this falls back to the PMPML PIS API (as functions
+ * /pmpml does). The feed only publishes VehiclePositions today, so this
+ * always falls back for now, but it's written to switch over on its own
+ * once TripUpdates are added. Either way, vehicle locations used to enrich
+ * each trip come from the GTFS-RT VehiclePositions feed.
  */
+import { fetchGtfsRtFeed, buildVehicleLocationLookup } from './pmpml-rt.js';
+import ROUTE_MAPPING from './pmpml-route-mapping.js';
+
+// Reverse of ROUTE_MAPPING (route_id -> public route number), to resolve a
+// TripUpdate's route_id back to the number riders recognize. See the
+// caveat in pmpml-rt.js for what this route_id actually is.
+const ROUTE_ID_TO_NAME = Object.fromEntries(
+  Object.entries(ROUTE_MAPPING).flatMap(([name, ids]) => ids.map((id) => [id, name])),
+);
 
 const PMPML_HEADERS = {
   'User-Agent':
@@ -16,6 +32,8 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
+
+const MAX_MS = 90 * 60 * 1000;
 
 function jsonResponse(body, status = 200, extra = {}) {
   return new Response(JSON.stringify(body), {
@@ -42,6 +60,25 @@ export async function onRequest(context) {
       return jsonResponse({ error: 'stationid parameter is required' }, 400);
     }
 
+    const cacheHeaders = { 'Cache-Control': 'public, max-age=10' };
+
+    let feed = { vehicles: [], tripUpdates: [] };
+    try {
+      feed = await fetchGtfsRtFeed();
+    } catch (error) {
+      console.error('GTFS-RT feed fetch failed, falling back to PMPML PIS API:', error);
+    }
+
+    // Prefer GTFS-RT TripUpdates for this stop, once the feed publishes them.
+    if (feed.tripUpdates.length > 0) {
+      const vehicleLocations = buildVehicleLocationLookup(feed.vehicles);
+      const services = convertTripUpdatesToServices(feed.tripUpdates, stationId, vehicleLocations);
+      if (services.length > 0) {
+        return jsonResponse({ services }, 200, cacheHeaders);
+      }
+      // No TripUpdate covers this specific stop yet — fall through to the PIS API.
+    }
+
     const res = await fetch(
       'https://prod-pmpml-pis.chartr.in/get_buses_eta',
       {
@@ -54,13 +91,12 @@ export async function onRequest(context) {
     if (!res.ok) throw new Error(`PMPML API returned ${res.status}`);
 
     const result = await res.json();
-    const cacheHeaders = { 'Cache-Control': 'public, max-age=10' };
 
     if (!(result.message.toLowerCase() === 'success')) {
       return jsonResponse({ services: [] }, 200, cacheHeaders);
     }
 
-    const services = await convertPMPMLToServices(result.buses);
+    const services = convertPMPMLToServices(result.buses, feed.vehicles);
     return jsonResponse({ services }, 200, cacheHeaders);
   } catch (error) {
     console.error('PMPML API Function Error:', error);
@@ -71,57 +107,48 @@ export async function onRequest(context) {
   }
 }
 
-async function fetchVehicleDataForRoute(routeLongName) {
-  try {
-    const res = await fetch(
-      'https://prod-pmpml-live-data-api.chartr.in/buses-on-route',
-      {
-        method: 'POST',
-        headers: PMPML_HEADERS,
-        body: JSON.stringify({
-          route_long_name: routeLongName
-        }),
-      },
-    );
+function convertTripUpdatesToServices(tripUpdates, stationId, vehicleLocations) {
+  const nowMs = Date.now();
+  const servicesMap = new Map();
 
-    if (!res.ok) return null;
+  for (const tu of tripUpdates) {
+    for (const stu of tu.stopTimeUpdates) {
+      if (stu.stopId !== stationId) continue;
 
-    const result = await res.json();
-    const vehicles = new Map();
+      const eventTime = stu.arrival?.time ?? stu.departure?.time;
+      if (eventTime == null) continue;
 
-    for (const v of result.data) {
-      if(v.id && !vehicles.has(v.id)) {
-        vehicles.set(v.id, {lat: parseFloat(v.lat), lng: parseFloat(v.lon)})
+      const duration_ms = eventTime * 1000 - nowMs;
+      if (duration_ms < 0 || duration_ms > MAX_MS) continue;
+
+      const routeName = (tu.routeId && ROUTE_ID_TO_NAME[tu.routeId]) || tu.routeId;
+      const key = routeName || tu.tripId;
+      if (!servicesMap.has(key)) {
+        servicesMap.set(key, { no: routeName || tu.tripId, destination: null, trips: [] });
       }
-    }
 
-    return vehicles;
-  } catch (error) {
-    console.error(`Error fetching vehicle data for route ${routeId}:`, error);
-    return null;
+      const location = (tu.vehicleId && vehicleLocations.get(tu.vehicleId)) || null;
+
+      servicesMap.get(key).trips.push({
+        duration_ms,
+        type: 'SD',
+        load: 'SEA',
+        feature: 'WAB',
+        visit_number: 1,
+        origin_code: '',
+        destination_code: null,
+        vehicle_id: tu.vehicleId,
+        bus_no: tu.vehicleId,
+        location,
+      });
+    }
   }
+
+  return buildServicesFromTrips(servicesMap);
 }
 
-async function convertPMPMLToServices(data) {
-  const now = new Date();
-  const MAX_MS = 90 * 60 * 1000;
-
-  // Resolve unique route IDs for trips that have a GPS vehicle
-  const routeLongNames = [];
-  for (const route of data) {
-    if (route.route_long_name && ! routeLongNames.includes(route.route_long_name)) {
-      routeLongNames.push(route.route_long_name);
-    }
-  }
-
-  // Fetch vehicle locations for all routes in parallel
-  const allVehicles = new Map();
-  await Promise.all(
-    routeLongNames.map(async (routeLongName) => {
-      const vehicles = await fetchVehicleDataForRoute(routeLongName);
-      vehicles?.forEach((loc, key) => allVehicles.set(key, loc));
-    }),
-  );
+function convertPMPMLToServices(data, vehicles) {
+  const vehicleLocations = buildVehicleLocationLookup(vehicles);
 
   // Group trips into services
   const servicesMap = new Map();
@@ -139,7 +166,7 @@ async function convertPMPMLToServices(data) {
       }
 
       const location =
-        (trip.vehicle_id && allVehicles.get(trip.vehicle_id)) ||
+        (trip.vehicle_id && vehicleLocations.get(trip.vehicle_id)) ||
         null;
       servicesMap.get(route.route_long_name).trips.push({
         duration_ms,
@@ -156,6 +183,10 @@ async function convertPMPMLToServices(data) {
     }
   }
 
+  return buildServicesFromTrips(servicesMap);
+}
+
+function buildServicesFromTrips(servicesMap) {
   return Array.from(servicesMap.values()).map(({ no, destination, trips }) => {
     trips.sort((a, b) => a.duration_ms - b.duration_ms);
     const service = { no, destination, frequency: trips.length };
