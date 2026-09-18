@@ -139,8 +139,16 @@ function StopsList(props) {
         } else if (vehicle.stops.currentLocationId) {
           stopKey = String(vehicle.stops.currentLocationId);
         } else if (vehicle.stops.nextLocationId) {
-          // As a fallback, show before the next stop
+          // Vehicles render after their key stop, so to show one before the
+          // next stop it goes after the stop preceding it on the route.
           stopKey = String(vehicle.stops.nextLocationId);
+          for (const route of [route1, route2]) {
+            const nextIndex = route ? route.indexOf(stopKey) : -1;
+            if (nextIndex > 0) {
+              stopKey = String(route[nextIndex - 1]);
+              break;
+            }
+          }
         }
       } else {
         console.warn(`Vehicle ${vehicle.vehicleNumber} has no stops information`, vehicle);
@@ -157,7 +165,7 @@ function StopsList(props) {
     });
     
     return positions;
-  }, [vehicles]);
+  }, [vehicles, route1, route2]);
 
   const StopLink = ({ stop }) => {
     if (!stop || !stopsData[stop]) return null;

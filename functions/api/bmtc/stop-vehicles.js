@@ -29,6 +29,7 @@ function jsonResponse(body, status = 200, extra = {}) {
 
 export async function onRequest(context) {
   const { request } = context;
+  const userAgent = request.headers.get('User-Agent');
 
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -138,7 +139,7 @@ export async function onRequest(context) {
       Array.from(nammaBmtcNeeded.entries()).map(async ([nammaBmtcRouteId, { sampleStopId, names }]) => {
         let vehicleMap;
         try {
-          vehicleMap = await fetchRouteLiveInfo(nammaBmtcRouteId, sampleStopId);
+          vehicleMap = await fetchRouteLiveInfo(nammaBmtcRouteId, sampleStopId, userAgent);
         } catch (error) {
           console.error(`Namma BMTC route-live-info failed for ${nammaBmtcRouteId}:`, error);
           return;
