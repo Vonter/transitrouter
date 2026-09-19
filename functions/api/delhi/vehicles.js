@@ -43,7 +43,7 @@ export async function onRequest(context) {
 
     const routeIds = ROUTE_MAPPING[routeText];
     if (!routeIds?.length) {
-      return jsonResponse({ routeText, vehicles: [] }, 200, {
+      return jsonResponse({ routeText, vehicles: [], source: null }, 200, {
         'Cache-Control': 'public, max-age=15',
       });
     }
@@ -58,7 +58,7 @@ export async function onRequest(context) {
         bearing: v.bearing || null,
       }));
 
-    return jsonResponse({ routeText, vehicles }, 200, {
+    return jsonResponse({ routeText, vehicles, source: 'gtfs-rt' }, 200, {
       'Cache-Control': 'public, max-age=15',
     });
   } catch (error) {

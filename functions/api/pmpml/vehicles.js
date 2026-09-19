@@ -52,11 +52,12 @@ export async function onRequest(context) {
     }
 
     const routeIds = ROUTE_MAPPING[routeText];
+    const source = routeIds?.length ? 'gtfs-rt' : 'api';
     const vehicles = routeIds?.length
       ? await fetchVehiclesFromGtfsRt(routeIds)
       : await fetchVehiclesFromChartr(routeText);
 
-    return jsonResponse({ routeText, vehicles }, 200, {
+    return jsonResponse({ routeText, vehicles, source }, 200, {
       'Cache-Control': 'public, max-age=15',
     });
   } catch (error) {

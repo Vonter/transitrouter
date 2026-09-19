@@ -1,9 +1,14 @@
 import { h } from 'preact';
 
+import { isDevMode } from '../city-config.js';
+
 const SOURCE_TITLES = {
   'gtfs-rt': 'Live data from the GTFS-RT.',
   api: 'Live data from the API.',
 };
+
+const DEFAULT_ERROR_TITLE =
+  'Live data unavailable. Estimated based on timetable schedule.';
 
 const toggleTooltip = (e) => {
   e.stopPropagation();
@@ -21,24 +26,30 @@ const toggleTooltip = (e) => {
 };
 
 /**
- * Live data status next to a stop heading: a spinner while fetching, a warning
- * when live data is unavailable, and a green dot while live ETAs are flowing —
- * filled for 'api', a ring for 'gtfs-rt', with the source named on hover.
+ * Live data status next to a stop or service heading: a spinner while
+ * fetching, a warning when live data is unavailable, and a green dot while
+ * live data is flowing — filled for 'api', a ring for 'gtfs-rt', with the
+ * source named on hover.
+ *
+ * Only the warning is for everyone: it explains why the times below are
+ * estimates. Which source a working feed came from is developer-facing
+ * detail, so the spinner and the dot are gated behind Developer Mode.
  */
-export default function LiveDataIndicator({ loading, error, source }) {
+export default function LiveDataIndicator({
+  loading,
+  error,
+  source,
+  errorTitle = DEFAULT_ERROR_TITLE,
+}) {
   const sourceTitle =
     !loading && !error && source ? SOURCE_TITLES[source] : null;
-  if (!loading && !error && !sourceTitle) return null;
+  if (!error && (!isDevMode() || (!loading && !sourceTitle))) return null;
 
   return (
     <span
       class={`live-data-loading-container ${error ? 'error' : ''}`}
       title={
-        error
-          ? 'Live data unavailable. Estimated based on timetable schedule.'
-          : loading
-            ? 'Fetching live information'
-            : sourceTitle
+        error ? errorTitle : loading ? 'Fetching live information' : sourceTitle
       }
       onClick={toggleTooltip}
     >

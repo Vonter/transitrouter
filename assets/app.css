@@ -540,7 +540,8 @@ a:active {
 
 /* In the header row the indicator is a flex item pinned to the row's right
    edge, clear of the title, the action buttons and the close button. */
-.stop-header-row .live-data-loading-container {
+.stop-header-row .live-data-loading-container,
+.service-header-row .live-data-loading-container {
   position: relative;
   top: auto;
   right: auto;
@@ -2071,6 +2072,20 @@ a.service-tag:hover {
   flex: 0 1 auto;
   min-width: 0;
   margin-bottom: 0;
+}
+/* Service header keeps the h1's bottom margin — unlike the stop header it has
+   no filter row below to space it off the list. */
+.service-header-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.service-header-row h1 {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.service-header-row .live-data-loading-container {
+  margin-top: 2px;
 }
 .directions-btn {
   flex-shrink: 0;

@@ -70,7 +70,7 @@ export async function onRequest(context) {
         const matched = matchGtfsRtVehicles(gtfsFeed, candidateId, routeText, nammaBmtcRoutes);
         if (matched.length > 0) {
           return new Response(
-            JSON.stringify({ routeId: finalRouteId || null, vehicles: matched }),
+            JSON.stringify({ routeId: finalRouteId || null, vehicles: matched, source: 'gtfs-rt' }),
             {
               status: 200,
               headers: {
@@ -88,7 +88,7 @@ export async function onRequest(context) {
     if (routeText && nammaBmtcRoutes.length > 0) {
       const vehicles = await fetchVehiclesFromNammaBmtc(nammaBmtcRoutes, routeText, userAgent);
       return new Response(
-        JSON.stringify({ routeId: finalRouteId || null, vehicles }),
+        JSON.stringify({ routeId: finalRouteId || null, vehicles, source: 'api' }),
         {
           status: 200,
           headers: {
@@ -107,6 +107,7 @@ export async function onRequest(context) {
           routeId: null,
           vehicles: [],
           geoJSON: { type: 'FeatureCollection', features: [] },
+          source: null,
           message: 'No routes found',
         }),
         {
@@ -123,7 +124,7 @@ export async function onRequest(context) {
     // Numeric routeid given but GTFS-RT had nothing and there's no
     // routetext to resolve a Namma BMTC fallback from.
     return new Response(
-      JSON.stringify({ routeId: finalRouteId, vehicles: [], message: 'No vehicle tracking data available' }),
+      JSON.stringify({ routeId: finalRouteId, vehicles: [], source: null, message: 'No vehicle tracking data available' }),
       {
         status: 200,
         headers: {

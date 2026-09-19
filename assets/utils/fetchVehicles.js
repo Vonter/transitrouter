@@ -4,6 +4,8 @@ import { LIVE_DATA_MAX_AGE_MS } from './fetchArrivals.js';
 const recentRequests = new Map();
 const REQUEST_DEDUPE_MS = 2000;
 
+const IDLE_STATUS = { loading: false, error: false, source: null };
+
 /**
  * Return true if a vehicle has lastRefreshMs and it is older than LIVE_DATA_MAX_AGE_MS (15 min).
  * @param {Object} vehicle - Vehicle object (may have lastRefreshMs)
@@ -20,7 +22,9 @@ export function isVehicleStale(vehicle) {
  * @param {string} apiPath - The API path from city config
  * @param {string|number} routeIdentifier - The route name (e.g., "KIA-14") or route ID
  * @param {number} serviceTypeId - The service type ID (default: 0 for all types)
- * @returns {Promise} Promise resolving to vehicle data with vehicles array and geoJSON
+ * @returns {Promise} Promise resolving to vehicle data with a vehicles array
+ *   and a `source` naming what the endpoint derived positions from
+ *   ('api' or 'gtfs-rt'), or null when no live source backs the route
  */
 export function fetchVehicles(
   apiPath,
@@ -187,10 +191,24 @@ export function createVehicleTracker({
   const currentVehicles = new Map(); // Map service number to vehicles array
   const routeIdCache = new Map(); // Cache route IDs: service number -> route ID
   const subscribers = new Set(); // Subscribers for vehicle updates
+  const statusSubscribers = new Set(); // Subscribers for live data status
+  let liveStatus = IDLE_STATUS;
   let activeServicesKey = '';
   let generation = 0;
   let startPromise = null;
   let hasRenderedVehicles = false;
+
+  function setLiveStatus(next) {
+    if (
+      liveStatus.loading === next.loading &&
+      liveStatus.error === next.error &&
+      liveStatus.source === next.source
+    ) {
+      return;
+    }
+    liveStatus = next;
+    statusSubscribers.forEach((callback) => callback(liveStatus));
+  }
 
   /**
    * Update vehicles for all tracked services
@@ -236,6 +254,14 @@ export function createVehicleTracker({
       const results = await Promise.all(fetchPromises);
       if (expectedGeneration !== generation) return;
 
+      // A route with no vehicles out right now still has a working feed, so
+      // status keys off the source the endpoints reported, not the vehicle
+      // count: no source at all means nothing live backs this route.
+      const liveSource =
+        results.find(({ response }) => response?.source)?.response?.source ??
+        null;
+      setLiveStatus({ loading: false, error: !liveSource, source: liveSource });
+
       // Combine all vehicles from all services
       const allVehicles = [];
 
@@ -265,6 +291,7 @@ export function createVehicleTracker({
       });
     } catch (error) {
       console.error('Error updating vehicle positions:', error);
+      setLiveStatus({ loading: false, error: true, source: null });
       subscribers.forEach((callback) => callback([]));
     }
   }
@@ -296,6 +323,7 @@ export function createVehicleTracker({
 
     const currentGeneration = ++generation;
     activeServicesKey = servicesKey;
+    setLiveStatus({ loading: true, error: false, source: null });
     startPromise = (async () => {
       // Stop existing tracking
       if (intervalId) {
@@ -357,6 +385,7 @@ export function createVehicleTracker({
     generation++;
     activeServicesKey = '';
     startPromise = null;
+    setLiveStatus(IDLE_STATUS);
     if (intervalId) {
       clearRafInterval(intervalId);
       intervalId = null;
@@ -417,6 +446,17 @@ export function createVehicleTracker({
     return () => subscribers.delete(callback);
   }
 
+  /**
+   * Subscribe to live data status updates ({ loading, error, source })
+   * @param {Function} callback - Callback function to receive status updates
+   * @returns {Function} Unsubscribe function
+   */
+  function subscribeLiveStatus(callback) {
+    statusSubscribers.add(callback);
+    callback(liveStatus);
+    return () => statusSubscribers.delete(callback);
+  }
+
   return {
     start,
     startServices, // New method for multiple services
@@ -424,5 +464,6 @@ export function createVehicleTracker({
     getStatus,
     getVehicles,
     subscribe,
+    subscribeLiveStatus,
   };
 }

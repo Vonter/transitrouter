@@ -1536,6 +1536,11 @@ const App = () => {
   const [allModePreindexed, setAllModePreindexed] = useState(false);
   const [routeServices, setRouteServices] = useState([]);
   const [routeVehicles, setRouteVehicles] = useState([]);
+  const [routeLiveStatus, setRouteLiveStatus] = useState({
+    loading: false,
+    error: false,
+    source: null,
+  });
   const [followedVehicleId, setFollowedVehicleId] = useState(null);
   const stopPopoverCancelRef = useRef(null);
   const [stopPopoverDestFilter, setStopPopoverDestFilter] = useState(
@@ -6051,10 +6056,14 @@ const App = () => {
     const unsubscribe = vehicleTracker.current.subscribe((vehicles) => {
       setRouteVehicles(vehicles);
     });
+    const unsubscribeStatus = vehicleTracker.current.subscribeLiveStatus(
+      setRouteLiveStatus,
+    );
 
     // Cleanup on unmount
     return () => {
       unsubscribe();
+      unsubscribeStatus();
       vehicleTracker.current?.stop();
     };
   }, [mapLoaded, trackerCity]);
@@ -6963,10 +6972,24 @@ const App = () => {
             return (
               <>
                 <header>
-                  <h1>
-                    <b class="service-tag">{routeServices[0]}</b>
-                    {serviceData.name}
-                  </h1>
+                  <div class="service-header-row">
+                    <h1>
+                      <b class="service-tag">{routeServices[0]}</b>
+                      {serviceData.name}
+                    </h1>
+                    {/* Unlike the stop popover, nothing here degrades to a
+                        timetable estimate when the feed is down — the absent
+                        buses say that already — so the whole indicator, the
+                        unavailable warning included, is developer-only. */}
+                    {isDevMode() && (
+                      <LiveDataIndicator
+                        loading={routeLiveStatus.loading}
+                        error={routeLiveStatus.error}
+                        source={routeLiveStatus.source}
+                        errorTitle="Live vehicle positions unavailable for this route."
+                      />
+                    )}
+                  </div>
                 </header>
                 <ScrollableContainer
                   class="popover-scroll"

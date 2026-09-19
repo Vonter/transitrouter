@@ -948,6 +948,7 @@ function ArrivalTimes() {
   const [destFilterExact, setDestFilterExact] = useState(
     () => new URLSearchParams(window.location.search).get('destExact') === '1',
   );
+  const [collapsedStops, setCollapsedStops] = useState(() => new Set());
   const [mapLoaded, setMapLoaded] = useState(false);
   const [showInstallSheet, setShowInstallSheet] = useState(false);
   const [installBrowser, setInstallBrowser] = useState(detectBrowser);
@@ -956,6 +957,22 @@ function ArrivalTimes() {
       window.navigator.standalone ||
       window.matchMedia('(display-mode: standalone)').matches,
   );
+
+  const toggleStopCollapsed = useCallback((stopName) => {
+    setCollapsedStops((collapsed) => {
+      const next = new Set(collapsed);
+      if (next.has(stopName)) {
+        next.delete(stopName);
+      } else {
+        next.add(stopName);
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    setCollapsedStops(new Set());
+  }, [destFilter]);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -2128,9 +2145,12 @@ function ArrivalTimes() {
       <table>
         {services ? (
           (() => {
-            const renderGroupRow = (group) => {
+            const renderGroupRow = (group, nested = false) => {
               const { no, destination, buses } = group;
               const pinned = isPinned(no, pinnedServices);
+              const rowClass = [pinned && 'pin', nested && 'stop-match-row']
+                .filter(Boolean)
+                .join(' ');
               const sortedBuses = [...buses].sort(
                 (a, b) => a.duration_ms - b.duration_ms,
               );
@@ -2139,7 +2159,7 @@ function ArrivalTimes() {
               return (
                 <Fragment key={`${no}-${destination}`}>
                   <tr
-                    class={pinned ? 'pin' : ''}
+                    class={rowClass}
                     onClick={(e) => {
                       e.preventDefault();
                       togglePin(no, destination);
@@ -2176,7 +2196,7 @@ function ArrivalTimes() {
                       )}
                     </td>
                   </tr>
-                  <tr class={pinned ? 'pin' : ''}>
+                  <tr class={rowClass}>
                     <th colspan="2">
                       <small class="destination">
                         {(destination && stopsData[destination]?.[2]) ||
@@ -2192,7 +2212,21 @@ function ArrivalTimes() {
             const { matchingStopGroups, flatGroups } = filteredGroupedServices;
 
             if (matchingStopGroups !== null) {
-              if (matchingStopGroups.length === 0) {
+              const groupHasETA = (group) =>
+                group.buses.some(
+                  (b) =>
+                    typeof b?.duration_ms === 'number' &&
+                    b.duration_ms <= maxArrivalTime,
+                );
+
+              const stopGroups = matchingStopGroups
+                .map(({ stopName, groups }) => ({
+                  stopName,
+                  groups: groups.filter(groupHasETA),
+                }))
+                .filter(({ groups }) => groups.length > 0);
+
+              if (stopGroups.length === 0) {
                 return (
                   <tbody>
                     <tr>
@@ -2206,45 +2240,82 @@ function ArrivalTimes() {
                 );
               }
 
-              const groupHasETA = (group) =>
-                group.buses.some(
-                  (b) =>
-                    typeof b?.duration_ms === 'number' &&
-                    b.duration_ms <= maxArrivalTime,
-                );
-
-              const renderStopHeader = (stopName) => (
-                <tr class="stop-match-header">
-                  <th
-                    colspan="2"
-                    onClick={() => {
-                      setDestFilter(stopName);
-                      setDestFilterExact(true);
-                    }}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    {stopName}
-                  </th>
-                </tr>
-              );
-
               return (
-                <tbody>
-                  {matchingStopGroups.map(({ stopName, groups }) => {
-                    const withETA = groups.filter(groupHasETA);
-                    return withETA.length > 0 ? (
-                      <Fragment key={`${stopName}-eta`}>
-                        {renderStopHeader(stopName)}
-                        {withETA.map(renderGroupRow)}
+                <tbody class="stop-groups">
+                  {stopGroups.map(({ stopName, groups }) => {
+                    const collapsed = collapsedStops.has(stopName);
+                    return (
+                      <Fragment key={stopName}>
+                        <tr
+                          class={`stop-match-header${collapsed ? ' collapsed' : ''}`}
+                        >
+                          <th colspan="2">
+                            <div class="stop-match-bar">
+                              <button
+                                type="button"
+                                class="stop-match-toggle"
+                                aria-expanded={collapsed ? 'false' : 'true'}
+                                onClick={() => toggleStopCollapsed(stopName)}
+                              >
+                                <svg
+                                  class="stop-match-chevron"
+                                  viewBox="0 0 20 20"
+                                  fill="currentColor"
+                                  width="14"
+                                  height="14"
+                                  aria-hidden="true"
+                                >
+                                  <path
+                                    fill-rule="evenodd"
+                                    d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                                    clip-rule="evenodd"
+                                  />
+                                </svg>
+                                <span class="stop-match-name">{stopName}</span>
+                                <span class="stop-match-count">
+                                  {groups.length}
+                                </span>
+                              </button>
+                              {!destFilterExact && (
+                                <button
+                                  type="button"
+                                  class="stop-match-focus"
+                                  title={`Show only buses to ${stopName}`}
+                                  aria-label={`Show only buses to ${stopName}`}
+                                  onClick={() => {
+                                    setDestFilter(stopName);
+                                    setDestFilterExact(true);
+                                  }}
+                                >
+                                  <svg
+                                    viewBox="0 0 20 20"
+                                    fill="currentColor"
+                                    width="14"
+                                    height="14"
+                                    aria-hidden="true"
+                                  >
+                                    <path
+                                      fill-rule="evenodd"
+                                      d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                                      clip-rule="evenodd"
+                                    />
+                                  </svg>
+                                </button>
+                              )}
+                            </div>
+                          </th>
+                        </tr>
+                        {!collapsed &&
+                          groups.map((group) => renderGroupRow(group, true))}
                       </Fragment>
-                    ) : null;
+                    );
                   })}
                 </tbody>
               );
             }
 
             return flatGroups.length ? (
-              <tbody>{flatGroups.map(renderGroupRow)}</tbody>
+              <tbody>{flatGroups.map((group) => renderGroupRow(group))}</tbody>
             ) : (
               <tbody>
                 <tr>

@@ -853,17 +853,118 @@ footer {
   opacity: 0.8;
 }
 
+/* Search results: matched stops, each with its routes nested underneath */
+
+table tbody.stop-groups tr:nth-child(4n):not(.pin),
+table tbody.stop-groups tr:nth-child(4n-1):not(.pin) {
+  background-color: transparent;
+}
+
 .stop-match-header th {
-  padding: 16px 10px 4px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #333;
-  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 0;
   background: transparent;
 }
 
-.stop-match-header:first-child th {
-  border-top: none;
+.stop-match-bar {
+  display: flex;
+  align-items: stretch;
+  margin-top: 10px;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.stop-match-header:first-child .stop-match-bar {
+  margin-top: 0;
+}
+
+.stop-match-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 6px 9px 10px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stop-match-chevron {
+  flex: none;
+  color: #888;
+  transition: transform 0.15s ease;
+}
+
+.stop-match-header.collapsed .stop-match-chevron {
+  transform: rotate(-90deg);
+}
+
+.stop-match-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stop-match-count {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background-color: rgba(0, 0, 0, 0.07);
+  color: #666;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.stop-match-focus {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 0;
+  background: none;
+  color: #999;
+  cursor: pointer;
+}
+
+.stop-match-focus:active {
+  color: #007aff;
+}
+
+@media (hover: hover) {
+  .stop-match-toggle:hover .stop-match-chevron,
+  .stop-match-focus:hover {
+    color: #007aff;
+  }
+}
+
+table tbody.stop-groups tr.stop-match-row > th,
+table tbody.stop-groups tr.stop-match-row > td {
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+table tbody.stop-groups tr.stop-match-row.pin > th,
+table tbody.stop-groups tr.stop-match-row.pin > td {
+  background-color: transparent;
+}
+
+table tbody.stop-groups tr.stop-match-row > th {
+  position: relative;
+  padding-left: 28px;
+}
+
+table tbody.stop-groups tr.stop-match-row > th::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: rgba(0, 0, 0, 0.08);
 }
 
 .no-eta-section-header th {
@@ -1052,9 +1153,39 @@ html.dark {
     color: #000;
   }
 
-  .stop-match-header th {
-    color: #ccc;
-    border-top-color: rgba(255, 255, 255, 0.08);
+  .stop-match-bar {
+    background-color: rgba(255, 255, 255, 0.06);
+  }
+  .stop-match-toggle {
+    color: #e8e8e8;
+  }
+  .stop-match-chevron,
+  .stop-match-focus {
+    color: #888;
+  }
+  .stop-match-count {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #aaa;
+  }
+  .stop-match-focus:active {
+    color: #4da3ff;
+  }
+  @media (hover: hover) {
+    .stop-match-toggle:hover .stop-match-chevron,
+    .stop-match-focus:hover {
+      color: #4da3ff;
+    }
+  }
+  table tbody.stop-groups tr.stop-match-row > th,
+  table tbody.stop-groups tr.stop-match-row > td {
+    background-color: rgba(255, 255, 255, 0.03);
+  }
+  table tbody.stop-groups tr.stop-match-row.pin > th,
+  table tbody.stop-groups tr.stop-match-row.pin > td {
+    background-color: transparent;
+  }
+  table tbody.stop-groups tr.stop-match-row > th::before {
+    background-color: rgba(255, 255, 255, 0.1);
   }
   .no-eta-section-header th {
     color: #777;
