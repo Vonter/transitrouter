@@ -74,7 +74,7 @@ export async function onRequest(context) {
       const vehicleLocations = buildVehicleLocationLookup(feed.vehicles);
       const services = convertTripUpdatesToServices(feed.tripUpdates, stationId, vehicleLocations);
       if (services.length > 0) {
-        return jsonResponse({ services }, 200, cacheHeaders);
+        return jsonResponse({ services, source: 'gtfs-rt' }, 200, cacheHeaders);
       }
       // No TripUpdate covers this specific stop yet — fall through to the PIS API.
     }
@@ -93,11 +93,11 @@ export async function onRequest(context) {
     const result = await res.json();
 
     if (!(result.message.toLowerCase() === 'success')) {
-      return jsonResponse({ services: [] }, 200, cacheHeaders);
+      return jsonResponse({ services: [], source: 'api' }, 200, cacheHeaders);
     }
 
     const services = convertPMPMLToServices(result.buses, feed.vehicles);
-    return jsonResponse({ services }, 200, cacheHeaders);
+    return jsonResponse({ services, source: 'api' }, 200, cacheHeaders);
   } catch (error) {
     console.error('PMPML API Function Error:', error);
     return jsonResponse(

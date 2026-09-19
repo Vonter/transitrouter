@@ -10,6 +10,9 @@
 import BLR_ID_MAPPING from './blr-id-mapping.js';
 import { fetchBusLoads, fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './namma-bmtc.js';
 
+// ETAs come from Namma BMTC's own API, not a GTFS-RT feed.
+const SOURCE = 'api';
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
@@ -61,7 +64,7 @@ export async function onRequest(context) {
 
     const stopRoutePairs = parseStopMapping(BLR_ID_MAPPING.stops[stationId], BLR_ID_MAPPING);
     if (stopRoutePairs.length === 0) {
-      return jsonResponse({ services: [] }, 200, cacheHeaders);
+      return jsonResponse({ services: [], source: SOURCE }, 200, cacheHeaders);
     }
 
     // Each pair already carries the Namma BMTC stop id specific to that route's
@@ -70,7 +73,7 @@ export async function onRequest(context) {
     const etaResult = await fetchStopRouteEta(stopIdRouteIdList, userAgent);
 
     const services = await convertNammaBmtcToServices(etaResult, stopIdRouteIdList, userAgent);
-    return jsonResponse({ services }, 200, cacheHeaders);
+    return jsonResponse({ services, source: SOURCE }, 200, cacheHeaders);
   } catch (error) {
     console.error('BMTC Stop Routes Function Error:', error);
     return jsonResponse(

@@ -33,6 +33,7 @@ export default function BusServicesArrival({
   stopsData: stopsDataProp, // Optional stopsData override for all-mode (avoids window._data)
   onLoadingChange, // Callback to notify parent of loading state
   onErrorChange, // Callback to notify parent of error state
+  onSourceChange, // Callback to notify parent of the live data source ('api' | 'gtfs-rt' | null)
   cancelRef, // Ref to expose cancel function to parent
   destFilter = '',
   destFilterExact = false,
@@ -193,6 +194,7 @@ export default function BusServicesArrival({
         setIsLoading(false);
         setHasError(false);
         onErrorChange?.(false);
+        onSourceChange?.(null);
         onLoadingChange?.(false);
         return;
       }
@@ -201,12 +203,13 @@ export default function BusServicesArrival({
       const routeData = await fetchStopRoutes(arrivalsApiPath, id, signal);
 
       if (routeData) {
-        const { services, servicesArrivals } = routeData;
+        const { services, servicesArrivals, source } = routeData;
         setServicesArrivals(servicesArrivals);
         setStaticFallback(false);
         setIsLoading(false);
         setHasError(false);
         onErrorChange?.(false);
+        onSourceChange?.(source);
         onLoadingChange?.(false);
 
         // Check for issues (duplicate services, multiple visits)
@@ -238,6 +241,7 @@ export default function BusServicesArrival({
         setStaticFallback(true);
         setHasError(true);
         onErrorChange?.(true);
+        onSourceChange?.(null);
         setIsLoading(false);
         onLoadingChange?.(false);
       }
@@ -248,6 +252,7 @@ export default function BusServicesArrival({
         setStaticFallback(true);
         setHasError(true);
         onErrorChange?.(true);
+        onSourceChange?.(null);
         setIsLoading(false);
         onLoadingChange?.(false);
         return;
@@ -256,7 +261,7 @@ export default function BusServicesArrival({
       setIsLoading(false);
       onLoadingChange?.(false);
     }
-  }, [id, resolvedCity, onLoadingChange, onErrorChange]);
+  }, [id, resolvedCity, onLoadingChange, onErrorChange, onSourceChange]);
 
   // Fetch schedule data to get trip_count for each service
   useEffect(() => {
@@ -299,6 +304,7 @@ export default function BusServicesArrival({
           setHasError(false);
           onLoadingChange?.(false);
           onErrorChange?.(false);
+          onSourceChange?.(null);
         }
       };
     }
@@ -307,7 +313,7 @@ export default function BusServicesArrival({
         cancelRef.current = null;
       }
     };
-  }, [onLoadingChange, onErrorChange]);
+  }, [onLoadingChange, onErrorChange, onSourceChange]);
 
   // Notify parent of error state changes
   useEffect(() => {

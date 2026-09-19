@@ -33,6 +33,7 @@ import setIcon from '../utils/setIcon';
 import { stopMetrics } from './utils/metricsPage';
 
 import ArrivalTimeText from './components/ArrivalTimeText';
+import LiveDataIndicator from './components/LiveDataIndicator.jsx';
 import stopImagePath from './images/stop.png';
 import stopEndImagePath from './images/stop-end.png';
 import busSingleImagePath from './images/bus-single.svg';
@@ -393,7 +394,7 @@ const fetchLiveStopRoutes = async (stationId, signal) => {
       return null;
     }
     const result = await response.json();
-    return result.services ?? [];
+    return { services: result.services ?? [], source: result.source || 'api' };
   } catch (error) {
     if (error.name !== 'AbortError') {
       console.error(`Stop routes API error for ${city}:`, error);
@@ -916,6 +917,7 @@ function ArrivalTimes() {
   const [stopsData, setStopsData] = useState(null);
   const [fetchServicesStatus, setFetchServicesStatus] = useState(null);
   const [fetchServicesError, setFetchServicesError] = useState(false);
+  const [liveSource, setLiveSource] = useState(null);
   const [services, setServices] = useState(null);
   // Origin-only scheduled arrivals, used to supplement live results for routes
   // that start at this stop (live tracking has no data there until departure).
@@ -1138,6 +1140,7 @@ function ArrivalTimes() {
   };
 
   const fetchScheduleFallback = (id) => {
+    setLiveSource(null);
     return fetchCache(`${DATA_PATHS.schedule}/${id}.json`, 60)
       .then((scheduleData) => {
         const convertedServices = convertScheduleToArrival(scheduleData);
@@ -1172,6 +1175,28 @@ function ArrivalTimes() {
       .catch(() => setOriginSchedule([]));
   };
 
+  // Renders a successful live response (possibly with no buses at this stop),
+  // then fills in vehicle positions in the background (Phase 2).
+  const applyLiveServices = (id, live, signal) => {
+    const filtered = live.services
+      .map(filterStaleArrivalsFromService)
+      .filter((s) => s.next || (s.arrivals && s.arrivals.length > 0));
+    setFetchServicesStatus('online');
+    setFetchServicesError(false);
+    setLiveSource(live.source);
+    setServices(filtered);
+    loadOriginSchedule(id);
+    isFirstFetchRef.current = false;
+    scheduleRetry(id);
+    if (!filtered.length) return;
+
+    fetchAndMergeVehicles(filtered, signal)
+      .then((enriched) => {
+        if (enriched) setServices(enriched);
+      })
+      .catch(() => {});
+  };
+
   const fetchServices = (id) => {
     if (!id || window._PAUSED) return;
     setFetchServicesStatus('loading');
@@ -1197,41 +1222,20 @@ function ArrivalTimes() {
     const stopRoutesPromise = fetchLiveStopRoutes(id, signal);
 
     Promise.race([stopRoutesPromise, timeoutPromise])
-      .then((liveServices) => {
-        if (liveServices === null) {
+      .then((live) => {
+        if (live === null) {
           console.log('Live API returned no data');
           setFetchServicesError(true);
           fetchScheduleFallback(id);
-        } else if (liveServices.length === 0) {
-          setFetchServicesStatus('online');
-          setFetchServicesError(false);
-          setServices([]);
-          loadOriginSchedule(id);
-          isFirstFetchRef.current = false;
-          scheduleRetry(id);
         } else {
-          const filtered = liveServices
-            .map(filterStaleArrivalsFromService)
-            .filter((s) => s.next || (s.arrivals && s.arrivals.length > 0));
-          setFetchServicesStatus('online');
-          setFetchServicesError(false);
-          setServices(filtered);
-          loadOriginSchedule(id);
-          isFirstFetchRef.current = false;
-          scheduleRetry(id);
-
-          // Phase 2: Fetch vehicle positions (non-blocking)
-          fetchAndMergeVehicles(filtered, signal)
-            .then((enriched) => {
-              if (enriched) setServices(enriched);
-            })
-            .catch(() => {});
+          applyLiveServices(id, live, signal);
         }
       })
       .catch((error) => {
         if (error.name === 'AbortError') {
           setFetchServicesStatus(null);
           setFetchServicesError(false);
+          setLiveSource(null);
           return;
         }
         if (error.message === 'TIMEOUT') {
@@ -1244,36 +1248,12 @@ function ArrivalTimes() {
 
         // Continue waiting for stop routes API in background
         stopRoutesPromise
-          .then((liveServices) => {
-            if (liveServices === null) return;
-            if (liveServices.length === 0) {
-              setFetchServicesStatus('online');
-              setFetchServicesError(false);
-              setServices([]);
-              loadOriginSchedule(id);
-              isFirstFetchRef.current = false;
-              scheduleRetry(id);
-              return;
-            }
+          .then((live) => {
+            if (live === null) return;
             console.log(
               'Stop routes response received, updating with live data',
             );
-            const filtered = liveServices
-              .map(filterStaleArrivalsFromService)
-              .filter((s) => s.next || (s.arrivals && s.arrivals.length > 0));
-            setFetchServicesStatus('online');
-            setFetchServicesError(false);
-            setServices(filtered);
-            loadOriginSchedule(id);
-            isFirstFetchRef.current = false;
-            scheduleRetry(id);
-
-            // Phase 2 for the background result
-            fetchAndMergeVehicles(filtered, signal)
-              .then((enriched) => {
-                if (enriched) setServices(enriched);
-              })
-              .catch(() => {});
+            applyLiveServices(id, live, signal);
           })
           .catch(() => {});
       });
@@ -1972,36 +1952,11 @@ function ArrivalTimes() {
             </b>
           </span>
           <span class="stop-heading-controls">
-            {(fetchServicesStatus === 'loading' || fetchServicesError) && (
-              <span
-                class={`live-data-loading-container ${fetchServicesError ? 'error' : ''}`}
-                title={
-                  fetchServicesError
-                    ? 'Live data unavailable. Estimated based on timetable schedule.'
-                    : 'Fetching live information'
-                }
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const container = e.currentTarget;
-                  container.classList.toggle('show-tooltip');
-                  const closeTooltip = (event) => {
-                    if (!container.contains(event.target)) {
-                      container.classList.remove('show-tooltip');
-                      document.removeEventListener('click', closeTooltip);
-                    }
-                  };
-                  setTimeout(() => {
-                    document.addEventListener('click', closeTooltip);
-                  }, 0);
-                }}
-              >
-                {fetchServicesError ? (
-                  <span class="live-data-warning">⚠</span>
-                ) : (
-                  <span class="live-data-loading" />
-                )}
-              </span>
-            )}
+            <LiveDataIndicator
+              loading={fetchServicesStatus === 'loading'}
+              error={fetchServicesError}
+              source={liveSource}
+            />
             <button
               class={`bookmark-btn${isInstalled ? ' installed' : ''}`}
               onClick={handleInstall}

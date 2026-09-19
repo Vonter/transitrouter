@@ -12,6 +12,9 @@ const PMPML_HEADERS = {
   'Host': '127.0.0.1',
 };
 
+// ETAs come from the PMPML PIS API, not a GTFS-RT feed.
+const SOURCE = 'api';
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
@@ -57,11 +60,11 @@ export async function onRequest(context) {
     const cacheHeaders = { 'Cache-Control': 'public, max-age=10' };
 
     if (!(result.message.toLowerCase() === 'success')) {
-      return jsonResponse({ services: [] }, 200, cacheHeaders);
+      return jsonResponse({ services: [], source: SOURCE }, 200, cacheHeaders);
     }
 
     const services = await convertPMPMLToServices(result.buses);
-    return jsonResponse({ services }, 200, cacheHeaders);
+    return jsonResponse({ services, source: SOURCE }, 200, cacheHeaders);
   } catch (error) {
     console.error('PMPML API Function Error:', error);
     return jsonResponse(

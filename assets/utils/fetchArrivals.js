@@ -159,9 +159,10 @@ export function formatArrivalTime(durationMs) {
  * @param {string} apiPath - The arrivals API path from city config
  * @param {string|number} stationId - The station/stop ID
  * @param {AbortSignal} [signal] - Optional AbortSignal for cancellation
- * @returns {Promise<{services: Array, servicesArrivals: Object}|null>}
+ * @returns {Promise<{services: Array, servicesArrivals: Object, source: string}|null>}
  *   An object (with possibly-empty `services`) on a successful response, or
  *   `null` when the fetch fails — letting callers tell "no buses" from an error.
+ *   `source` is what the endpoint derived its ETAs from ('api' or 'gtfs-rt').
  */
 export async function fetchStopRoutes(apiPath, stationId, signal) {
   if (!apiPath || !stationId || isApiDisabled()) return null;
@@ -175,9 +176,11 @@ export async function fetchStopRoutes(apiPath, stationId, signal) {
     }
 
     const data = await response.json();
+    const source = data?.source || 'api';
     // Valid response with no services is "online but empty", not an error —
     // callers distinguish this (empty result) from a fetch failure (null).
-    if (!data?.services?.length) return { services: [], servicesArrivals: {} };
+    if (!data?.services?.length)
+      return { services: [], servicesArrivals: {}, source };
 
     const services = data.services
       .map(filterStaleArrivalsFromService)
@@ -194,7 +197,7 @@ export async function fetchStopRoutes(apiPath, stationId, signal) {
       }
     });
 
-    return { services, servicesArrivals };
+    return { services, servicesArrivals, source };
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     console.error('Error fetching stop routes:', error);

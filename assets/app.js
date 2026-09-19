@@ -88,6 +88,7 @@ import GeolocateControl, { GEOLOCATE_SVG } from './components/GeolocateControl';
 import BetweenRoutes, { sortAndFilterResults } from './components/BetweenRoutes';
 import ScrollableContainer from './components/ScrollableContainer';
 import StopsList from './components/StopsList.jsx';
+import LiveDataIndicator from './components/LiveDataIndicator.jsx';
 
 import stopImagePath from './images/stop.png';
 import stopEndImagePath from './images/stop-end.png';
@@ -1530,6 +1531,7 @@ const App = () => {
   const [showServicePopover, setShowServicePopover] = useState(false);
   const [stopPopoverLoading, setStopPopoverLoading] = useState(false);
   const [stopPopoverError, setStopPopoverError] = useState(false);
+  const [stopPopoverSource, setStopPopoverSource] = useState(null);
   const [intersectStops, setIntersectStops] = useState([]);
   const [allModePreindexed, setAllModePreindexed] = useState(false);
   const [routeServices, setRouteServices] = useState([]);
@@ -6715,38 +6717,6 @@ const App = () => {
               &times;
             </a>
             <header>
-              {(stopPopoverLoading || stopPopoverError) && (
-                <span
-                  class={`live-data-loading-container ${
-                    stopPopoverError ? 'error' : ''
-                  }`}
-                  title={
-                    stopPopoverError
-                      ? 'Live data unavailable. Estimated based on timetable schedule.'
-                      : 'Fetching live information'
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const container = e.currentTarget;
-                    container.classList.toggle('show-tooltip');
-                    const closeTooltip = (event) => {
-                      if (!container.contains(event.target)) {
-                        container.classList.remove('show-tooltip');
-                        document.removeEventListener('click', closeTooltip);
-                      }
-                    };
-                    setTimeout(() => {
-                      document.addEventListener('click', closeTooltip);
-                    }, 0);
-                  }}
-                >
-                  {stopPopoverError ? (
-                    <span class="live-data-warning">⚠</span>
-                  ) : (
-                    <span class="live-data-loading" />
-                  )}
-                </span>
-              )}
               <div class="stop-header-row">
                 <h1 onClick={() => zoomToStop(stopPopoverData.number)}>
                   {!getConfigForCity(stopPopoverData.city || city)?.disableStopID && (
@@ -6759,6 +6729,11 @@ const App = () => {
                     )}
                   </span>
                 </h1>
+                <LiveDataIndicator
+                  loading={stopPopoverLoading}
+                  error={stopPopoverError}
+                  source={stopPopoverSource}
+                />
                 {isAlphaEnabled() && (
                   <button
                     class="directions-btn"
@@ -6844,6 +6819,7 @@ const App = () => {
                   : undefined}
                 onLoadingChange={handleStopLoadingChange}
                 onErrorChange={setStopPopoverError}
+                onSourceChange={setStopPopoverSource}
                 cancelRef={stopPopoverCancelRef}
                 destFilter={stopPopoverDestFilter}
                 destFilterExact={stopPopoverDestFilterExact}

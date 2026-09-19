@@ -659,6 +659,29 @@ footer {
   text-align: center;
 }
 
+/* Live data available: a filled dot for operator-API ETAs, a ring for
+   GTFS-Realtime ones. The source is named in the hover tooltip. */
+.live-data-source {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: limegreen;
+  flex-shrink: 0;
+}
+
+.live-data-source-gtfs-rt {
+  background-color: transparent;
+  border: 2px solid limegreen;
+}
+
+/* Hover/tap target around the dot, which is too small to aim at on its own. */
+.live-data-source:before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+}
+
 .live-data-loading-container::after {
   content: attr(title);
   position: absolute;
