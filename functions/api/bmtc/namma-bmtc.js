@@ -120,6 +120,30 @@ export async function fetchBusLoads(busNumbers, userAgent) {
   return loads;
 }
 
+/**
+ * Fills in `load` on trips that have already passed the ETA filters, leaving
+ * the caller's 'SEA' default in place for vehicles the seat API doesn't know.
+ * Deliberately called after filtering, not before: a stop's raw stop-route-eta
+ * response carries roughly three times more vehicles than end up rendered
+ * (eta -1, or beyond the arrival window), and looking those up is wasted work.
+ * Never rejects — seat availability is decoration, not a reason to fail a stop.
+ */
+export async function applyBusLoads(trips, userAgent) {
+  if (!trips.length) return;
+  try {
+    const loads = await fetchBusLoads(
+      trips.map((trip) => trip.bus_no),
+      userAgent,
+    );
+    for (const trip of trips) {
+      const load = loads.get(trip.bus_no);
+      if (load) trip.load = load;
+    }
+  } catch (error) {
+    console.error('Namma BMTC seat availability failed, defaulting load to SEA:', error);
+  }
+}
+
 /** eta===-1 (or missing) means "unknown" — never surface as negative. */
 export function normalizeEtaSeconds(etaSeconds) {
   if (etaSeconds == null || etaSeconds < 0) return null;

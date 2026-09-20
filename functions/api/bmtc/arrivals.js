@@ -8,13 +8,13 @@
  * locations still come from the GTFS-RT feed, unchanged by this migration.
  *
  * `load` (BMTC's old `devicestatusflag`) now comes from Namma BMTC's seat-availability
- * API (fetchBusLoads in namma-bmtc.js). Namma BMTC has no equivalent for `fromstationname`
+ * API (applyBusLoads in namma-bmtc.js). Namma BMTC has no equivalent for `fromstationname`
  * (origin_code) — explicit `null` now; the frontend doesn't read it beyond an
  * equality check.
  */
 import BLR_ID_MAPPING from './blr-id-mapping.js';
 import { fetchVehiclePositions, buildVehicleLocationLookup } from './bmtc-rt.js';
-import { fetchBusLoads, fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './namma-bmtc.js';
+import { applyBusLoads, fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './namma-bmtc.js';
 
 // ETAs come from Namma BMTC's own API, not a GTFS-RT feed (only locations do).
 const SOURCE = 'api';
@@ -89,28 +89,21 @@ export async function onRequest(context) {
   }
 }
 
+async function fetchVehicleLocations() {
+  try {
+    return buildVehicleLocationLookup(await fetchVehiclePositions());
+  } catch (error) {
+    console.error('GTFS-RT feed fetch failed, continuing without locations:', error);
+    return new Map();
+  }
+}
+
 async function convertNammaBmtcToServices(etaResult, stopIdRouteIdList, userAgent) {
   const MAX_MS = 90 * 60 * 1000;
   const routeIdToLocalName = getNammaBmtcRouteIdToLocalName();
 
-  let allVehicles = new Map();
-  try {
-    allVehicles = buildVehicleLocationLookup(await fetchVehiclePositions());
-  } catch (error) {
-    console.error('GTFS-RT feed fetch failed, continuing without locations:', error);
-  }
-
-  let busLoads = new Map();
-  try {
-    busLoads = await fetchBusLoads(
-      [...etaResult.values()].flatMap((m) => [...m.values()].map((v) => v.vNo)),
-      userAgent,
-    );
-  } catch (error) {
-    console.error('Namma BMTC seat availability failed, defaulting load to SEA:', error);
-  }
-
   const servicesMap = new Map();
+  const allTrips = [];
   for (const pairKey of stopIdRouteIdList) {
     const [, nammaBmtcRouteId] = pairKey.split(':');
     const localRouteName = routeIdToLocalName.get(nammaBmtcRouteId);
@@ -131,24 +124,35 @@ async function convertNammaBmtcToServices(etaResult, stopIdRouteIdList, userAgen
         servicesMap.set(key, { no: localRouteName, destination: parsed.dest, trips: [] });
       }
 
-      const location =
-        allVehicles.get(vehicleId) ||
-        (parsed.vNo && allVehicles.get(parsed.vNo)) ||
-        null;
-
-      servicesMap.get(key).trips.push({
+      const trip = {
         duration_ms,
         type: 'SD',
-        load: busLoads.get(parsed.vNo) || 'SEA',
+        load: 'SEA',
         feature: 'WAB',
         visit_number: 1,
         origin_code: null,
         destination_code: parsed.dest,
         vehicle_id: vehicleId,
         bus_no: parsed.vNo,
-        location,
-      });
+        location: null,
+      };
+      servicesMap.get(key).trips.push(trip);
+      allTrips.push(trip);
     }
+  }
+
+  // Locations and seat availability are independent lookups over the same
+  // filtered trip list, so issue them together rather than back to back.
+  const [allVehicles] = await Promise.all([
+    fetchVehicleLocations(),
+    applyBusLoads(allTrips, userAgent),
+  ]);
+
+  for (const trip of allTrips) {
+    trip.location =
+      allVehicles.get(trip.vehicle_id) ||
+      (trip.bus_no && allVehicles.get(trip.bus_no)) ||
+      null;
   }
 
   return Array.from(servicesMap.values()).map(({ no, destination, trips }) => {

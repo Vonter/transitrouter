@@ -8,7 +8,7 @@
  * location enrichment step.
  */
 import BLR_ID_MAPPING from './blr-id-mapping.js';
-import { fetchBusLoads, fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './namma-bmtc.js';
+import { applyBusLoads, fetchStopRouteEta, normalizeEtaSeconds, parseRouteMapping, parseStopMapping } from './namma-bmtc.js';
 
 // ETAs come from Namma BMTC's own API, not a GTFS-RT feed.
 const SOURCE = 'api';
@@ -87,17 +87,8 @@ async function convertNammaBmtcToServices(etaResult, stopIdRouteIdList, userAgen
   const MAX_MS = 90 * 60 * 1000;
   const routeIdToLocalName = getNammaBmtcRouteIdToLocalName();
 
-  let busLoads = new Map();
-  try {
-    busLoads = await fetchBusLoads(
-      [...etaResult.values()].flatMap((m) => [...m.values()].map((v) => v.vNo)),
-      userAgent,
-    );
-  } catch (error) {
-    console.error('Namma BMTC seat availability failed, defaulting load to SEA:', error);
-  }
-
   const servicesMap = new Map();
+  const allTrips = [];
   for (const pairKey of stopIdRouteIdList) {
     const [, nammaBmtcRouteId] = pairKey.split(':');
     const localRouteName = routeIdToLocalName.get(nammaBmtcRouteId);
@@ -118,19 +109,23 @@ async function convertNammaBmtcToServices(etaResult, stopIdRouteIdList, userAgen
         servicesMap.set(key, { no: localRouteName, destination: parsed.dest, trips: [] });
       }
 
-      servicesMap.get(key).trips.push({
+      const trip = {
         duration_ms,
         type: 'SD',
-        load: busLoads.get(parsed.vNo) || 'SEA',
+        load: 'SEA',
         feature: 'WAB',
         visit_number: 1,
         origin_code: null,
         destination_code: parsed.dest,
         vehicle_id: vehicleId,
         bus_no: parsed.vNo,
-      });
+      };
+      servicesMap.get(key).trips.push(trip);
+      allTrips.push(trip);
     }
   }
+
+  await applyBusLoads(allTrips, userAgent);
 
   return Array.from(servicesMap.values()).map(({ no, destination, trips }) => {
     trips.sort((a, b) => a.duration_ms - b.duration_ms);
