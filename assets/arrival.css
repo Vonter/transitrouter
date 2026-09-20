@@ -147,10 +147,19 @@ h1 b {
   font-size: 1.35em;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 h1 b .stop-tag {
   margin-right: 1ex;
+}
+
+.stop-suffix {
+  flex-basis: 100%;
+  color: #777;
+  font-size: 0.75em;
+  font-weight: normal;
+  line-height: 1.3;
 }
 
 table {
@@ -1037,6 +1046,10 @@ html.dark {
   footer {
     background-color: #000;
     color: #ccc;
+  }
+
+  .stop-suffix {
+    color: #999;
   }
 
   .stop-tag {

@@ -78,7 +78,6 @@ Refer to [DATA.md](DATA.md) for more details on the data sources and processing 
 ## TODO
 
 - User Experience
-    - Show stop suffix in title of arrivals page
     - Navigation flow
     - Typography/styling of elements
     - More cities

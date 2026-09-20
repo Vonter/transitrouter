@@ -910,6 +910,9 @@ const detectBrowser = () => {
   return 'chrome';
 };
 
+const stopLabel = (stop) =>
+  stop?.suffix ? `${stop.name} ${stop.suffix}` : stop?.name || '';
+
 // Main component
 function ArrivalTimes() {
   const { t, i18n } = useTranslation();
@@ -1004,7 +1007,8 @@ function ArrivalTimes() {
   // This runs whenever the stop or filter changes so the installed app opens to the right view.
   useEffect(() => {
     if (!busStop) return;
-    const { code, name } = busStop;
+    const { code } = busStop;
+    const name = stopLabel(busStop);
 
     document.title = name;
     const appleTitle = document.querySelector(
@@ -1098,8 +1102,8 @@ function ArrivalTimes() {
 
         const actualCode = findStopCode(code);
         if (actualCode) {
-          const [lng, lat, name] = stops[actualCode];
-          setBusStop({ code: actualCode, name, lat, lng });
+          const [lng, lat, name, suffix = ''] = stops[actualCode];
+          setBusStop({ code: actualCode, name, suffix, lat, lng });
           setIcon(actualCode);
           stopMetrics(city, actualCode, 'arrival');
         } else if (code) {
@@ -1120,13 +1124,12 @@ function ArrivalTimes() {
     const title = busStop?.code
       ? disableStopID
         ? t('arrivals.titleStop', {
-            stopNumber:
-              busStop.name + (busStop.suffix ? ` ${busStop.suffix}` : ''),
+            stopNumber: stopLabel(busStop),
             stopName: '',
-          }).replace(': ', '') // Remove the colon and space when no stopName
+          }).replace(/[\s:\u2013\u2014-]+$/, '') // Drop the dangling separator when there is no stopName
         : t('arrivals.titleStop', {
             stopNumber: busStop.code,
-            stopName: busStop.name,
+            stopName: stopLabel(busStop),
           })
       : t('arrivals.title');
     document.title = title;
@@ -1338,7 +1341,11 @@ function ArrivalTimes() {
               {
                 type: 'Feature',
                 id: encode(code),
-                properties: { number: code, name: busStop.name },
+                properties: {
+                  number: code,
+                  name: busStop.name,
+                  suffix: busStop.suffix || null,
+                },
                 geometry: { type: 'Point', coordinates: [lng, lat] },
               },
             ],
@@ -1354,7 +1361,18 @@ function ArrivalTimes() {
             'icon-size': 0.5,
             'icon-anchor': 'bottom',
             'icon-allow-overlap': true,
-            'text-field': ['format', ['get', 'name'], {}],
+            'text-field': [
+              'format',
+              ['get', 'name'],
+              {},
+              [
+                'case',
+                ['!=', ['get', 'suffix'], null],
+                ['concat', '\n', ['get', 'suffix']],
+                '',
+              ],
+              { 'font-scale': 0.8 },
+            ],
             'text-size': 14,
             'text-anchor': 'left',
             'text-offset': [1, 0],
@@ -1946,25 +1964,21 @@ function ArrivalTimes() {
                 const cityConfig = getConfigForCity(city);
                 const disableStopID = cityConfig?.disableStopID || false;
 
-                if (disableStopID) {
-                  return (
-                    <>
-                      {name}
-                      {busStop.suffix && (
-                        <span class="stop-suffix"> {busStop.suffix}</span>
-                      )}
-                    </>
-                  );
-                } else {
-                  return (
-                    <>
-                      <span class={`stop-tag ${fetchServicesStatus}`}>
-                        {code}
-                      </span>{' '}
-                      {name}
-                    </>
-                  );
-                }
+                return (
+                  <>
+                    {!disableStopID && (
+                      <>
+                        <span class={`stop-tag ${fetchServicesStatus}`}>
+                          {code}
+                        </span>{' '}
+                      </>
+                    )}
+                    {name}
+                    {busStop.suffix && (
+                      <span class="stop-suffix">{busStop.suffix}</span>
+                    )}
+                  </>
+                );
               })()}
             </b>
           </span>
