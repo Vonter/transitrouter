@@ -29,4 +29,4 @@ pune:
 railways:
   gtfs.zip: a0347d046ccc66b182f08df88dd5eb6153fd19610a58c87d14e1e6910c937be8
 rajkot:
-  gtfs.zip: 7b1a5fbc2f2eb19bf92e626f9b768fadc86fac0d39b3ebaaeba0280c0062c4de
+  gtfs.zip: a0adcb60597d9ab3e534893b54d37004fe5ee637f10dbdf4b57f55488e4e223f
