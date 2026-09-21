@@ -16,7 +16,8 @@
  */
 import BLR_ID_MAPPING from './blr-id-mapping.js';
 import { fetchGtfsRtFeed, matchesRouteId } from './bmtc-rt.js';
-import { fetchRouteLiveInfo, getRouteStopIndex, normalizeEtaSeconds, parseRouteMapping } from './namma-bmtc.js';
+import { occupancyToLoad } from '../vehicle.js';
+import { fetchBusLoads, fetchRouteLiveInfo, getRouteStopIndex, normalizeEtaSeconds, parseRouteMapping } from './namma-bmtc.js';
 
 export async function onRequest(context) {
   const { request } = context;
@@ -70,7 +71,7 @@ export async function onRequest(context) {
         const matched = matchGtfsRtVehicles(gtfsFeed, candidateId, routeText, nammaBmtcRoutes);
         if (matched.length > 0) {
           return new Response(
-            JSON.stringify({ routeId: finalRouteId || null, vehicles: matched, source: 'gtfs-rt' }),
+            JSON.stringify({ routeId: finalRouteId || null, vehicles: await addBusLoads(matched, userAgent), source: 'gtfs-rt' }),
             {
               status: 200,
               headers: {
@@ -86,7 +87,10 @@ export async function onRequest(context) {
     }
 
     if (routeText && nammaBmtcRoutes.length > 0) {
-      const vehicles = await fetchVehiclesFromNammaBmtc(nammaBmtcRoutes, routeText, userAgent);
+      const vehicles = await addBusLoads(
+        await fetchVehiclesFromNammaBmtc(nammaBmtcRoutes, routeText, userAgent),
+        userAgent,
+      );
       return new Response(
         JSON.stringify({ routeId: finalRouteId || null, vehicles, source: 'api' }),
         {
@@ -233,8 +237,28 @@ function matchGtfsRtVehicles({ vehicles, tripUpdates }, routeId, routeText, namm
         direction: null,
         stationName: null,
         routeNo: routeText || null,
+        // Only when the feed itself reports occupancy; addBusLoads fills the rest.
+        ...(occupancyToLoad(v.occupancyStatus) && { load: occupancyToLoad(v.occupancyStatus) }),
       };
     });
+}
+
+/** Adds `load` (SEA/SDA/LSD) from Namma BMTC's seat-availability API to
+ * vehicles that don't already have one. Vehicles it doesn't know keep no
+ * `load` — unlike arrivals, there's no 'SEA' default. */
+async function addBusLoads(vehicles, userAgent) {
+  const missing = vehicles.filter((v) => !v.load && v.vehicleNumber);
+  if (!missing.length) return vehicles;
+  try {
+    const loads = await fetchBusLoads(missing.map((v) => v.vehicleNumber), userAgent);
+    for (const v of missing) {
+      const load = loads.get(v.vehicleNumber);
+      if (load) v.load = load;
+    }
+  } catch (error) {
+    console.error('Namma BMTC seat availability failed, omitting vehicle load:', error);
+  }
+  return vehicles;
 }
 
 /** Fetches vehicles for every direction variant of a route from Namma

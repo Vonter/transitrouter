@@ -120,6 +120,9 @@ function parseVehiclePosition(reader) {
     lat: null,
     lng: null,
     bearing: null,
+    occupancyStatus: null,
+    occupancyPercentage: null,
+    timestamp: null,
   };
   while (!reader.eof()) {
     const { fieldNumber, wireType } = reader.readTag();
@@ -132,6 +135,12 @@ function parseVehiclePosition(reader) {
       vp.lat = position.lat;
       vp.lng = position.lng;
       vp.bearing = position.bearing;
+    } else if (fieldNumber === 5 && wireType === 0) {
+      vp.timestamp = reader.readVarint(); // unix seconds
+    } else if (fieldNumber === 9 && wireType === 0) {
+      vp.occupancyStatus = reader.readVarint();
+    } else if (fieldNumber === 10 && wireType === 0) {
+      vp.occupancyPercentage = reader.readVarint();
     } else if (fieldNumber === 8 && wireType === 2) {
       const vehicle = parseVehicleDescriptor(reader.subMessage(reader.readVarint()));
       vp.vehicleId = vehicle.id;

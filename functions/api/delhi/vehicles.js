@@ -7,6 +7,7 @@
  * via delhi-route-mapping.js (see the caveat in delhi-rt.js for why that
  * translation is needed, and that it's unverified against a live feed).
  */
+import { occupancyToLoad } from '../vehicle.js';
 import { fetchVehiclePositions, matchesRouteIds } from './delhi-rt.js';
 import ROUTE_MAPPING from './delhi-route-mapping.js';
 
@@ -56,6 +57,8 @@ export async function onRequest(context) {
         vehicleNumber: v.vehicleLabel || v.vehicleId,
         location: { lat: v.lat, lng: v.lng },
         bearing: v.bearing || null,
+        // Only when the feed itself reports occupancy
+        ...(occupancyToLoad(v.occupancyStatus) && { load: occupancyToLoad(v.occupancyStatus) }),
       }));
 
     return jsonResponse({ routeText, vehicles, source: 'gtfs-rt' }, 200, {

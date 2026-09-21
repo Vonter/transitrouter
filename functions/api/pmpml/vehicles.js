@@ -8,6 +8,7 @@
  * chartr's buses-on-route API for any route missing from that mapping
  * (e.g. a new route added after the mapping was last generated).
  */
+import { occupancyToLoad } from '../vehicle.js';
 import { fetchVehiclePositions, matchesRouteIds } from './pmpml-rt.js';
 import ROUTE_MAPPING from './pmpml-route-mapping.js';
 
@@ -84,6 +85,8 @@ async function fetchVehiclesFromGtfsRt(routeIds) {
         lng: v.lng,
       },
       bearing: v.bearing || null,
+      // Only when the feed itself reports occupancy
+      ...(occupancyToLoad(v.occupancyStatus) && { load: occupancyToLoad(v.occupancyStatus) }),
     });
   }
 

@@ -1355,7 +1355,8 @@ a:active {
   max-width: 100%;
 }
 
-.vehicle-inline:hover {
+.vehicle-inline:hover,
+a:hover > .vehicle-inline {
   background: #ffecb3;
   border-color: #f57c00;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -3634,7 +3635,8 @@ html.dark {
     border-color: #cc7a00;
     color: #e0d0b0;
   }
-  .vehicle-inline:hover {
+  .vehicle-inline:hover,
+  a:hover > .vehicle-inline {
     background: #2a2000;
     border-color: #cc6600;
   }
@@ -3849,4 +3851,80 @@ html.dark {
   #arrivals-popover .popover-popout:hover img {
     filter: brightness(3);
   }
+}
+
+/* Orange marks vehicles (green: routes, red: stops). The chip itself is
+   .vehicle-inline; these scale it where it isn't in the route stop list. */
+.vehicle-inline {
+  position: relative;
+}
+/* Small load dot on the chip's top-left corner (stop list only). */
+.vehicle-load {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border: 0.25px solid #fff;
+  border-radius: 50%;
+}
+.vehicle-load-sea {
+  background: #2e9e2e;
+}
+.vehicle-load-sda {
+  background: orangered;
+}
+.vehicle-load-lsd {
+  background: firebrick;
+}
+.vehicle-inline--md {
+  font-size: 13px;
+  padding: 3px 8px;
+}
+.vehicle-inline--md img {
+  width: 18px;
+  height: 18px;
+}
+.vehicle-inline--md .vehicle-inline-number {
+  font-size: 13px;
+}
+.vehicle-inline--lg {
+  font-size: 16px;
+  padding: 4px 10px;
+}
+.vehicle-inline--lg img {
+  width: 22px;
+  height: 22px;
+}
+.vehicle-inline--lg .vehicle-inline-number {
+  font-size: 18px;
+  font-weight: bold;
+}
+#service-popover h1.vehicle-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+#service-popover h1.vehicle-header .vehicle-inline,
+#service-popover h1.vehicle-header .service-tag {
+  margin: 0;
+}
+.vehicle-panel {
+  padding: 0.5em 0 0;
+}
+.vehicle-panel .vehicle-occupancy,
+.vehicle-panel .vehicle-estimated {
+  margin: 0.25em 0;
+  opacity: 0.75;
+}
+.vehicle-error {
+  margin: 0.75em 0;
+  padding: 0 1em;
+}
+.stop-eta {
+  display: block;
+  font-size: 0.85em;
+  opacity: 0.75;
+  white-space: nowrap;
 }

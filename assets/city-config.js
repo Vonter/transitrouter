@@ -53,6 +53,10 @@ export const CITY_CONFIGS = {
       enabled: true,
       apiPath: '/api/bmtc/vehicles',
     },
+    vehicleLookup: {
+      enabled: true,
+      apiPath: '/api/bmtc/vehicle',
+    },
     stopRoutes: {
       enabled: true,
       apiPath: '/api/bmtc/stop-routes',
@@ -141,6 +145,10 @@ export const CITY_CONFIGS = {
       enabled: true,
       apiPath: '/api/delhi/vehicles',
     },
+    vehicleLookup: {
+      enabled: true,
+      apiPath: '/api/delhi/vehicle',
+    },
   },
   pune: {
     city: {
@@ -162,6 +170,10 @@ export const CITY_CONFIGS = {
     liveVehicles: {
       enabled: true,
       apiPath: '/api/pmpml/vehicles',
+    },
+    vehicleLookup: {
+      enabled: true,
+      apiPath: '/api/pmpml/vehicle',
     },
     stopRoutes: {
       enabled: true,
