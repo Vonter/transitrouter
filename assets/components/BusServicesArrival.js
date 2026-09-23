@@ -209,7 +209,12 @@ export default function BusServicesArrival({
         setIsLoading(false);
         setHasError(false);
         onErrorChange?.(false);
-        onSourceChange?.(source);
+        // A working feed with nothing due right now is a normal, common
+        // state for a stop (not every stop has a bus/train due at any given
+        // moment) — that's not an error, but it also isn't "live data
+        // flowing" either, so the indicator shouldn't claim a source with
+        // nothing behind it.
+        onSourceChange?.(services.length ? source : null);
         onLoadingChange?.(false);
 
         // Check for issues (duplicate services, multiple visits)

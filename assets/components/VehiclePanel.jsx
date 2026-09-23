@@ -6,15 +6,29 @@ import LiveDataIndicator from './LiveDataIndicator';
 const formatTime = (unixSec) =>
   new Date(unixSec * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-/** "10:42 ∙ 5 min" label for one stop_time entry of the vehicle response. */
-export function formatStopTimeLabel(t, stop) {
-  const eta =
-    stop.duration_ms == null
-      ? ''
-      : Math.round(stop.duration_ms / 60000) <= 0
-        ? t('vehicle.now')
-        : t('vehicle.minutes', { count: Math.round(stop.duration_ms / 60000) });
-  return eta ? `${formatTime(stop.arrivalTime)} ∙ ${eta}` : formatTime(stop.arrivalTime);
+// How long a stop's time still reads as "Now", either side of it — beyond
+// this it always shows the real elapsed time ("N min ago"/"N min"), never
+// hidden and never silently rounded to "Now" for longer than this.
+const NOW_WINDOW_SEC = 120;
+
+/**
+ * "10:42 ∙ 5 min" (upcoming), "10:42 ∙ Now" (within NOW_WINDOW_SEC either
+ * way), or "10:42 ∙ 22 min ago" beyond that (the source's stop-time data is
+ * stale — this feed doesn't always extend a trip's remaining stops as it
+ * advances, so "no data past this point" and "running late" can't be told
+ * apart here, but the actual elapsed time is still shown either way).
+ * Computed from `stop.arrivalTime` directly rather than the response's own
+ * `duration_ms`, which is clamped to 0 for a past time and so can't tell
+ * "just now" from "long ago".
+ */
+export function formatStopTimeLabel(t, stop, nowMs = Date.now()) {
+  if (stop.arrivalTime == null) return formatTime(stop.arrivalTime);
+  const elapsedSec = nowMs / 1000 - stop.arrivalTime;
+  let eta;
+  if (elapsedSec > NOW_WINDOW_SEC) eta = t('vehicle.minutesAgo', { count: Math.round(elapsedSec / 60) });
+  else if (elapsedSec >= -NOW_WINDOW_SEC) eta = t('vehicle.now');
+  else eta = t('vehicle.minutes', { count: Math.round(-elapsedSec / 60) });
+  return `${formatTime(stop.arrivalTime)} ∙ ${eta}`;
 }
 
 /**
@@ -22,6 +36,10 @@ export function formatStopTimeLabel(t, stop) {
  * vehicle in the shape StopsList already places (after the stop it last
  * passed, else before the next), plus a time label per stop. Both are empty
  * unless the source gave trip updates that match stops of this route/city.
+ *
+ * Every known stop gets a label (not just ones near "now") — the feed only
+ * ever reports a handful of stops per trip, and one this stale, per
+ * formatStopTimeLabel, is still worth showing rather than going blank.
  */
 export function buildRouteVehicleView(t, info, isKnownStop, nowMs = Date.now()) {
   const nowSec = nowMs / 1000;
@@ -34,7 +52,7 @@ export function buildRouteVehicleView(t, info, isKnownStop, nowMs = Date.now()) 
   let last = null;
   let next = null;
   for (const s of stops) {
-    if (s.arrivalTime >= nowSec - 60) stopTimeLabels[s.stopId] = formatStopTimeLabel(t, s);
+    stopTimeLabels[s.stopId] = formatStopTimeLabel(t, s, nowMs);
     if (s.arrivalTime <= nowSec) last = s;
     else if (!next) next = s;
   }

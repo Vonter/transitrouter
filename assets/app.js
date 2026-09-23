@@ -1555,6 +1555,7 @@ const App = () => {
   const [vehiclePanel, setVehiclePanel] = useState(null); // { id, info, notFound, estimated, svc }
   const vehicleSeq = useRef(0);
   const vehiclePoll = useRef(null);
+  const vehicleRouteRef = useRef(undefined); // last-drawn route (svc), so a poll only redraws on an actual change
   const stopPopoverCancelRef = useRef(null);
   const [stopPopoverDestFilter, setStopPopoverDestFilter] = useState(
     () => new URLSearchParams(window.location.search).get('dest') ?? '',
@@ -2744,6 +2745,7 @@ const App = () => {
       }
       const seq = ++vehicleSeq.current;
       let first = true;
+      vehicleRouteRef.current = undefined;
       const coordsFor = (id) => stopsData[id]?.coordinates || null;
 
       const load = async () => {
@@ -2780,13 +2782,23 @@ const App = () => {
             : [],
         });
 
-        if (!isFirst) return;
+        // The vehicle can switch (or lose) its route between polls — redraw
+        // the route layers and refit only when it actually changes, not on
+        // every 30s refresh.
+        const routeChanged = svc !== vehicleRouteRef.current;
+        if (!isFirst && !routeChanged) return;
+        vehicleRouteRef.current = svc;
 
         const bounds = new maplibregl.LngLatBounds();
         let hasBounds = false;
         if (position) {
           bounds.extend([position.lng, position.lat]);
           hasBounds = true;
+        }
+
+        if (!svc) {
+          map.getSource('stops-highlight')?.setData({ type: 'FeatureCollection', features: [] });
+          map.getSource('routes')?.setData({ type: 'FeatureCollection', features: [] });
         }
 
         if (svc) {

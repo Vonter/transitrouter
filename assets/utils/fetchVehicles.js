@@ -254,12 +254,12 @@ export function createVehicleTracker({
       const results = await Promise.all(fetchPromises);
       if (expectedGeneration !== generation) return;
 
-      // A route with no vehicles out right now still has a working feed, so
-      // status keys off the source the endpoints reported, not the vehicle
-      // count: no source at all means nothing live backs this route.
+      // Status requires an actual vehicle, not just a responding endpoint —
+      // a working feed that currently has nothing to show still reads as
+      // "no live data" to the rider, same as the feed being down.
       const liveSource =
-        results.find(({ response }) => response?.source)?.response?.source ??
-        null;
+        results.find(({ response }) => response?.source && response.vehicles?.length)
+          ?.response?.source ?? null;
       setLiveStatus({ loading: false, error: !liveSource, source: liveSource });
 
       // Combine all vehicles from all services

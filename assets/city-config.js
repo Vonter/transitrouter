@@ -296,6 +296,26 @@ export const CITY_CONFIGS = {
         minZoom: 4.8,
       },
     },
+    liveArrivals: {
+      enabled: true,
+      apiPath: '/api/railways/arrivals',
+    },
+    liveVehicles: {
+      enabled: true,
+      apiPath: '/api/railways/vehicles',
+    },
+    stopRoutes: {
+      enabled: true,
+      apiPath: '/api/railways/stop-routes',
+    },
+    stopVehicles: {
+      enabled: true,
+      apiPath: '/api/railways/stop-vehicles',
+    },
+    vehicleLookup: {
+      enabled: true,
+      apiPath: '/api/railways/vehicle',
+    },
   },
   greyhound: {
     city: {

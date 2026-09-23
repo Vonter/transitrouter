@@ -92,6 +92,7 @@
     "loadFailed": "Could not load vehicle",
     "estimatedPosition": "Position estimated from stop times",
     "now": "Now",
-    "minutes": "{{count}} min"
+    "minutes": "{{count}} min",
+    "minutesAgo": "{{count}} min ago"
   }
 }

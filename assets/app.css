@@ -3596,6 +3596,18 @@ html.dark {
 
   /* ── Stops list / table ────────────────────────────────────────────────────── */
 
+  /* `.stops-list li a` (the single-column layout used by one-way,
+     non-loop routes — rare for a round-trip bus route but the norm for
+     Delhi/Railways) ties this dark-mode block's generic `a { color:
+     accent-blue }` on specificity (one class either way), so without an
+     explicit override here it loses on source order and every stop name
+     renders in link-blue instead of --text-primary. `.stops-table td.stop
+     a` doesn't need this — its extra `.stop` class already outranks the
+     generic rule. */
+  .stops-list li a {
+    color: var(--text-primary);
+  }
+
   .stops-list li a:hover,
   .stops-table td.stop a:hover,
   .stops-table td.stop-start a:hover,
