@@ -60,6 +60,14 @@ import { filterStaleArrivalsFromService } from './utils/fetchArrivals';
 import getWalkingMinutes from './utils/getWalkingMinutes';
 import usePrevious from './utils/usePrevious';
 import { createVehicleTracker } from './utils/fetchVehicles';
+import {
+  fetchActiveVehicles,
+  fetchVehicleInfo,
+  filterVehicles,
+  estimateLocationFromStops,
+} from './utils/vehicleLookup';
+import VehicleChip from './components/VehicleChip';
+import VehiclePanel, { buildRouteVehicleView } from './components/VehiclePanel';
 import { setRafInterval, clearRafInterval } from './utils/rafInterval';
 import { stopMetrics, routeMetrics } from './utils/metricsPage';
 import {
@@ -1542,6 +1550,12 @@ const App = () => {
     source: null,
   });
   const [followedVehicleId, setFollowedVehicleId] = useState(null);
+  const [activeVehicles, setActiveVehicles] = useState([]); // search: vehicles currently active in the source
+  const [vehicleQuery, setVehicleQuery] = useState('');
+  const [vehiclePanel, setVehiclePanel] = useState(null); // { id, info, notFound, estimated, svc }
+  const vehicleSeq = useRef(0);
+  const vehiclePoll = useRef(null);
+  const vehicleRouteRef = useRef(undefined); // last-drawn route (svc), so a poll only redraws on an actual change
   const stopPopoverCancelRef = useRef(null);
   const [stopPopoverDestFilter, setStopPopoverDestFilter] = useState(
     () => new URLSearchParams(window.location.search).get('dest') ?? '',
@@ -1715,7 +1729,26 @@ const App = () => {
     }
   };
 
+  // Vehicles are only offered for sources rendered on the map: the current
+  // city, or in all-mode every city currently loaded.
+  // Vehicle search results are an alpha feature; vehicle page links work regardless.
+  const vehicleSearchPool = isAlphaEnabled() ? activeVehicles : [];
+
+  const loadActiveVehicles = () => {
+    if (!isAlphaEnabled()) return;
+    const cities = IS_ALL_MODE ? [...loadedCities] : [route.city];
+    const lookups = cities
+      .map((c) => [c, getConfigForCity(c)?.vehicleLookup])
+      .filter(([, lookup]) => lookup?.enabled);
+    Promise.all(
+      lookups.map(([c, lookup]) =>
+        fetchActiveVehicles(lookup.apiPath).then((list) => list.map((v) => ({ ...v, city: c }))),
+      ),
+    ).then((lists) => setActiveVehicles(lists.flat()));
+  };
+
   const handleSearchFocus = (e) => {
+    loadActiveVehicles();
     setExpandSearch(true);
     expandedSearchOnce.current = true;
     // $map.classList.add('fade-out');
@@ -1795,6 +1828,8 @@ const App = () => {
   const handleSearch = (e) => {
     const { value } = (e && e.target) || searchField;
     searchSeq.current++;
+    setVehicleQuery(value || '');
+    loadActiveVehicles();
     // Keep pending queries bounded while the worker catches up.
     if (value && !searching) {
       setSearching(true);
@@ -1816,6 +1851,7 @@ const App = () => {
     searchSeq.current++;
     searchField.current?.blur();
     searchField.current.value = '';
+    setVehicleQuery('');
     setSearching(false);
     expandedSearchOnce.current = false;
     setServices(
@@ -2664,6 +2700,158 @@ const App = () => {
     // for — which is what the map pan needs to know (see _showStopPopover).
     const fromRouteView = showServicePopoverRef.current;
 
+    // Vehicle page (from a vehicle search result): fetches the vehicle's info,
+    // draws its route (if any) and position, and keeps both fresh. Reads the
+    // module-level stopsData/servicesData/routesData, which in all-mode the
+    // caller must have merged for `cityCode` first.
+    const resetVehiclePage = () => {
+      vehicleSeq.current++;
+      setFollowedVehicleId(null);
+      clearInterval(vehiclePoll.current);
+      vehiclePoll.current = null;
+      setVehiclePanel(null);
+      map.getSource('vehicle-focus')?.setData({ type: 'FeatureCollection', features: [] });
+    };
+
+    const startVehiclePage = (cityCode, vehicleId) => {
+      const apiPath = getConfigForCity(cityCode)?.vehicleLookup?.apiPath;
+      if (!vehicleId || !apiPath) {
+        navigateTo('/', route);
+        return;
+      }
+
+      setExpandSearch(false);
+      setShrinkSearch(true);
+      resetSearch();
+      setHead({
+        title: ['vehicle.title', { vehicleNumber: vehicleId }],
+        url: IS_ALL_MODE
+          ? `/all/vehicle/${cityCode}^${encodeURIComponent(vehicleId)}`
+          : `/vehicle/${encodeURIComponent(vehicleId)}`,
+      });
+      if (IS_ALL_MODE) {
+        activeSelectionCities.clear();
+        activeSelectionCities.add(cityCode);
+        releaseUnpinnedCities();
+        loadedCities.forEach((c) => {
+          if (map.getLayer(`stops-${c}`)) map.setLayoutProperty(`stops-${c}`, 'visibility', 'none');
+          if (map.getLayer(`stops-icon-${c}`)) map.setLayoutProperty(`stops-icon-${c}`, 'visibility', 'none');
+        });
+      } else {
+        map.setLayoutProperty('stops', 'visibility', 'none');
+        if (map.getLayer('stops-icon')) {
+          map.setLayoutProperty('stops-icon', 'visibility', 'none');
+        }
+      }
+      const seq = ++vehicleSeq.current;
+      let first = true;
+      vehicleRouteRef.current = undefined;
+      const coordsFor = (id) => stopsData[id]?.coordinates || null;
+
+      const load = async () => {
+        const { info, notFound } = await fetchVehicleInfo(apiPath, vehicleId);
+        if (seq !== vehicleSeq.current) return;
+        const isFirst = first;
+        first = false;
+        // A transient failure on a refresh keeps what's already shown.
+        if (!info && !notFound && !isFirst) return;
+
+        const svc = info?.routeNo ? findServiceKey(String(info.routeNo)) : null;
+        const estimated =
+          info && !info.location ? estimateLocationFromStops(info.stops, coordsFor) : null;
+        const position = info?.location || estimated;
+
+        setVehiclePanel({ id: vehicleId, info, notFound, estimated, svc });
+        setRouteServices(svc ? [svc] : []);
+        setRouteLoading(false);
+        // Opened only once there is content, so the mobile sheet is never
+        // sized while empty.
+        if (isFirst) setShowServicePopover(true);
+
+        map.getSource('vehicle-focus')?.setData({
+          type: 'FeatureCollection',
+          features: position
+            ? [{
+                type: 'Feature',
+                properties: {
+                  vehicleNumber: info.vehicleNumber,
+                  heading: info.heading ?? null,
+                },
+                geometry: { type: 'Point', coordinates: [position.lng, position.lat] },
+              }]
+            : [],
+        });
+
+        // The vehicle can switch (or lose) its route between polls — redraw
+        // the route layers and refit only when it actually changes, not on
+        // every 30s refresh.
+        const routeChanged = svc !== vehicleRouteRef.current;
+        if (!isFirst && !routeChanged) return;
+        vehicleRouteRef.current = svc;
+
+        const bounds = new maplibregl.LngLatBounds();
+        let hasBounds = false;
+        if (position) {
+          bounds.extend([position.lng, position.lat]);
+          hasBounds = true;
+        }
+
+        if (!svc) {
+          map.getSource('stops-highlight')?.setData({ type: 'FeatureCollection', features: [] });
+          map.getSource('routes')?.setData({ type: 'FeatureCollection', features: [] });
+        }
+
+        if (svc) {
+          const routes = getServiceRoutes(servicesData[svc]);
+          const routeStops = [...new Set(routes.flat())].filter((stop) => stopsData[stop]);
+          const endStops = new Set();
+          routes.forEach((r) => {
+            if (r?.length) endStops.add(r[0]).add(r[r.length - 1]);
+          });
+          routeStops.forEach((stop) => bounds.extend(stopsData[stop].coordinates));
+          hasBounds = hasBounds || routeStops.length > 0;
+
+          map.getSource('stops-highlight').setData({
+            type: 'FeatureCollection',
+            features: routeStops.map((stop) => {
+              const { name, left, coordinates } = stopsData[stop];
+              return {
+                type: 'Feature',
+                id: encode(stop),
+                properties: { name, number: stop, type: endStops.has(stop) ? 'end' : null, left },
+                geometry: { type: 'Point', coordinates },
+              };
+            }),
+          });
+          scheduleRouteFrame(() => {
+            map.getSource('routes').setData({
+              type: 'FeatureCollection',
+              features: (routesData[svc] || []).map((r) => ({
+                type: 'Feature',
+                properties: {},
+                geometry: decodePolyline(r),
+              })),
+            });
+          });
+        }
+
+        if (hasBounds) {
+          scheduleRouteFrame(() => {
+            const mobileBottomPad = paneOrOffsetHeight(servicePopover.current) + 20;
+            map.fitBounds(bounds, {
+              maxZoom: 16,
+              padding: BREAKPOINT()
+                ? { top: 80, right: (servicePopover.current?.offsetWidth || 320) + 80, bottom: 80, left: 80 }
+                : { top: 80, right: 80, bottom: mobileBottomPad, left: 80 },
+            });
+          });
+        }
+      };
+
+      load();
+      vehiclePoll.current = setInterval(load, 30 * 1000);
+    };
+
     // All-mode: viewport engine manages city data; handle stop selection via cityDataMap
     if (IS_ALL_MODE) {
       $map.classList.remove('fade-out');
@@ -2683,6 +2871,7 @@ const App = () => {
         hideLocationMarker();
       }
       vehicleTracker.current?.stop();
+      resetVehiclePage();
       setRouteLoading(false);
 
       // Clear previous stop selection on every navigation (unless staying on same stop)
@@ -2704,6 +2893,40 @@ const App = () => {
         }
       } else if (route.page !== 'stop') {
         setShowStopPopover(false);
+      }
+
+      if (route.page === 'vehicle' && route.value) {
+        map.getSource('routes')?.setData({ type: 'FeatureCollection', features: [] });
+        map.getSource('routes-path')?.setData({ type: 'FeatureCollection', features: [] });
+        map.getSource('routes-between')?.setData({ type: 'FeatureCollection', features: [] });
+        map.getSource('stops-highlight')?.setData({ type: 'FeatureCollection', features: [] });
+        const caret = route.value.indexOf('^');
+        if (caret === -1) {
+          navigateTo('/', route);
+          return;
+        }
+        const vehicleCity = route.value.slice(0, caret);
+        const vehicleId = route.value.slice(caret + 1);
+        loadCity(vehicleCity).then(() => {
+          if (renderSeq !== routeRenderSeq.current) return;
+          const entry = cityDataMap.get(vehicleCity);
+          if (!entry) return;
+          Object.keys(stopsData).forEach((k) => delete stopsData[k]);
+          Object.keys(servicesData).forEach((k) => delete servicesData[k]);
+          Object.keys(routesData).forEach((k) => delete routesData[k]);
+          Object.assign(stopsData, entry.stopsData);
+          Object.assign(servicesData, entry.servicesData);
+          Object.assign(routesData, entry.routesData);
+          window._data = {
+            stopsData,
+            stopsDataArr: entry.stopsDataArr,
+            servicesData,
+            routesData,
+            servicesDataArr: [],
+          };
+          startVehiclePage(vehicleCity, vehicleId);
+        });
+        return;
       }
 
       if (route.page === 'service' && route.value) {
@@ -3037,6 +3260,7 @@ const App = () => {
 
     // Stop vehicle tracking when changing routes
     vehicleTracker.current?.stop();
+    resetVehiclePage();
 
     // Clear map sources - only clear sources that have data to avoid unnecessary re-renders
     batchClearSources(map, [
@@ -3846,6 +4070,10 @@ const App = () => {
           map.setLayoutProperty('stops-icon', 'visibility', 'visible');
         }
         _showLocationPopover(locInfo);
+        break;
+      }
+      case 'vehicle': {
+        startVehiclePage(route.city, route.value);
         break;
       }
       default: {
@@ -5523,6 +5751,36 @@ const App = () => {
       },
     });
 
+    // Vehicle selected from search (position may be estimated from stop times)
+    map.addSource('vehicle-focus', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+    });
+    map.addLayer({
+      id: 'vehicle-focus',
+      type: 'symbol',
+      source: 'vehicle-focus',
+      layout: {
+        'icon-image': 'bus-tiny',
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+        'icon-size': ['step', ['zoom'], 0.5, 14, 0.6, 15, 0.7, 16, 0.8],
+        'text-field': ['get', 'vehicleNumber'],
+        'text-optional': true,
+        'text-size': 14,
+        'text-font': ['Noto Sans Regular'],
+        'text-variable-anchor': ['left', 'right', 'bottom', 'top'],
+        'text-justify': 'auto',
+        'text-offset': [0.5, 1],
+        'text-padding': 4,
+      },
+      paint: {
+        'text-color': C.text,
+        'text-halo-color': C.textHalo,
+        'text-halo-width': 2,
+      },
+    });
+
     // Dim overlay — sits below between-route layers to fade the basemap
     map.addSource('dim-overlay', {
       type: 'geojson',
@@ -6091,11 +6349,24 @@ const App = () => {
     }
   }, [mapLoaded, routeServices]);
 
-  // Follow selected vehicle on the map
+  // Follow selected vehicle on the map. On the vehicle page the only
+  // vehicle is the one being viewed (its position may be estimated).
+  const followableVehicles = useMemo(
+    () =>
+      route.page === 'vehicle' && vehiclePanel?.info
+        ? [
+            {
+              vehicleId: vehiclePanel.info.vehicleId,
+              location: vehiclePanel.info.location || vehiclePanel.estimated,
+            },
+          ]
+        : routeVehicles,
+    [route.page, vehiclePanel, routeVehicles],
+  );
   useEffect(() => {
-    if (!mapLoaded || !followedVehicleId || !routeVehicles.length) return;
+    if (!mapLoaded || !followedVehicleId || !followableVehicles.length) return;
 
-    const vehicle = routeVehicles.find(
+    const vehicle = followableVehicles.find(
       (v) => v.vehicleId === followedVehicleId,
     );
     if (!vehicle || !vehicle.location) return;
@@ -6109,7 +6380,7 @@ const App = () => {
       zoom: Math.max(map.getZoom(), 16),
       duration: 800,
     });
-  }, [followedVehicleId, routeVehicles, mapLoaded]);
+  }, [followedVehicleId, followableVehicles, mapLoaded]);
 
   const showServicesFloatPill =
     route.page === 'service' && servicesData && routeServices.length > 1;
@@ -6665,6 +6936,30 @@ const App = () => {
                     </a>
                   </li>
                 ))}
+            {capGroups(
+              groupByCity(filterVehicles(vehicleSearchPool, vehicleQuery, SEARCH_RESULT_LIMIT)),
+              expandSearch ? SEARCH_RESULT_LIMIT : COLLAPSED_SEARCH_LIMIT,
+            ).map((group) => (
+              <Fragment key={`vehicles-${group.city}`}>
+                {IS_ALL_MODE && (
+                  <li class="popover-city-header">
+                    <strong>{cityDisplayName(group.city)}</strong>
+                  </li>
+                )}
+                {group.items.map((v) => {
+                  const id = IS_ALL_MODE
+                    ? `${v.city}^${encodeURIComponent(v.vehicleId)}`
+                    : encodeURIComponent(v.vehicleId);
+                  return (
+                    <li key={`vehicle-${v.city}-${v.vehicleId}`}>
+                      <a href={`#${route.cityPrefix}/vehicle/${id}`}>
+                        <VehicleChip number={v.vehicleNumber} size="md" />
+                      </a>
+                    </li>
+                  );
+                })}
+              </Fragment>
+            ))}
             {searching &&
               !!stops.length &&
               (IS_ALL_MODE ? groupByCity(stops) : [{ city: null, items: stops }]).map(
@@ -6699,7 +6994,10 @@ const App = () => {
                   </Fragment>
                 ),
               )}
-            {searching && !stops.length && !services.length && (
+            {searching &&
+              !stops.length &&
+              !services.length &&
+              !filterVehicles(vehicleSearchPool, vehicleQuery, 1).length && (
               <li class="nada">No results.</li>
             )}
             </ul>
@@ -6952,9 +7250,12 @@ const App = () => {
         >
           &times;
         </a>
+        {showServicePopover && vehiclePanel && !routeServices.length && (
+          <VehiclePanel panel={vehiclePanel} withHeader />
+        )}
         {(showServicePopover ||
           (showStopPopover && paneAppliesHere(supportsTouch, BREAKPOINT))) &&
-          routeServices.length &&
+          routeServices.length > 0 &&
           (IS_ALL_MODE
             ? cityDataMap.get(route.value?.split('^')[0])?.servicesData?.[routeServices[0]]
             : servicesData[routeServices[0]]) &&
@@ -6969,33 +7270,54 @@ const App = () => {
               : servicesData[routeServices[0]];
             const routes = getServiceRoutes(serviceData);
 
+            // Vehicle page: the vehicle leads the header (route second), and
+            // its stop times / position ride on the route's own stop list.
+            const onVehiclePage = route.page === 'vehicle' && !!vehiclePanel;
+            const vehicleStopsData = IS_ALL_MODE
+              ? (cityDataMap.get(route.value?.split('^')[0])?.stopsData ?? stopsData)
+              : stopsData;
+            const vehicleView = onVehiclePage
+              ? buildRouteVehicleView(t, vehiclePanel.info, (id) => !!vehicleStopsData[id])
+              : null;
+
             return (
               <>
                 <header>
-                  <div class="service-header-row">
-                    <h1>
-                      <b class="service-tag">{routeServices[0]}</b>
-                      {serviceData.name}
-                    </h1>
-                    {/* Unlike the stop popover, nothing here degrades to a
+                  {onVehiclePage && vehiclePanel.info ? (
+                    <div class="service-header-row">
+                      <h1 class="vehicle-header">
+                        <VehicleChip number={vehiclePanel.info.vehicleNumber} size="lg" />
+                        <b class="service-tag">{routeServices[0]}</b>
+                      </h1>
+                      <LiveDataIndicator source={vehiclePanel.info.source} />
+                    </div>
+                  ) : (
+                    <div class="service-header-row">
+                      <h1>
+                        <b class="service-tag">{routeServices[0]}</b>
+                        {serviceData.name}
+                      </h1>
+                      {/* Unlike the stop popover, nothing here degrades to a
                         timetable estimate when the feed is down — the absent
                         buses say that already — so the whole indicator, the
                         unavailable warning included, is developer-only. */}
-                    {isDevMode() && (
-                      <LiveDataIndicator
-                        loading={routeLiveStatus.loading}
-                        error={routeLiveStatus.error}
-                        source={routeLiveStatus.source}
-                        errorTitle="Live vehicle positions unavailable for this route."
-                      />
-                    )}
-                  </div>
+                      {isDevMode() && (
+                        <LiveDataIndicator
+                          loading={routeLiveStatus.loading}
+                          error={routeLiveStatus.error}
+                          source={routeLiveStatus.source}
+                          errorTitle="Live vehicle positions unavailable for this route."
+                        />
+                      )}
+                    </div>
+                  )}
                 </header>
                 <ScrollableContainer
                   class="popover-scroll"
                   overflow-y="true"
                   scrollToTopKey={`sttk-${routeServices[0]}`}
                 >
+                  {onVehiclePage && <VehiclePanel panel={vehiclePanel} />}
                   <h2>
                     {t('glossary.nRoutes', {
                       count: routes.length,
@@ -7023,7 +7345,8 @@ const App = () => {
                       ? (cityDataMap.get(route.value?.split('^')[0])?.stopsData ?? stopsData)
                       : stopsData}
                     cityCode={IS_ALL_MODE ? route.value?.split('^')[0] : undefined}
-                    vehicles={routeVehicles}
+                    vehicles={vehicleView ? vehicleView.vehicles : routeVehicles}
+                    stopTimeLabels={vehicleView?.stopTimeLabels}
                     onVehicleClick={setFollowedVehicleId}
                   />
                 </ScrollableContainer>

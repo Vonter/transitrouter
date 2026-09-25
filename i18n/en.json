@@ -85,5 +85,14 @@
     "backToTrips": "Back to trips",
     "loading": "Loading...",
     "noSchedule": "No schedule data available"
+  },
+  "vehicle": {
+    "title": "Vehicle {{vehicleNumber}} - $t(app.name)",
+    "notActive": "Vehicle not currently active",
+    "loadFailed": "Could not load vehicle",
+    "estimatedPosition": "Position estimated from stop times",
+    "now": "Now",
+    "minutes": "{{count}} min",
+    "minutesAgo": "{{count}} min ago"
   }
 }

@@ -1,12 +1,20 @@
 /**
- * Minimal GTFS-Realtime (protobuf) reader, scoped to the handful of
- * VehiclePosition/TripUpdate fields this app needs. Avoids pulling in a
- * full protobuf runtime for a feed this small.
+ * Minimal GTFS-Realtime (protobuf) reader for the Indian Railways
+ * VehiclePositions/TripUpdates feed, scoped to the handful of fields this
+ * app needs. Avoids pulling in a full protobuf runtime for a feed this small.
  *
  * Wire format reference: https://gtfs.org/realtime/reference/
+ *
+ * Unlike BMTC/PMPML/Delhi, this feed needs no id-translation layer at all:
+ * TripDescriptor.route_id is the bare train number (e.g. "22470") and
+ * VehiclePosition/StopTimeUpdate stop_id is the station code (e.g. "NZM"),
+ * both of which already match data/railways's local ids exactly — confirmed
+ * against a live pull of the feed and data/railways/{services,stops}.min.json.
+ * So there's no railways-route-mapping.js / railways-id-mapping.js here,
+ * and matchesRouteId() below is a plain string equality.
  */
 
-const RT_FEED_URL = 'https://rt-bucket.blrtransit.com/rt/feed/rt.pb';
+const RT_FEED_URL = 'https://gtfs-ir.transit.bengawalk.com/rt/feed/rt.pb';
 
 class Reader {
   constructor(buf, pos = 0, end = buf.length) {
@@ -89,6 +97,8 @@ function parsePosition(reader) {
   return position;
 }
 
+// Only route_id (the bare train number) is present on this feed's trip
+// descriptors — trip_id is never set, so it stays null.
 function parseTripDescriptor(reader) {
   const trip = { tripId: null, routeId: null };
   while (!reader.eof()) {
@@ -120,9 +130,9 @@ function parseVehiclePosition(reader) {
     lat: null,
     lng: null,
     bearing: null,
+    timestamp: null,
     occupancyStatus: null,
     occupancyPercentage: null,
-    timestamp: null,
   };
   while (!reader.eof()) {
     const { fieldNumber, wireType } = reader.readTag();
@@ -153,7 +163,8 @@ function parseVehiclePosition(reader) {
 }
 
 // Non-zigzag varint reinterpreted as a signed 32-bit int (matches proto2
-// `int32`/`sint32`-as-plain-varint fields like StopTimeEvent.delay).
+// `int32`/`sint32`-as-plain-varint fields like StopTimeEvent.delay). This
+// feed never sets delay, but the field is read defensively regardless.
 function toSigned32(value) {
   return value | 0;
 }
@@ -253,19 +264,23 @@ function parseFeedMessage(buf) {
 }
 
 /**
- * Fetches and parses the GTFS-RT feed.
+ * Fetches and parses the Indian Railways GTFS-RT feed.
  * Returns { vehicles, tripUpdates }:
- *  - vehicles: { vehicleId, vehicleLabel, tripId, routeId, lat, lng, bearing }[]
+ *  - vehicles: { vehicleId, vehicleLabel, tripId, routeId, lat, lng, bearing, timestamp }[]
  *  - tripUpdates: { tripId, routeId, vehicleId, vehicleLabel, stopTimeUpdates }[],
  *    where each stopTimeUpdate is { stopId, arrival: {delay,time}|null, departure: {delay,time}|null }.
- *    Empty today (the feed only publishes VehiclePositions) but read defensively
- *    so arrivals can switch to it automatically once TripUpdates are published.
+ *    `routeId` is the train number and `stopId` is the station code in both,
+ *    so callers can match them against data/railways's local ids directly.
  */
 export async function fetchGtfsRtFeed() {
   const res = await fetch(RT_FEED_URL, {
     headers: { Accept: 'application/x-protobuf, application/octet-stream' },
+    // Cache at the Cloudflare edge for 60s so repeated requests within that
+    // window (e.g. arrivals + stop-vehicles for the same stop) don't re-hit
+    // the upstream feed.
+    cf: { cacheTtl: 60, cacheEverything: true },
   });
-  if (!res.ok) throw new Error(`GTFS-RT feed returned ${res.status}`);
+  if (!res.ok) throw new Error(`Indian Railways GTFS-RT feed returned ${res.status}`);
 
   const buf = new Uint8Array(await res.arrayBuffer());
   return parseFeedMessage(buf);
@@ -273,36 +288,23 @@ export async function fetchGtfsRtFeed() {
 
 /**
  * Fetches and parses just the GTFS-RT VehiclePositions feed.
- * Returns an array of { vehicleId, vehicleLabel, tripId, routeId, lat, lng, bearing }.
+ * Returns an array of { vehicleId, vehicleLabel, tripId, routeId, lat, lng, bearing, timestamp }.
  */
 export async function fetchVehiclePositions() {
   const { vehicles } = await fetchGtfsRtFeed();
   return vehicles;
 }
 
-// NOTE: `routeId` here is NOT the public route number (e.g. "220") and NOT
-// the route_id from data/pune's static feed (whose route_id happens to
-// equal route_short_name). It's an id from a *different* static GTFS feed
-// published by the same source as this realtime feed, at
-// rt/control/static/gtfs.zip on this host, where each direction of a route
-// gets its own route_id. See data/pune/build_pmpml_route_mapping.py, which
-// builds pmpml-route-mapping.js (route_short_name -> route_id[]) from that
-// feed — use that mapping to translate a public route number into the
-// route_id(s) to match here. The only OTHER reliable join key between this
-// feed and the PMPML PIS/chartr APIs is `vehicleId` (a vehicle registration
-// number, e.g. "MH12TV0332"), which is consistent across both.
-
-/**
- * Whether a GTFS-RT vehicle belongs to one of the given route_ids (as
- * resolved from pmpml-route-mapping.js for a public route number).
- */
-export function matchesRouteIds(vehicle, routeIds) {
-  return !!vehicle.routeId && routeIds.includes(vehicle.routeId);
+/** Whether a GTFS-RT vehicle belongs to the given train number. route_id is
+ * already the bare train number, so this is a plain string comparison —
+ * no id-mapping table to consult, unlike BMTC/PMPML/Delhi. */
+export function matchesRouteId(vehicle, trainNumber) {
+  return !!vehicle.routeId && vehicle.routeId === String(trainNumber);
 }
 
 /**
- * Builds a vehicle_id -> {lat, lng} lookup from GTFS-RT vehicle positions,
- * for enriching vehicles/trips resolved through some other route-aware API.
+ * Builds a vehicle_id -> {lat, lng, bearing} lookup from GTFS-RT vehicle
+ * positions, for enriching trips resolved from TripUpdates.
  */
 export function buildVehicleLocationLookup(vehicles) {
   const byId = new Map();

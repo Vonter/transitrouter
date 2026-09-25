@@ -4,7 +4,7 @@ import { memo } from 'preact/compat';
 import getRoute from '../utils/getRoute';
 import { getConfigForCity } from '../city-config';
 
-import busTinyImagePath from '../images/bus-tiny.png';
+import VehicleChip from './VehicleChip';
 
 function rowSpaner(stopGrid, column, rowIndex) {
   let span = 1;
@@ -55,7 +55,7 @@ function areOpposite(stop1, stop2, stopsData) {
 function StopsList(props) {
   const route = getRoute();
 
-  const { routes, stopsData, cityCode, vehicles = [], onVehicleClick } = props;
+  const { routes, stopsData, cityCode, vehicles = [], onVehicleClick, stopTimeLabels } = props;
   
   if (
     !routes ||
@@ -205,15 +205,17 @@ function StopsList(props) {
             {stopsData[stop].name}
           </>
         )}
+        {stopTimeLabels?.[stop] && <span class="stop-eta">{stopTimeLabels[stop]}</span>}
       </a>
     );
   };
 
   // Render vehicle indicator
   const VehicleIndicator = ({ vehicle }) => (
-    <div
-      class="vehicle-inline"
-      title={`${vehicle.vehicleNumber} - ${vehicle.serviceType}`}
+    <VehicleChip
+      number={vehicle.vehicleNumber}
+      load={vehicle.load}
+      title={vehicle.serviceType ? `${vehicle.vehicleNumber} - ${vehicle.serviceType}` : vehicle.vehicleNumber}
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -222,10 +224,7 @@ function StopsList(props) {
         }
       }}
       style={{ cursor: onVehicleClick ? 'pointer' : 'default' }}
-    >
-      <img src={busTinyImagePath} width="14" height="14" alt="Bus" />
-      <span class="vehicle-inline-number">{vehicle.vehicleNumber}</span>
-    </div>
+    />
   );
 
   // Render vehicles after a stop

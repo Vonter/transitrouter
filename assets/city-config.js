@@ -53,6 +53,10 @@ export const CITY_CONFIGS = {
       enabled: true,
       apiPath: '/api/bmtc/vehicles',
     },
+    vehicleLookup: {
+      enabled: true,
+      apiPath: '/api/bmtc/vehicle',
+    },
     stopRoutes: {
       enabled: true,
       apiPath: '/api/bmtc/stop-routes',
@@ -141,6 +145,10 @@ export const CITY_CONFIGS = {
       enabled: true,
       apiPath: '/api/delhi/vehicles',
     },
+    vehicleLookup: {
+      enabled: true,
+      apiPath: '/api/delhi/vehicle',
+    },
   },
   pune: {
     city: {
@@ -162,6 +170,10 @@ export const CITY_CONFIGS = {
     liveVehicles: {
       enabled: true,
       apiPath: '/api/pmpml/vehicles',
+    },
+    vehicleLookup: {
+      enabled: true,
+      apiPath: '/api/pmpml/vehicle',
     },
     stopRoutes: {
       enabled: true,
@@ -283,6 +295,26 @@ export const CITY_CONFIGS = {
         upperLong: 100,
         minZoom: 4.8,
       },
+    },
+    liveArrivals: {
+      enabled: true,
+      apiPath: '/api/railways/arrivals',
+    },
+    liveVehicles: {
+      enabled: true,
+      apiPath: '/api/railways/vehicles',
+    },
+    stopRoutes: {
+      enabled: true,
+      apiPath: '/api/railways/stop-routes',
+    },
+    stopVehicles: {
+      enabled: true,
+      apiPath: '/api/railways/stop-vehicles',
+    },
+    vehicleLookup: {
+      enabled: true,
+      apiPath: '/api/railways/vehicle',
     },
   },
   greyhound: {
