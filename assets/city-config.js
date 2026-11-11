@@ -254,6 +254,26 @@ export const CITY_CONFIGS = {
         minZoom: 9,
       },
     },
+    liveArrivals: {
+      enabled: true,
+      apiPath: '/api/ahmedabad/arrivals',
+    },
+    liveVehicles: {
+      enabled: true,
+      apiPath: '/api/ahmedabad/vehicles',
+    },
+    stopRoutes: {
+      enabled: true,
+      apiPath: '/api/ahmedabad/stop-routes',
+    },
+    stopVehicles: {
+      enabled: true,
+      apiPath: '/api/ahmedabad/stop-vehicles',
+    },
+    vehicleLookup: {
+      enabled: true,
+      apiPath: '/api/ahmedabad/vehicle',
+    },
   },
   indore: {
     city: {

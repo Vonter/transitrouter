@@ -1,5 +1,5 @@
 ahmedabad:
-  gtfs.zip: e65344627a50db8b8af85624ffc594bf609c3b4d80ec363490313b44d7572d9c
+  gtfs.zip: b878a204b052a1b04604ef7677240b30a2180283abb3e5d0d246a07779bde72a
 andhrapradesh:
   gtfs.zip: e6b59faf4d2cb29faf39111c087cbd3d3e30e095757bc8b324facc3f11fa799e
 blr:
