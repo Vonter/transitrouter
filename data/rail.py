@@ -45,6 +45,11 @@ LINE_COLOR_OVERRIDES = [
     (r'\bMonorail\b', '#56C8D8'),  # Mumbai Monorail: Icy Blue (distinct from Aqua Line)
 ]
 
+# CDN station names to force-mark as interchanges when the CDN omits its marker.
+INTERCHANGE_OVERRIDES = {
+    'Rashtreeya Vidyalaya Road',  # Bengaluru: Green ⇔ Yellow
+}
+
 COMMUTER_DEFAULT = '#795548'
 
 
@@ -1069,8 +1074,11 @@ def assign_station_colors(features: list) -> list:
             station_mode = 'metro'
         # Interchange detection: trust the CDN pre-mark (marker-color == INTERCHANGE_COLOR)
         # rather than proximity, which produces false positives for parallel lines.
-        interchange = substitute_color(props.get('marker-color', '')) == INTERCHANGE_COLOR
-        sp = {'name': props['name'], 'station-color': color, 'mode': station_mode}
+        interchange = (
+            substitute_color(props.get('marker-color', '')) == INTERCHANGE_COLOR
+            or props['name'] in INTERCHANGE_OVERRIDES
+        )
+        sp ={'name': props['name'], 'station-color': color, 'mode': station_mode}
         if interchange:
             sp['interchange'] = True
         result.append({**f, 'properties': sp})
