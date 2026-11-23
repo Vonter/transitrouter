@@ -377,11 +377,15 @@ def process_routes(gtfs_data: Dict[str, pl.DataFrame], valid_routes: Set[str]) -
                 # If selection fails, fall back to mock shapes
                 use_shapes = False
     
-    if not use_shapes:
-        # Generate mock shapes using batch processing
-        print(f"Generating mock shapes for {len(valid_routes):,} routes...")
-        routes_dict = generate_mock_shapes_batch(gtfs_data, valid_routes)
-        print(f"  Generated shapes for {len(routes_dict):,} routes...")
+    # Fall back to shapes drawn through each route's stop sequence for any
+    # route the feed's own shapes don't cover (all routes if there are none,
+    # or if trips carry empty shape_ids as in the Ahmedabad feed).
+    missing_routes = set(valid_routes) - set(routes_dict)
+    if missing_routes:
+        print(f"Generating mock shapes for {len(missing_routes):,} routes without feed shapes...")
+        mock = generate_mock_shapes_batch(gtfs_data, missing_routes)
+        routes_dict.update(mock)
+        print(f"  Generated shapes for {len(mock):,} routes...")
 
     # Remap keys from route_id to route_short_name (fallback: route_id)
     routes_df = gtfs_data['routes']
