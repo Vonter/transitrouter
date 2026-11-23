@@ -81,7 +81,7 @@ export async function fetchRouteLiveInfo(nammaBmtcRouteId, anyStopId, userAgent)
 
 // Seat availability is served from chalo.com/app/api, not production.zophop.com
 // (which rejects requests without a current app version).
-const SEAT_AVAILABILITY_URL = 'https://chalo.com/app/api/seat/availability';
+const SEAT_AVAILABILITY_URL = 'https://production.zophop.com/seat/availability';
 
 // Load codes the frontend styles (.time-sea/.time-sda/.time-lsd).
 const SEAT_STATUS_TO_LOAD = { 3: 'SEA', 4: 'SDA', 5: 'LSD' };
@@ -93,8 +93,9 @@ export function seatStatusToLoad(status) {
 }
 
 /**
- * POST chalo.com/app/api/seat/availability
- * body: {mode: 2, cityId: "bengaluru", vehicle: [{number: "<busNumber>"}, ...]}
+ * POST production.zophop.com/seat/availability (header `mode: 2` required)
+ * body: {deviceId, cityId: "bengaluru", maxDelay, mode: 2, occupancyFactor,
+ *        vehicle: [{number: "<busNumber>"}, ...]}
  * Returns Map<busNumber, 'SEA'|'SDA'|'LSD'> for the buses it knows about.
  */
 export async function fetchBusLoads(busNumbers, userAgent) {
@@ -102,12 +103,21 @@ export async function fetchBusLoads(busNumbers, userAgent) {
   const numbers = [...new Set(busNumbers.filter(Boolean))];
   if (!numbers.length) return loads;
 
+  // The `mode` header is required: without it the endpoint answers
+  // 403 {"Reason":"OLD Version"}.
   const res = await fetch(SEAT_AVAILABILITY_URL, {
     method: 'POST',
-    headers: { ...nammaBmtcHeaders(userAgent), 'Content-Type': 'application/json' },
+    headers: {
+      ...nammaBmtcHeaders(userAgent),
+      'Content-Type': 'application/json',
+      mode: '2',
+    },
     body: JSON.stringify({
-      mode: 2,
+      deviceId: 'generic-client',
       cityId: 'bengaluru',
+      maxDelay: 60,
+      mode: 2,
+      occupancyFactor: 100,
       vehicle: numbers.map((number) => ({ number })),
     }),
   });

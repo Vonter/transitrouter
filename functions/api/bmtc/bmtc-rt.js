@@ -6,7 +6,15 @@
  * Wire format reference: https://gtfs.org/realtime/reference/
  */
 
+import BLR_ID_MAPPING from './blr-id-mapping.js';
+import RECLAIM_ROUTES from './blr-reclaim-routes.js';
+import { parseRouteMapping } from './namma-bmtc.js';
+
 const RT_FEED_URL = 'https://gtfs.bengawalk.com/rt/feed/rt.pb';
+
+// Fallback feed (reclaim.city, keyless, CORS-open, regenerated every ~15s).
+// Used only when RT_FEED_URL fails or has no vehicles.
+const RECLAIM_BASE_URL = 'https://maps.reclaim.city/bengaluru/rt';
 
 class Reader {
   constructor(buf, pos = 0, end = buf.length) {
@@ -252,18 +260,7 @@ function parseFeedMessage(buf) {
   return { vehicles, tripUpdates };
 }
 
-/**
- * Fetches and parses the BMTC GTFS-RT feed.
- * Returns { vehicles, tripUpdates }:
- *  - vehicles: { vehicleId, vehicleLabel, tripId, routeId, lat, lng, bearing }[]
- *  - tripUpdates: { tripId, routeId, vehicleId, vehicleLabel, stopTimeUpdates }[],
- *    where each stopTimeUpdate is { stopId, arrival: {delay,time}|null, departure: {delay,time}|null }.
- *    This feed DOES publish TripUpdates (unlike PMPML's), but arrivals.js
- *    intentionally still sources ETAs from the BMTC mobile API for now —
- *    switching over is a deliberate future change, not something to wire up
- *    opportunistically here.
- */
-export async function fetchGtfsRtFeed() {
+async function fetchPrimaryFeed() {
   const res = await fetch(RT_FEED_URL, {
     headers: { Accept: 'application/x-protobuf, application/octet-stream' },
   });
@@ -271,6 +268,132 @@ export async function fetchGtfsRtFeed() {
 
   const buf = new Uint8Array(await res.arrayBuffer());
   return parseFeedMessage(buf);
+}
+
+// Reclaim's route_id is "BMTC:<hash>". blr-reclaim-routes.js (generated from
+// Reclaim's static feed by scripts/refresh_blr_rt_mappings.py) gives its route
+// name, which blr-id-mapping.js resolves to the legacy gtfsRtRouteId the
+// primary feed uses, so every consumer (vehicles.js, stop-vehicles.js,
+// vehicle.js) matches it unchanged. Unknown hashes are kept as-is.
+const gtfsRtRouteIdByReclaimId = new Map();
+function resolveReclaimRouteId(reclaimRouteId) {
+  if (!reclaimRouteId) return null;
+  if (!gtfsRtRouteIdByReclaimId.has(reclaimRouteId)) {
+    const name = RECLAIM_ROUTES[reclaimRouteId];
+    const { gtfsRtRouteId } = parseRouteMapping(BLR_ID_MAPPING.routes[name], BLR_ID_MAPPING);
+    gtfsRtRouteIdByReclaimId.set(reclaimRouteId, gtfsRtRouteId || reclaimRouteId);
+  }
+  return gtfsRtRouteIdByReclaimId.get(reclaimRouteId);
+}
+
+const toNumber = (v) => (v == null ? null : Number(v));
+
+async function fetchReclaimJson(file) {
+  const res = await fetch(`${RECLAIM_BASE_URL}/${file}`, {
+    headers: { Accept: 'application/json' },
+    cf: { cacheTtl: 10, cacheEverything: true },
+  });
+  if (!res.ok) throw new Error(`Reclaim BMTC ${file} returned ${res.status}`);
+  return res.json();
+}
+
+async function fetchReclaimFeed() {
+  const [vp, tu] = await Promise.all([
+    fetchReclaimJson('vehicle_positions.json'),
+    fetchReclaimJson('trip_updates.json'),
+  ]);
+
+  const vehicles = [];
+  for (const entity of vp.entity || []) {
+    const v = entity.vehicle;
+    const pos = v?.position;
+    if (!pos || pos.latitude == null || pos.longitude == null) continue;
+    vehicles.push({
+      tripId: v.trip?.tripId ?? null,
+      routeId: resolveReclaimRouteId(v.trip?.routeId),
+      vehicleId: v.vehicle?.id || entity.id,
+      vehicleLabel: v.vehicle?.label ?? null,
+      lat: pos.latitude,
+      lng: pos.longitude,
+      bearing: pos.bearing ?? null,
+      timestamp: toNumber(v.timestamp),
+      occupancyStatus: null,
+      occupancyPercentage: null,
+    });
+  }
+
+  const tripUpdates = [];
+  for (const entity of tu.entity || []) {
+    const t = entity.tripUpdate;
+    if (!t?.stopTimeUpdate?.length) continue;
+    // Entity ids are "tu-<vehicle id>"; the feed has no vehicle descriptor.
+    const vehicleId = entity.id?.replace(/^tu-/, '') || null;
+    tripUpdates.push({
+      tripId: t.trip?.tripId ?? null,
+      routeId: resolveReclaimRouteId(t.trip?.routeId),
+      vehicleId,
+      vehicleLabel: vehicleId,
+      stopTimeUpdates: t.stopTimeUpdate.map((u) => ({
+        stopId: u.stopId ?? null,
+        arrival: u.arrival
+          ? { delay: u.arrival.delay ?? null, time: toNumber(u.arrival.time) }
+          : null,
+        departure: u.departure
+          ? { delay: u.departure.delay ?? null, time: toNumber(u.departure.time) }
+          : null,
+      })),
+    });
+  }
+  return { vehicles, tripUpdates };
+}
+
+/**
+ * Fetches and parses the BMTC GTFS-RT feed, falling back to reclaim.city's
+ * Bengaluru feed when ours errors or has no vehicles.
+ * Returns { vehicles, tripUpdates, source }:
+ *  - source: 'primary' | 'reclaim'
+ *  - vehicles: { vehicleId, vehicleLabel, tripId, routeId, lat, lng, bearing }[]
+ *  - tripUpdates: { tripId, routeId, vehicleId, vehicleLabel, stopTimeUpdates }[],
+ *    where each stopTimeUpdate is { stopId, arrival: {delay,time}|null, departure: {delay,time}|null }.
+ *    This feed DOES publish TripUpdates (unlike PMPML's), but arrivals.js
+ *    intentionally still sources ETAs from the BMTC mobile API for now —
+ *    switching over is a deliberate future change, not something to wire up
+ *    opportunistically here.
+ * Reclaim vehicles carry the primary feed's route ids (translated) and
+ * Namma BMTC stop ids, so callers need no source-specific handling.
+ * Throws only when the primary feed errored and the fallback failed too.
+ */
+export async function fetchGtfsRtFeed() {
+  let primary = null;
+  let primaryError = null;
+  try {
+    primary = await fetchPrimaryFeed();
+    if (primary.vehicles.length > 0) {
+      console.log(`BMTC realtime source: primary (${primary.vehicles.length} vehicles)`);
+      return { ...primary, source: 'primary' };
+    }
+  } catch (error) {
+    primaryError = error;
+  }
+
+  try {
+    const reclaim = await fetchReclaimFeed();
+    if (reclaim.vehicles.length > 0 || !primary) {
+      console.log(
+        `BMTC realtime source: reclaim fallback (${reclaim.vehicles.length} vehicles; primary ${primaryError ? `failed: ${primaryError.message}` : 'empty'})`,
+      );
+      return { ...reclaim, source: 'reclaim' };
+    }
+  } catch (error) {
+    console.error('Reclaim BMTC fallback failed:', error);
+  }
+
+  if (primary) {
+    console.log('BMTC realtime source: primary (empty; reclaim fallback also empty or failed)');
+    return { ...primary, source: 'primary' };
+  }
+  console.log('BMTC realtime source: none (primary failed, reclaim fallback failed)');
+  throw primaryError;
 }
 
 /**
